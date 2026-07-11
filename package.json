@@ -1,6 +1,6 @@
 {
   "name": "whatsappd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A self-hosted daemon that turns a WhatsApp number into an AI-agent channel — Baileys engine, HTTP sidecar, agent tools, and an Eve adapter.",
   "keywords": [
     "agent-tools",

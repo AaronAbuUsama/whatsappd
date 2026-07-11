@@ -146,6 +146,37 @@ test("start starts the session (once)", async () => {
   await adapter.stop();
 });
 
+test("start() resolves even when session.start() never does (the supervise loop)", async () => {
+  // Regression: the real session.start() is supervise() — it runs for the whole
+  // session lifetime and only resolves on stop(). adapter.start() must NOT await
+  // it to completion, or callers like runSidecar (which call server.listen()
+  // right after `await adapter.start()`) hang forever and no HTTP server binds.
+  const fake = makeFake();
+  const neverStops = new Promise<void>(() => {});
+  fake.session = {
+    ...fake.session,
+    start: () => {
+      fake.started++;
+      return neverStops; // models supervise(): pending until stop()
+    },
+  } as WhatsAppSession;
+
+  const adapter = createChannelAdapter({ session: fake.session, accountId: "acc1" });
+
+  let timer: ReturnType<typeof setTimeout>;
+  const outcome = await Promise.race([
+    adapter.start().then(() => "resolved" as const),
+    new Promise<"hung">((r) => {
+      timer = setTimeout(() => r("hung"), 500);
+    }),
+  ]);
+  clearTimeout(timer!);
+
+  expect(outcome).toBe("resolved");
+  expect(fake.started).toBe(1);
+  await adapter.stop();
+});
+
 test("send delegates to the session and returns a MessageRef", async () => {
   const fake = makeFake();
   const adapter = createChannelAdapter({ session: fake.session, accountId: "acc1" });
