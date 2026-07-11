@@ -112,7 +112,15 @@ export function createChannelAdapter(opts: CreateChannelAdapterOptions): WhatsAp
       started = true;
       // Pump first so no early event (e.g. the pairing QR) is missed.
       startPump();
-      await session.start();
+      // `session.start()` runs the connection supervisor for the whole session
+      // lifetime and only resolves once the session stops — awaiting it here
+      // would hang start() forever, and with it every caller that expects
+      // start() to resolve once the session is *running* (e.g. runSidecar,
+      // which calls server.listen() right after `await adapter.start()`).
+      // Launch it detached; the stream pump above delivers its events.
+      void session.start().catch((err: unknown) => {
+        log?.error({ err }, "session supervisor exited unexpectedly");
+      });
     },
 
     async send(chatId: string, content: Outbound, opts?: SendOptions): Promise<MessageRef> {
