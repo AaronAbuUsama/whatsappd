@@ -247,7 +247,11 @@ export function createSession(config: SessionConfig): WhatsAppSession {
 
   let status: Status = initialState;
   let stopped = false;
+  let supervisor: Promise<void> | undefined;
   let conn: BaileysConn | undefined;
+  // Test seam: override how the underlying socket is opened (kept off the public
+  // SessionConfig type). Defaults to the real openSocket.
+  const openSocketImpl = (config as { openSocket?: typeof openSocket }).openSocket ?? openSocket;
 
   // Per-socket pairing bookkeeping (reset on each open).
   let firstQrSeen = false;
@@ -388,11 +392,20 @@ export function createSession(config: SessionConfig): WhatsAppSession {
 
     const auth = await loadAuth(store);
     initialSyncComplete = auth.initialSyncComplete;
-    conn = await openSocket({
+    conn = await openSocketImpl({
       auth: { creds: auth.creds, keys: auth.keys },
       saveCreds: auth.saveCreds,
       logger,
     });
+
+    // stop() may have run while openSocket() was in flight — conn was still
+    // undefined then, so stop()'s `conn?.end()` was a no-op. Without this guard
+    // the freshly opened socket would leak: the loop below would block on its
+    // events after the session was already stopped. Tear it down and bail.
+    if (stopped) {
+      conn.end();
+      return;
+    }
 
     if (config.auth.method === "pairing_code" && !auth.creds.me) {
       // Baileys' pairing-code flow starts from fresh creds by requesting the
@@ -466,7 +479,8 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     onContact: (handler) => contacts.on(handler),
     onGroup: (handler) => groups.on(handler),
     onPresence: (handler) => presence.on(handler),
-    start: supervise,
+    // Idempotent: hand back the one running supervisor so stop() can await it.
+    start: () => (supervisor ??= supervise()),
     send,
     async markRead(refs) {
       if (status.phase !== "online" || !conn)
@@ -494,6 +508,9 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       clearVerdict();
       clearSync();
       conn?.end(); // close → classified intentional → machine → disconnected
+      // Wait for the supervisor to finish tearing down (incl. any socket opened
+      // after this call) so stop() never returns while a live socket lingers.
+      await supervisor;
     },
   };
 }
