@@ -1,4 +1,4 @@
-import type { BaileysEventMap } from "baileys";
+import { proto, type BaileysEventMap } from "baileys";
 import { expect, test } from "./_expect.ts";
 import { toConversationSyncBatch } from "../src/baileys/history.ts";
 import { baseMessage } from "./fixtures.ts";
@@ -102,5 +102,27 @@ test("conversation sync batches keep chats, contacts, and non-live messages toge
     chatId: "123-456@g.us",
     from: "1555@s.whatsapp.net",
     live: false,
+  });
+});
+
+test("conversation sync retains source and chunk metadata without inferring replacement", () => {
+  const batch = toConversationSyncBatch({
+    chats: [],
+    contacts: [],
+    messages: [],
+    syncType: proto.HistorySync.HistorySyncType.ON_DEMAND,
+    isLatest: true,
+    chunkOrder: 7,
+    progress: 100,
+    peerDataRequestSessionId: "request-1",
+  });
+
+  expect(batch.context).toEqual({
+    source: "on_demand",
+    isLatest: true,
+    chunkOrder: 7,
+    progress: 100,
+    requestSessionId: "request-1",
+    projection: { mode: "upsert" },
   });
 });

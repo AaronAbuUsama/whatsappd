@@ -44,9 +44,6 @@ export type Status =
   | { phase: "logged_out"; reason: FaultReason } // terminal — creds dead, re-pair
   | { phase: "suspended"; reason: FaultReason }; // terminal — account/device problem
 
-/** Stream element on `session.connection` — a Status emitted on transition. */
-export type ConnectionEvent = Status;
-
 /** True once a status is terminal (the `connection` stream ends here). */
 export function isTerminal(status: Status): boolean {
   return status.phase === "logged_out" || status.phase === "suspended";

@@ -1,4 +1,4 @@
-import { isJidGroup, type BaileysEventMap, type WAMessage } from "baileys";
+import { isJidGroup, proto, type BaileysEventMap, type WAMessage } from "baileys";
 import type {
   ConversationSyncBatch,
   HistoryChat,
@@ -9,6 +9,13 @@ import { noDownloader, type DownloadThunk } from "./download.ts";
 import { toInbound } from "./inbound.ts";
 
 type HistoryPayload = BaileysEventMap["messaging-history.set"];
+type ConversationSyncPayload = Pick<HistoryPayload, "chats" | "contacts" | "messages"> &
+  Partial<
+    Pick<
+      HistoryPayload,
+      "syncType" | "isLatest" | "chunkOrder" | "progress" | "peerDataRequestSessionId"
+    >
+  >;
 type NumericLike = number | { toNumber(): number } | null | undefined;
 type HistoryChatParticipant = {
   readonly id?: string | null;
@@ -79,7 +86,7 @@ function toHistoryContact(contact: HistoryPayload["contacts"][number]): HistoryC
 }
 
 export function toConversationSyncBatch(
-  payload: Pick<HistoryPayload, "chats" | "contacts" | "messages">,
+  payload: ConversationSyncPayload,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): ConversationSyncBatch {
   const chats = payload.chats.flatMap((chat) => {
@@ -91,7 +98,37 @@ export function toConversationSyncBatch(
     return mapped ? [mapped] : [];
   });
   const messages = toConversationSyncMessages(payload.messages, makeDownload);
-  return { chats, contacts, messages };
+  const source = (() => {
+    switch (payload.syncType) {
+      case proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP:
+        return "initial_bootstrap";
+      case proto.HistorySync.HistorySyncType.RECENT:
+        return "recent";
+      case proto.HistorySync.HistorySyncType.ON_DEMAND:
+        return "on_demand";
+      case proto.HistorySync.HistorySyncType.FULL:
+        return "full";
+      default:
+        return "unknown";
+    }
+  })();
+  const requestSessionId =
+    typeof payload.peerDataRequestSessionId === "string"
+      ? payload.peerDataRequestSessionId
+      : undefined;
+  return {
+    context: {
+      source,
+      ...(payload.isLatest != null && { isLatest: payload.isLatest }),
+      ...(payload.chunkOrder != null && { chunkOrder: payload.chunkOrder }),
+      ...(payload.progress != null && { progress: payload.progress }),
+      ...(requestSessionId !== undefined && { requestSessionId }),
+      projection: { mode: "upsert" },
+    },
+    chats,
+    contacts,
+    messages,
+  };
 }
 
 function toConversationSyncMessages(

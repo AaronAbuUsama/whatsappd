@@ -1,15 +1,15 @@
 /**
- * A file-backed {@link SessionStore} — one file per key under a directory.
- * Durable across restarts; a good default for a single sidecar process.
+ * A file-backed {@link CredentialStore} — one file per key under a directory.
+ * Durable across restarts; a good default for a single account worker.
  */
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { SessionStore } from "../ports.ts";
+import type { CredentialStore } from "../ports.ts";
 
 /** Make a key safe to use as a filename. */
 const fileName = (key: string): string => `${key.replace(/[^0-9A-Za-z._-]/g, "_")}.json`;
 
-export function fileStore(dir: string): SessionStore {
+export function fileStore(dir: string): CredentialStore {
   const path = (key: string): string => join(dir, fileName(key));
   let ensured = false;
   const ensureDir = async (): Promise<void> => {

@@ -1,6 +1,6 @@
 /**
  * Update protos → `Update`. The companion to the inbound mapper, for the
- * updates stream. Three socket events feed it (all confined here):
+ * update handler. Three socket events feed it (all confined here):
  *
  *   - `messages.update`        — multiplexed: per-message status (receipt),
  *                                 plus edits and revokes (both arrive rewritten

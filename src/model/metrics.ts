@@ -17,7 +17,7 @@ export type MetricEvent =
   | { type: "transition"; from: Status["phase"]; to: Status["phase"] }
   /** A message crossed the inbound stream. */
   | { type: "message_in"; kind: InboundMessage["kind"]; live: boolean }
-  /** An update crossed the updates stream. */
+  /** An update crossed the session boundary. */
   | { type: "update_in"; kind: Update["kind"] }
   /** A WhatsApp address-book contact update crossed the contacts stream. */
   | { type: "contact_in"; hasDisplayName: boolean; identityCount: number }

@@ -115,7 +115,7 @@ The current code already contains a richer and better lower-level boundary:
 
 - `src/session.ts` exposes connection, messages, conversation sync, updates,
   contacts, groups, presence, and native commands.
-- `src/ports.ts` defines `SessionStore`, which is specifically an opaque
+- `src/ports.ts` defines `CredentialStore`, which is specifically an opaque
   credential store.
 - `src/channel/types.ts` reduces the system to message, update, and status
   events for Eve/Flue-style agent frameworks.
@@ -269,8 +269,7 @@ making applications implement WhatsApp persistence themselves.
 
 ## Credentials and WhatsApp data are separate capabilities
 
-The existing `SessionStore` contract becomes `CredentialStore` in the hard-cut
-release:
+The former `SessionStore` contract is `CredentialStore` in the hard-cut release:
 
 ```ts
 export interface CredentialStore {

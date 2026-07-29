@@ -1,5 +1,5 @@
 /**
- * A libsql-backed {@link SessionStore}. One row per `(account, key)`; the value
+ * A libsql-backed {@link CredentialStore}. One row per `(account, key)`; the value
  * column holds the library's opaque serialized strings, which libsql never
  * interprets. The same store works against a local file (`file:wa.db`) or a
  * remote libsql/Turso URL, and its async API matches this contract directly.
@@ -12,7 +12,7 @@
  * app passes one `account` per supervised number.
  */
 import type { Client } from "@libsql/client";
-import type { SessionStore } from "../ports.ts";
+import type { CredentialStore } from "../ports.ts";
 
 export interface LibsqlStoreOptions {
   /** `file:wa-auth.db` for local, or a `libsql://…turso.io` URL for remote. */
@@ -33,7 +33,7 @@ function safeTable(name: string): string {
   return name;
 }
 
-export function libsqlStore(options: LibsqlStoreOptions): SessionStore {
+export function libsqlStore(options: LibsqlStoreOptions): CredentialStore {
   const account = options.account ?? "default";
   const table = safeTable(options.table ?? "wa_auth");
 

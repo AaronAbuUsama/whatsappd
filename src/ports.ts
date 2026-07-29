@@ -23,7 +23,7 @@ import { assertE164 } from "./errors.ts";
  * @see {@link memoryStore}, {@link fileStore}, and `libsqlStore` for the
  * built-in implementations.
  */
-export interface SessionStore {
+export interface CredentialStore {
   /** Read one entry, resolving to `null` when the key is absent. */
   read(key: string): Promise<string | null>;
   /**

@@ -1,31 +1,24 @@
 import type { BaileysEventMap } from "baileys";
+import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
 import { toMessagesUpsertEvents } from "../src/baileys/socket.ts";
 import { createSession } from "../src/session.ts";
 import { pairingAuth, qrAuth } from "../src/ports.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import { baseMessage } from "./fixtures.ts";
+import { textMessage } from "../src/testing.ts";
 
 // createSession is inert until start() — it opens no socket — so the public
-// registrar wiring and command guards can be exercised without a phone.
+// subscription wiring and command guards can be exercised without a phone.
 const make = (): ReturnType<typeof createSession> =>
   createSession({ store: memoryStore(), auth: qrAuth() });
 
-test("every onX registrar returns an unsubscribe function", () => {
+test("subscribe accepts a handler subset and returns one cleanup function", () => {
   const s = make();
-  const unsubs = [
-    s.onStatus(() => {}),
-    s.onMessage(() => {}),
-    s.onUpdate(() => {}),
-    s.onConversationSync(() => {}),
-    s.onContact(() => {}),
-    s.onGroup(() => {}),
-    s.onPresence(() => {}),
-  ];
-  for (const off of unsubs) {
-    expect(typeof off).toBe("function");
-    off(); // unsubscribing is safe to call
-  }
+  const unsubscribe = s.subscribe({ message: () => {} });
+  expect(typeof unsubscribe).toBe("function");
+  unsubscribe();
+  unsubscribe();
 });
 
 test("send before online throws (guarded by phase)", async () => {
@@ -39,8 +32,54 @@ test("send before online throws (guarded by phase)", async () => {
   expect(threw).toBe(true);
 });
 
+test("a rejected subscription handler fails the session pipeline", async () => {
+  const failure = new Error("acceptance failed");
+  let updateDelivered = false;
+  let ended = false;
+  const fakeConn = {
+    events: (async function* () {
+      yield {
+        t: "message",
+        msg: textMessage({
+          id: "m1",
+          chatId: "person@s.whatsapp.net",
+          text: "Hello",
+        }),
+      } as const;
+      yield {
+        t: "update",
+        update: {
+          kind: "receipt",
+          ref: { id: "m1", chatId: "person@s.whatsapp.net", fromMe: false },
+          status: "read",
+        },
+      } as const;
+    })(),
+    end: () => {
+      ended = true;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  session.subscribe({
+    message: () => {
+      throw failure;
+    },
+    update: () => {
+      updateDelivered = true;
+    },
+  });
+
+  await assert.rejects(session.start(), failure);
+  expect(updateDelivered).toBe(false);
+  expect(ended).toBe(true);
+});
+
 test("stop() during socket startup tears down the late-opened socket and awaits teardown", async () => {
-  // Regression: the channel adapter now launches session.start() detached, so
   // stop() can land while openSocket() is still in flight — conn is undefined,
   // so stop()'s `conn?.end()` is a no-op. The supervisor must tear down the
   // socket that opens afterwards, and stop() must not resolve until it has.
@@ -148,15 +187,17 @@ test("pairing-code session reaches online when the provider rejects requests bef
     auth: pairingAuth("+15551234567"),
     openSocket: async () => (++proof.openedSockets === 1 ? firstConn : returningConn),
   } as unknown as Parameters<typeof createSession>[0]);
-  s.onStatus((status) => {
-    if (status.phase === "pairing" && status.pairing.step === "challenge_live") {
-      proof.challengeCode = status.pairing.code ?? "";
-    }
-    if (status.phase === "online") proof.online = true;
-    if (status.phase === "backing_off") {
-      proof.backedOff = true;
-      void s.stop();
-    }
+  s.subscribe({
+    connection(status) {
+      if (status.phase === "pairing" && status.pairing.step === "challenge_live") {
+        proof.challengeCode = status.pairing.code ?? "";
+      }
+      if (status.phase === "online") proof.online = true;
+      if (status.phase === "backing_off") {
+        proof.backedOff = true;
+        void s.stop();
+      }
+    },
   });
 
   await s.start();
@@ -201,11 +242,13 @@ test("returning sessions reach online without conversation-sync batches", async 
     auth: qrAuth(),
     openSocket: async () => fakeConn,
   } as unknown as Parameters<typeof createSession>[0]);
-  s.onStatus((status) => {
-    if (status.phase === "online") online = true;
-  });
-  s.onConversationSync(() => {
-    syncBatches++;
+  s.subscribe({
+    connection(status) {
+      if (status.phase === "online") online = true;
+    },
+    conversationSync() {
+      syncBatches++;
+    },
   });
 
   await s.start();
@@ -274,11 +317,13 @@ test("live fromMe messages stay visible to consumers and can be replied to", asy
     openSocket: async () => fakeConn,
   } as unknown as Parameters<typeof createSession>[0]);
   let observedFromMe = false;
-  s.onMessage(async (message) => {
-    observedFromMe = message.fromMe;
-    if (message.kind === "text" && message.text.toLowerCase() === "ping") {
-      await message.reply("pong");
-    }
+  s.subscribe({
+    async message(message, { reply }) {
+      observedFromMe = message.fromMe;
+      if (message.kind === "text" && message.text.toLowerCase() === "ping") {
+        await reply("pong");
+      }
+    },
   });
 
   await s.start();
