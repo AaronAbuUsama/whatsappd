@@ -19,7 +19,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const authDir = process.env.AUTH_DIR
   ? path.resolve(process.env.AUTH_DIR)
   : path.join(here, "..", ".wa-auth");
-const phone = process.argv[2];
+const phone = process.argv.slice(2).find((arg) => arg !== "--");
 
 const logger = pino({
   level: process.env.LOG_LEVEL ?? "warn",
