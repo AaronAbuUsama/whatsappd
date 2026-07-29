@@ -1,6 +1,6 @@
 /**
- * Ephemeral WhatsApp presence. These signals are stream-only: they should drive
- * live UI affordances and expire quickly, not become durable message history.
+ * Ephemeral WhatsApp presence. These signals should drive live UI affordances
+ * and expire quickly, not become durable message history.
  */
 export type PresenceKind = "typing" | "recording" | "available" | "idle" | "unavailable";
 

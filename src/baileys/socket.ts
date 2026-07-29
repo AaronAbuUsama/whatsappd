@@ -336,7 +336,7 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
     for (const event of toMessagesUpsertEvents(payload, makeDownload)) queue.push(event);
   });
 
-  // The update stream: receipts, reactions, edits, revokes. Each mapper returns
+  // Update events: receipts, reactions, edits, revokes. Each mapper returns
   // undefined for shapes we don't model — we only enqueue hits.
   sock.ev.on("messages.update", (updates) => {
     for (const u of updates) {

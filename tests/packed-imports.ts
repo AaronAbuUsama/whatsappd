@@ -52,6 +52,13 @@ try {
   ]) {
     assert.equal(new RegExp(`\\b${removed}\\b`).test(declarations), false);
   }
+  for (const retiredVocabulary of [
+    /\bcallbacks?\b/i,
+    /\b(?:event|inbound|contacts?|presence|groups?|connection|own)\W+streams?\b/i,
+    /\bstream-only\b/i,
+  ]) {
+    assert.equal(retiredVocabulary.test(declarations), false);
+  }
 
   await writeFile(
     path.join(consumer, "verify.mjs"),

@@ -32,7 +32,7 @@ export type SyncState =
  * The connection lifecycle, with the pairing and sync sub-states nested in.
  *
  * `phase: "online"` is the authoritative readiness signal for commands.
- * Conversation-sync callbacks are advisory data batches and may be absent.
+ * Conversation-sync handlers receive advisory data batches and may be absent.
  */
 export type Status =
   | { phase: "disconnected" }
@@ -44,7 +44,7 @@ export type Status =
   | { phase: "logged_out"; reason: FaultReason } // terminal — creds dead, re-pair
   | { phase: "suspended"; reason: FaultReason }; // terminal — account/device problem
 
-/** True once a status is terminal (the `connection` stream ends here). */
+/** True once the connection lifecycle reaches a terminal status. */
 export function isTerminal(status: Status): boolean {
   return status.phase === "logged_out" || status.phase === "suspended";
 }

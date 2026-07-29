@@ -54,7 +54,7 @@ export interface SessionConfig {
   reconnectMaxMs?: number;
   /**
    * Whether to surface WhatsApp Status/story posts (`status@broadcast`) on the
-   * inbound stream.
+   * message handler.
    *
    * @defaultValue `false`
    */

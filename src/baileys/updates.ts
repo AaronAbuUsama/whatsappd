@@ -9,7 +9,7 @@
  *   - `messages.reaction`      — a reaction added or cleared.
  *
  * All pure: proto in, `Update` out. Edits reuse the inbound mapper so the new
- * content lands in the exact same shape as anything on the inbound stream.
+ * content lands in the same normalized shape as a message handler receives.
  */
 import {
   proto,

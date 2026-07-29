@@ -15,15 +15,15 @@ import type { Update } from "./update.ts";
 export type MetricEvent =
   /** A connection state transition (`from` → `to` phase). */
   | { type: "transition"; from: Status["phase"]; to: Status["phase"] }
-  /** A message crossed the inbound stream. */
+  /** A message was delivered to session handlers. */
   | { type: "message_in"; kind: InboundMessage["kind"]; live: boolean }
   /** An update crossed the session boundary. */
   | { type: "update_in"; kind: Update["kind"] }
-  /** A WhatsApp address-book contact update crossed the contacts stream. */
+  /** A WhatsApp address-book contact update was delivered. */
   | { type: "contact_in"; hasDisplayName: boolean; identityCount: number }
-  /** An ephemeral remote presence signal crossed the presence stream. */
+  /** An ephemeral remote presence signal was delivered. */
   | { type: "presence_in"; kind: PresenceUpdate["kind"] }
-  /** A WhatsApp group metadata or participant update crossed the groups stream. */
+  /** A WhatsApp group metadata or participant update was delivered. */
   | { type: "group_in"; kind: GroupUpdate["kind"] }
   /** A `send()` completed successfully. */
   | { type: "message_out" }
