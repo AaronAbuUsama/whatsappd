@@ -32,16 +32,23 @@ try {
   ) as { readonly bin?: unknown; readonly exports: Record<string, unknown> };
   assert.equal(packageJson.bin, undefined);
   assert.deepEqual(Object.keys(packageJson.exports).sort(), [".", "./package.json", "./testing"]);
-  const declarations = await readFile(
-    path.join(consumer, "node_modules/whatsappd/dist/index.d.mts"),
-    "utf8",
-  );
+  const dist = path.join(consumer, "node_modules/whatsappd/dist");
+  const declarations = (
+    await Promise.all(
+      (
+        await readdir(dist)
+      )
+        .filter((file) => file.endsWith(".d.mts"))
+        .map((file) => readFile(path.join(dist, file), "utf8")),
+    )
+  ).join("\n");
   for (const removed of [
     "SessionStore",
     "IncomingMessage",
     "ConversationSyncChat",
     "ConversationSyncContact",
     "HistoryBatch",
+    "libsqlStore",
   ]) {
     assert.equal(new RegExp(`\\b${removed}\\b`).test(declarations), false);
   }
