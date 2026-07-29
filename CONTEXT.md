@@ -45,7 +45,8 @@ _Avoid_: Event archive, application database, observation log
 A durable, account-scoped, revisioned batch of normalized WhatsApp events,
 appended at the same acceptance boundary that projects the Current Mirror.
 Backend consumers follow these batches from their own cursor when they require
-source history rather than current state.
+source history rather than current state. Ephemeral connection and presence
+signals are excluded.
 _Avoid_: Client patch, live callback, application observation
 
 **Backend Capability**:
@@ -89,6 +90,18 @@ acceptance is failing and being retried in place; processing backpressures
 rather than logging and skipping the event.
 _Avoid_: Silent retry, crash loop
 
+**Connection Freshness**:
+An account’s live connection state paired with the current Account Lease and a
+short expiry. Clients treat an expired state or lease mismatch as unavailable;
+they never hydrate a previously stored `online` or pairing status as current.
+_Avoid_: Durable online event, last known connection, startup truth
+
+**Command Attempt**:
+A leased claim on one durable command. An expired claim may return to pending
+only before execution begins; an expired executing attempt becomes terminal
+`outcome_unknown` and is never transparently retried.
+_Avoid_: Permanent running state, automatic send retry, best-effort recovery
+
 **Revision**:
 The per-account monotonic number the data store stamps on every Accepted Source
 Batch; snapshots report their revision and a patch applies only when its
@@ -121,3 +134,24 @@ download handle remains usable, producing an opaque durable reference or an
 explicit failed state. Voice transcription is a later derivation from stored
 audio.
 _Avoid_: Media metadata, lazy future download, transcript as source
+
+**Database Oracle**:
+A read-only, independently generated account-scoped manifest of stable record
+identities, timestamps, revisions, counts, and hashes used to cross-check
+public client or browser behavior after that behavior is asserted at its real
+seam. It is supporting proof, not a replacement for the public interface.
+_Avoid_: Database-coupled component test, personal message fixture, primary API
+
+**Browser Proof**:
+An AI-driven run of the real proof application at fixed viewports that combines
+semantic and interaction assertions, console and network health, and
+privacy-safe screenshots. It proves rendered integration rather than replacing
+deterministic tests of state behavior.
+_Avoid_: Screenshot-only acceptance, Storybook rendering, manual claim
+
+**Proof Ladder**:
+The required depth of evidence for a claim: P0 mechanical, P1 deterministic
+behavior, P2 durable integration, P3 native backend, P4 live WhatsApp, P5
+interactive browser, and P6 clean consumer or published release. Passing a
+lower rung never implies a higher one.
+_Avoid_: Tests passed, visually looks right, mechanically green

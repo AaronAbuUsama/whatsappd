@@ -1,8 +1,9 @@
 # Execution state — WhatsApp application substrate
 
-Last updated: 2026-07-29. The rescue Batch Grill and Grill-with-Docs frontier is
-settled through ADR-0015. This branch contains architecture decisions, not the
-SDK implementation. Run `/to-spec` and `/to-tickets` before implementation.
+Last updated: 2026-07-29. The rescue Batch Grill, Grill-with-Docs, specification,
+and tracer-bullet planning frontier is settled through ADR-0017. This branch
+contains architecture decisions, not the SDK implementation. Only the
+unblocked ticket frontier may start.
 
 ## Where everything lives
 
@@ -11,13 +12,15 @@ SDK implementation. Run `/to-spec` and `/to-tickets` before implementation.
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
 | Accepted architecture decisions  | `docs/adr/0001` … `0015`                                   |
+| Published build specification    | GitHub issue #15                                           |
+| Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
 | Branch / PR                      | `codex/setup-agent-skills-architecture` → PR #12           |
 
 The architecture document is grill output: a single coherent target with code
-sketches, consequences, implementation slices, and proof boundaries. Per the
-ask-matt route, it must become a build spec and a tracer-bullet ticket graph
-before any slice starts.
+sketches, consequences, implementation slices, and proof boundaries. The
+ask-matt route is now complete: issue #15 is the published specification and
+issues #16 through #41 are the approved dependency graph.
 
 ## Accepted decision ledger
 
@@ -50,6 +53,12 @@ before any slice starts.
 | No compatibility aliases or wrappers ship in the hard-cut package line                   | 0013 / spec    |
 | `whatsappd/testing` provides awaited event driving and command recording without sleeps  | 0013 / spec    |
 | Changesets releases the package family as a fixed lockstep group                         | Spec           |
+| Headless React owns WhatsApp state while shadcn owns optional chat presentation          | 0016           |
+| Every ticket declares TDD seam, acceptance, proof rung, and database-oracle boundary     | 0017           |
+| Connection and presence remain ephemeral; remote connection truth expires with its lease | PR #12 review  |
+| Conversation-sync deletion requires explicit, scope-bounded replacement metadata         | PR #12 review  |
+| Executing command claims expire to terminal `outcome_unknown`, never automatic retry     | PR #12 review  |
+| Actorless receipts use a non-null aggregate subject for idempotent projection            | PR #12 review  |
 
 ## Semantics that must not be collapsed
 
@@ -77,6 +86,25 @@ messages()
 requestHistory()
     explicit, asynchronous, per-chat request to the linked phone
 ```
+
+## Proof ladder
+
+| Rung | Claim boundary                                                      |
+| ---- | ------------------------------------------------------------------- |
+| P0   | Types, formatting, build, exports, and package graph                |
+| P1   | Deterministic behavior through an agreed public seam                |
+| P2   | Real database, restart, rollback, fault injection, and durability   |
+| P3   | Native backend transactions, authorization, rules, and realtime     |
+| P4   | Actual linked WhatsApp account, phone, history, media, and verdict  |
+| P5   | AI-driven browser behavior with semantic assertions and screenshots |
+| P6   | Packed clean consumer or installed published release                |
+
+A lower rung does not establish a higher claim. Browser screenshots accompany
+semantic, interaction, console, and network assertions; they do not replace
+them. A Database Oracle independently cross-checks stable identities, order,
+timestamps, revisions, counts, and hashes after public behavior is asserted.
+Personal message content, native addresses, media, and credentials remain out
+of published evidence.
 
 ## Prototype gates, not design questions
 
@@ -113,15 +141,19 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Next step
 
-1. Run `/to-spec` over the architecture, glossary, and ADRs.
-2. Run `/to-tickets` to create tracer-bullet slices and blocking prototype
-   edges.
-3. Do not start Slice 1 merely because the documentation PR is mechanically
-   green.
+The initial executable frontier contains exactly two tickets:
+
+1. GitHub issue #16 — establish the private live-account proof harness.
+2. GitHub issue #17 — hard-cut the live session to one awaited subscription.
+
+Issue #18 opens only after #16. Issue #19 opens only after both #16 and #17.
+Every other issue remains blocked by the edges recorded in its body. Do not
+start a descendant merely because the documentation PR is mechanically green.
 
 ## Resuming in a new session
 
-Read this file, then the architecture, `CONTEXT.md`, and ADR-0001 through
-ADR-0015. Treat current source as evidence of the old package, not evidence that
-the target APIs already exist. Reopening an accepted decision requires an
-explicit superseding ADR.
+Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0017,
+specification issue #15, and the currently unblocked ticket bodies. Treat
+current source as evidence of the old package, not evidence that the target APIs
+already exist. Reopening an accepted decision requires an explicit superseding
+ADR.
