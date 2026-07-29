@@ -211,6 +211,9 @@ const whatsapp = createWhatsAppRuntime({
     commands: pocketBaseCommandStore({
       client: adminPocketBase,
     }),
+    leases: pocketBaseLeaseStore({
+      client: adminPocketBase,
+    }),
   },
 });
 ```
@@ -239,9 +242,20 @@ Durable WhatsApp state has different invariants:
 export interface WhatsAppDataStore {
   apply(accountId: string, events: readonly WhatsAppDataEvent[]): Promise<AppliedWhatsAppBatch>;
 
-  snapshot(accountId: string): Promise<WhatsAppSnapshot>;
+  snapshot(accountId: string, window?: SnapshotWindow): Promise<WhatsAppSnapshot>;
+
+  messages(
+    accountId: string,
+    chatId: string,
+    page: { before?: MessageRef; limit: number },
+  ): Promise<readonly MessageRecord[]>;
 }
 ```
+
+`apply()` stamps every durable batch with the account’s next monotonic
+revision and returns it on `AppliedWhatsAppBatch`; snapshots report the
+revision they include. Snapshots are windowed (see the client contract), and
+older history is served through `messages()` pages.
 
 They must not be collapsed into one store because:
 
@@ -260,9 +274,17 @@ export interface WhatsAppBackend {
   readonly credentials: CredentialStore;
   readonly data: WhatsAppDataStore;
   readonly commands: WhatsAppCommandStore;
-  readonly leases?: AccountLeaseStore;
+  readonly leases: AccountLeaseStore;
 }
 ```
+
+The lease capability is required, not a deployment option. `start()` acquires
+the account lease before opening Baileys and heartbeats it for the life of the
+session; acquisition failure rejects with `AccountAlreadyClaimedError`, and a
+lost lease closes the socket. Two live sockets on one account diverge Signal
+ratchet state and can corrupt credentials, so a double-start must fail closed
+rather than race. The memory backend ships an in-process lease store for tests
+and single-process composition.
 
 Remote credential adapters should require host-side encryption material or an
 equivalent trusted secret-store integration. A browser-authenticated backend
@@ -329,9 +351,18 @@ This is a semantic requirement, not illustrative error handling:
 
 - a failed write is observable;
 - the event is not reported to clients as durably accepted;
-- the runtime enters a degraded state or retries ingestion under an explicit
-  policy;
 - a webhook-style “log and discard” path is not allowed.
+
+The explicit failure policy is pause-and-retry. A failed `apply()` is retried
+in place with capped exponential backoff; because the ingestion loop pulls
+nothing further while a retry is pending, the session streams buffer upstream
+and no ordered event is skipped or dropped. While retrying, the runtime records
+a degraded status (error, attempt count) in `runtime_state` and surfaces it
+through client connection frames; the first successful write clears it and
+ingestion resumes exactly where it paused. The known ceiling is unbounded
+session-buffer growth during a very long outage; a cap that closes the socket
+instead of dropping events can be added as a knob when a real deployment needs
+it.
 
 ## Canonical durable mirror
 
@@ -353,7 +384,7 @@ media                       metadata and durability state, not necessarily bytes
 commands
 command_attempts
 runtime_state               revision, sync state, last error
-account_leases              only where deployment topology needs them
+account_leases              single-writer claims, always present
 ```
 
 All durable records are explicitly account-scoped. No adapter may infer
@@ -480,6 +511,11 @@ export interface WhatsAppClient {
     | { type: "connection"; state: WhatsAppClientConnectionState }
   >;
 
+  messages(
+    chatId: string,
+    page: { before?: MessageRef; limit: number },
+  ): Promise<readonly MessageRecord[]>;
+
   execute(
     command: WhatsAppCommand,
     options?: { signal?: AbortSignal },
@@ -487,12 +523,33 @@ export interface WhatsAppClient {
 }
 ```
 
-Every `watch()` starts with a store-backed snapshot. Live patches delivered
-after it are ordered after that snapshot.
+The snapshot is a bounded window, not the whole mirror: the account, every
+chat, contacts, groups, and each chat’s most recent messages (a configurable
+window). Older history is read on demand through `messages()`, which is what
+the React `loadOlder` slot calls. A full-mirror first frame on a real
+multi-year account is tens of megabytes per `watch()` and is not a supported
+contract shape.
 
-The implementation may subscribe before reading and buffer/deduplicate updates,
-or use a backend’s consistent reactive query mechanism. The contract owns that
-race; React components do not.
+Every `watch()` starts with a store-backed snapshot. Live patches delivered
+after it are ordered after that snapshot by revision, not by heuristics:
+
+```ts
+export interface WhatsAppPatch {
+  readonly accountId: string;
+  readonly revision: number;
+  readonly upserts: readonly MirrorRecord[];
+  readonly deletes: readonly MirrorRecordKey[];
+}
+```
+
+Patches carry normalized mirror records, not WhatsApp events: projection logic
+runs once, server-side, in the runtime. The data store stamps every applied
+batch with the account’s next monotonic revision, and every snapshot reports
+the revision it includes. A client applies a patch if and only if
+`patch.revision > snapshot.revision`, which closes the subscribe-during-read
+race deterministically. The contract owns that race; React components do not.
+A backend with consistent reactive queries may translate native query updates
+into these upserts instead of shipping a second event protocol.
 
 On reconnect, the client receives a fresh snapshot. A general durable event
 journal and resumable replay cursor are deferred until a real consumer proves
@@ -787,8 +844,8 @@ outbound echo through another mutation. Convex owns transactions, queries,
 command records, and the current mirror; it does not own the socket lifecycle.
 
 Convex queries are reactive and consistent, so the browser adapter translates
-native query updates into `WhatsAppClient` snapshots and patches instead of
-implementing a second websocket protocol. `@whatsappd/react` therefore works
+native query updates into `WhatsAppClient` snapshots and revisioned
+record-upsert patches instead of implementing a second websocket protocol. `@whatsappd/react` therefore works
 unchanged: it consumes `WhatsAppClient`, not the worker process.
 
 Convex components do not directly receive the parent application’s auth
@@ -930,7 +987,7 @@ merely because it is another process.
   streams.
 - Define normalized durable events, snapshots, patches, commands, and the
   client contract.
-- Implement the runtime with memory data/command stores.
+- Implement the runtime with memory data/command/lease stores.
 - Add shared credential, data, command, and client conformance tests.
 - Prove persist-before-publish and snapshot-first ordering.
 
@@ -938,6 +995,8 @@ Exit proof:
 
 - replaying the same inputs produces one current mirror;
 - a failed data write produces no successful client patch;
+- ingestion resumes without loss after transient write failures;
+- a second `start()` on a claimed account fails closed;
 - a returning session with zero sync batches retains its snapshot;
 - real message references reach `markRead`;
 - two accounts do not cross-contaminate.
@@ -1022,6 +1081,8 @@ out-of-repository adapter author needs the harness:
 - zero-sync reconnect retention;
 - transaction rollback on a failed multi-record batch;
 - equivalent snapshot normalization;
+- monotonic revision stamping across restarts;
+- windowed snapshots and stable `messages()` page boundaries;
 - media metadata never implies stored bytes.
 
 ### Command store
@@ -1034,11 +1095,19 @@ out-of-repository adapter author needs the harness:
 
 ### Client
 
-- first frame is a snapshot;
-- subsequent patches are ordered after it;
+- first frame is a snapshot carrying its revision;
+- subsequent patches carry revisions greater than the snapshot’s;
+- paging older history never duplicates or skips a message across a live patch;
 - reconnect replaces state with a fresh snapshot;
 - cancellation releases subscriptions;
 - unauthorized reads and commands fail closed.
+
+### Lease store
+
+- acquire is compare-and-swap: one holder per account;
+- a second acquire fails closed while the lease is held;
+- heartbeat renewal extends the claim; expiry releases it;
+- account isolation.
 
 ## Acceptance criteria
 
@@ -1058,6 +1127,9 @@ out-of-repository adapter author needs the harness:
 - [ ] Persistence completes before a successful client patch is published.
 - [ ] Persistence failures are visible and tested.
 - [ ] Zero-sync reconnects preserve prior data.
+- [ ] Applied batches carry per-account monotonic revisions.
+- [ ] Snapshots are windowed; older history is served by paged reads.
+- [ ] Opening an already-claimed account fails closed on the lease.
 - [ ] Presence is never restored as current truth.
 - [ ] Credential clearing cannot erase the WhatsApp mirror.
 - [ ] Media metadata does not claim durable bytes.
@@ -1066,6 +1138,7 @@ out-of-repository adapter author needs the harness:
 
 - [ ] React imports no PocketBase, Convex, Supabase, or SQL SDK.
 - [ ] Every watch begins with a consistent snapshot.
+- [ ] Patch application is gated on revision comparison.
 - [ ] Optimistic sends reconcile with authoritative results.
 - [ ] Headless components render no DOM or CSS.
 - [ ] Hooks and render slots work with at least PocketBase and Convex clients.

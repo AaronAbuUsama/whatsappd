@@ -56,3 +56,26 @@ The application-owned policy mapping an authenticated application identity to
 per-account read and command permissions, enforced through native backend rules
 or application-owned server routes.
 _Avoid_: WhatsApp authentication, whatsappd user system
+
+**Account Lease**:
+The required single-writer claim on one WhatsApp Account, acquired before the
+live socket opens and heartbeated for the session’s life, so starting the same
+account twice fails closed.
+_Avoid_: Optional deployment detail, advisory lock
+
+**Degraded State**:
+The visible runtime condition in which the live session is up but durable
+application is failing and being retried in place; ingestion pauses rather
+than skips or drops.
+_Avoid_: Silent retry, crash loop
+
+**Revision**:
+The per-account monotonic number the data store stamps on every applied batch;
+snapshots report the revision they include and patches apply only above it.
+_Avoid_: Timestamp ordering, heuristic deduplication
+
+**Snapshot Window**:
+The bounded first frame of a client watch — the account, chats, contacts,
+groups, and each chat’s most recent messages; older history arrives only
+through paged reads.
+_Avoid_: Full-mirror dump, event replay
