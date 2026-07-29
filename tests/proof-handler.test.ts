@@ -1,6 +1,6 @@
 import { expect, test } from "./_expect.ts";
 import type { InboundMessage } from "../src/model/index.ts";
-import { proofReply } from "./proof-handler.ts";
+import { replyToProofPing } from "./proof-handler.ts";
 
 const message = (text: string, live = true): InboundMessage =>
   ({
@@ -15,10 +15,15 @@ const message = (text: string, live = true): InboundMessage =>
     text,
   }) as InboundMessage;
 
-test("proof replies once to a live self ping without looping on pong or history", () => {
-  expect([message("ping"), message("pong"), message("ping", false)].map(proofReply)).toEqual([
-    "pong",
-    undefined,
-    undefined,
-  ]);
+test("proof sends one pong for a live self ping without looping on pong or history", async () => {
+  const sent: [string, string][] = [];
+  const send = async (chatId: string, text: "pong") => {
+    sent.push([chatId, text]);
+  };
+
+  for (const candidate of [message("ping"), message("pong"), message("ping", false)]) {
+    await replyToProofPing(candidate, send);
+  }
+
+  expect(sent).toEqual([["1555@s.whatsapp.net", "pong"]]);
 });

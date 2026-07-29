@@ -1,7 +1,12 @@
 import type { InboundMessage } from "../src/model/index.ts";
 
-export function proofReply(message: InboundMessage): "pong" | undefined {
-  return message.live && message.kind === "text" && message.text.trim().toLowerCase() === "ping"
-    ? "pong"
-    : undefined;
+export async function replyToProofPing(
+  message: InboundMessage,
+  send: (chatId: string, text: "pong") => Promise<void>,
+): Promise<boolean> {
+  if (!message.live || message.kind !== "text" || message.text.trim().toLowerCase() !== "ping") {
+    return false;
+  }
+  await send(message.chatId, "pong");
+  return true;
 }
