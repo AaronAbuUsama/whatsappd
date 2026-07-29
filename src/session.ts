@@ -94,11 +94,14 @@ export interface SessionConfig {
 export interface WhatsAppSession {
   /** The current connection status (also emitted on {@link connection}). */
   readonly status: Status;
-  /** Connection-lifecycle events: pairing, online, backing off, terminal. */
+  /** Connection lifecycle. `phase: "online"` is the settled readiness signal. */
   readonly connection: AsyncIterable<ConnectionEvent>;
   /** Incoming messages, normalized into a closed union. */
   readonly inbound: AsyncIterable<InboundMessage>;
-  /** Batches of conversation history delivered during initial sync. */
+  /**
+   * Advisory initial-link history batches. Reconnects may emit none; use
+   * `phase: "online"`, not this stream, as the sync-complete/readiness signal.
+   */
   readonly conversationSync: AsyncIterable<ConversationSyncBatch>;
   /** Receipts, reactions, edits, and revokes on existing messages. */
   readonly updates: AsyncIterable<Update>;
@@ -122,7 +125,10 @@ export interface WhatsAppSession {
   onMessage(handler: Listener<IncomingMessage>): Unsubscribe;
   /** Register a callback for receipts/reactions/edits/revokes. */
   onUpdate(handler: Listener<Update>): Unsubscribe;
-  /** Register a callback for conversation-history sync batches. */
+  /**
+   * Register for advisory initial-link history batches. Reconnects may emit
+   * none; this is not a sync-complete/readiness callback.
+   */
   onConversationSync(handler: Listener<ConversationSyncBatch>): Unsubscribe;
   /** Register a callback for address-book and profile-metadata updates. */
   onContact(handler: Listener<ContactUpdate>): Unsubscribe;
@@ -314,6 +320,13 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         if (!firstQrSeen) {
           firstQrSeen = true;
           await apply({ t: "ready", qr: ev.qr, expiresAt: Date.now() + QR_FIRST_MS });
+          if (auth.method === "pairing_code" && conn) {
+            // Baileys 7 requires the first QR event to prove the socket is ready
+            // before requestPairingCode(); requesting at socket creation gets 428.
+            const code = await conn.requestPairingCode(assertE164(auth.phone).replace(/^\+/, ""));
+            await apply({ t: "code_ready", code, expiresAt: Date.now() + verdictWindowMs });
+            verdictTimer = setTimeout(fireVerdict, verdictWindowMs);
+          }
           return;
         }
         // A refresh.
@@ -405,15 +418,6 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     if (stopped) {
       conn.end();
       return;
-    }
-
-    if (config.auth.method === "pairing_code" && !auth.creds.me) {
-      // Baileys' pairing-code flow starts from fresh creds by requesting the
-      // phone-number code immediately after socket creation; it does not wait
-      // for a QR readiness event.
-      const code = await conn.requestPairingCode(assertE164(config.auth.phone).replace(/^\+/, ""));
-      await apply({ t: "code_ready", code, expiresAt: Date.now() + verdictWindowMs });
-      verdictTimer = setTimeout(fireVerdict, verdictWindowMs);
     }
 
     for await (const ev of conn.events) await handle(ev);

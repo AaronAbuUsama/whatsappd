@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+### Patch Changes
+
+- Wait for socket readiness before requesting pairing codes, and document that
+  `phase: "online"`—not conversation-sync batches—is the readiness signal.
+
 ## 0.2.0
 
 ### Minor Changes

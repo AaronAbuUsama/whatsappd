@@ -1,6 +1,6 @@
 import { expect, test } from "./_expect.ts";
 import { createSession } from "../src/session.ts";
-import { qrAuth } from "../src/ports.ts";
+import { pairingAuth, qrAuth } from "../src/ports.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 
 // createSession is inert until start() — it opens no socket — so the public
@@ -81,4 +81,87 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
 
   expect(outcome).toBe("stopped"); // stop() resolved, didn't hang
   expect(ended).toBe(true); // the late-opened socket was torn down
+});
+
+test("pairing code is requested only after the first QR proves socket readiness", async () => {
+  const order: string[] = [];
+  const statuses: string[] = [];
+  const fakeConn = {
+    events: (async function* () {
+      order.push("connecting");
+      yield { t: "connecting" } as const;
+      expect(order).toEqual(["connecting"]);
+
+      order.push("qr");
+      yield { t: "qr", qr: "socket-ready" } as const;
+      expect(order).toEqual(["connecting", "qr", "request"]);
+
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    requestPairingCode: async (digits: string) => {
+      expect(digits).toBe("15551234567");
+      order.push("request");
+      return "ABCD-1234";
+    },
+    end: () => {},
+  };
+
+  const s = createSession({
+    store: memoryStore(),
+    auth: pairingAuth("+15551234567"),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  s.onStatus((status) => {
+    statuses.push(status.phase);
+  });
+
+  await s.start();
+
+  expect(order).toEqual(["connecting", "qr", "request"]);
+  expect(statuses.some((phase) => phase === "pairing")).toBe(true);
+});
+
+test("returning sessions reach online without conversation-sync batches", async () => {
+  const store = memoryStore();
+  await store.write({
+    creds: JSON.stringify({
+      registered: true,
+      me: { id: "15551234567:1@s.whatsapp.net" },
+      accountSyncCounter: 1,
+    }),
+  });
+
+  let online = false;
+  let syncBatches = 0;
+  const fakeConn = {
+    events: (async function* () {
+      yield { t: "open" } as const;
+      yield { t: "pending_drained" } as const;
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    end: () => {},
+  };
+
+  const s = createSession({
+    store,
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  s.onStatus((status) => {
+    if (status.phase === "online") online = true;
+  });
+  s.onConversationSync(() => {
+    syncBatches++;
+  });
+
+  await s.start();
+
+  expect(online).toBe(true);
+  expect(syncBatches).toBe(0);
 });
