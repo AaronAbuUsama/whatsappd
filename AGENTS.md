@@ -14,3 +14,10 @@ Use the canonical `needs-triage`, `needs-info`, `ready-for-agent`,
 
 This is a single-context repository. Read `CONTEXT.md` and relevant decisions
 under `docs/adr/` when present. See `docs/agents/domain.md`.
+
+### Unattended frontier execution
+
+When asked to execute the issue DAG autonomously, follow
+`docs/agents/frontier-execution.md`. The durable GitHub graph, independent
+review loop, seven-pass ceiling, proof gate, and merge-frontier receipt are
+mandatory.
