@@ -124,8 +124,7 @@ export function transition(state: Status, input: Input, ctx: MachineCtx, now: nu
     case "connecting": {
       // Returning device (has creds): straight to open, no pairing.
       if (input.t === "open") return { phase: "authenticated", sync: { step: "draining" } };
-      // Pairing-code mode does not wait for QR refs. Baileys expects
-      // requestPairingCode() immediately after socket creation.
+      // A pairing code is surfaced after the first QR proves socket readiness.
       if (input.t === "code_ready" && ctx.method === "pairing_code") {
         return {
           phase: "pairing",
@@ -137,7 +136,8 @@ export function transition(state: Status, input: Input, ctx: MachineCtx, now: nu
           },
         };
       }
-      // Fresh login: first qr = ws ready.
+      // Fresh login: first QR = websocket ready. Pairing-code mode does not
+      // display it; the session now requests the phone-number code.
       if (input.t === "ready") {
         return ctx.method === "qr"
           ? {

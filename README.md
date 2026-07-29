@@ -74,6 +74,12 @@ Every `onX` has a matching `AsyncIterable` for `for await` —
 out to any number of listeners and each returns an unsubscribe; a stream is
 single-consumer.
 
+`phase: "online"` is the only settled/readiness signal on both first link and
+reconnect. `conversationSync` / `onConversationSync` carries advisory
+initial-link history batches: it may emit multiple batches with no terminal
+batch, and reconnects that skip history emit none. Never wait for a sync batch
+to start a runtime.
+
 ## The surface
 
 ```ts

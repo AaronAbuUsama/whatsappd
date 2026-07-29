@@ -19,7 +19,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const authDir = process.env.AUTH_DIR
   ? path.resolve(process.env.AUTH_DIR)
   : path.join(here, "..", ".wa-auth");
-const phone = process.argv[2];
+const phone = process.argv.slice(2).find((arg) => arg !== "--");
 
 const logger = pino({
   level: process.env.LOG_LEVEL ?? "warn",
@@ -30,6 +30,10 @@ const session = createSession({
   store: fileStore(authDir),
   auth: phone ? pairingAuth(phone) : qrAuth(),
   logger,
+});
+let conversationSyncBatches = 0;
+session.onConversationSync(() => {
+  conversationSyncBatches++;
 });
 
 // Loop 1 — status transitions (the "status = events" stream).
@@ -52,7 +56,9 @@ void (async () => {
         console.log(`… ${ev.sync.step}`);
         break;
       case "online":
-        console.log("🟢 ONLINE — connected and synced");
+        console.log(
+          `🟢 ONLINE — connected and synced (${conversationSyncBatches} conversation-sync batches)`,
+        );
         break;
       case "backing_off":
         console.log(
@@ -74,7 +80,9 @@ void (async () => {
 // Loop 2 — inbound messages (the "messages = events" stream).
 void (async () => {
   for await (const m of session.inbound) {
-    if (m.fromMe || !m.live) continue;
+    // Keep fromMe events so "Message Yourself" can prove a one-account round trip.
+    // The exact ping trigger cannot loop: the emitted response is "pong".
+    if (!m.live) continue;
     const desc = m.kind === "text" ? m.text : `[${m.kind}]`;
     console.log(`📩 ${m.from}: ${desc}`);
     if (m.kind === "text" && m.text.trim().toLowerCase() === "ping") {

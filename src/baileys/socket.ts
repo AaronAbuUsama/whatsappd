@@ -38,6 +38,9 @@ import { keyToRef, refToKey, toContent, toOptions } from "./outbound.ts";
 const RECENT_CAP = 500;
 import type { BaileysAuth } from "./authState.ts";
 
+/** Canonical web companion identity required by WhatsApp pairing-code registration. */
+export const PAIRING_BROWSER = Browsers.ubuntu("Chrome");
+
 /** Track recent raw messages in an LRU Map for quote/reply resolution. */
 function rememberRecent(recent: Map<string, WAMessage>, messages: WAMessage[]): void {
   for (const m of messages) {
@@ -283,7 +286,7 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
       requestFullHistory,
       credsRegistered: auth.creds.registered === true,
       hasCredsMe: Boolean(auth.creds.me),
-      browser: "macOS Desktop",
+      browser: PAIRING_BROWSER.join(" "),
     },
     "opening baileys socket",
   );
@@ -291,9 +294,8 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
   const sock: WASocket = makeWASocket({
     version,
     logger,
-    // Desktop companion mode is required for the richest linked-device history sync.
-    browser: Browsers.macOS("Desktop"),
-    // Fresh Desktop registration is not complete at pair-success. Baileys first
+    browser: PAIRING_BROWSER,
+    // Fresh companion registration is not complete at pair-success. Baileys first
     // persists `creds.me`, then later sets `creds.registered` after the
     // link_code_companion_reg finish notification. Asking for full history in
     // that in-between state leaves the phone stuck at "logging in" and the
