@@ -6,3 +6,5 @@ dist
 !.vscode/settings.json
 !.vscode/extensions.json
 .wa-auth/
+.wa-libsql.db*
+.proof-private/
