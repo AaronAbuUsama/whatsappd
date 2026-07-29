@@ -23,9 +23,12 @@ exports the Eve-era channel adapter, sidecar, and agent tools.
    realtime delivery, migrations, and browser clients for PocketBase, Convex,
    libSQL, Postgres, and Supabase.
 4. A backend-independent client contract feeds a headless React package.
-5. A reusable executable is called the **runtime host**, not the sidecar.
-   Embedding the runtime in an application process remains the default.
-6. `ChannelEvent`, `WhatsAppChannelAdapter`, the Eve adapter, the current
+5. Applications create the runtime inside a long-lived Node process. That
+   application-owned process may be dedicated to one WhatsApp account, but
+   `whatsappd` does not initially ship a generic daemon or HTTP transport.
+6. Pairing is an account lifecycle command issued after account creation, not
+   immutable runtime-constructor configuration.
+7. `ChannelEvent`, `WhatsAppChannelAdapter`, the Eve adapter, the current
    webhook sidecar, and agent-specific tools leave the core product.
 
 The important ownership boundary is:
@@ -39,35 +42,25 @@ belong to `whatsappd`. An application still owns its inbox admission,
 retention, agent windows, search, knowledge extraction, and other product
 semantics.
 
-## What “sidecar” means here
+## The sidecar is retired
 
-A sidecar is a deployment topology: an auxiliary process deployed beside a
-primary application because the primary process cannot or should not own the
-long-lived WhatsApp socket.
+The current sidecar is an Eve-era HTTP webhook bridge over the reduced
+`ChannelEvent` model. No inspected working application uses it as its WhatsApp
+integration, and a dedicated operating-system process does not require a
+generic daemon: application code can create the same runtime inside a
+one-account worker process.
 
-It is not the name of the reusable API, data model, or transport.
-
-The reusable executable should therefore be:
-
-```text
-whatsappd serve
-```
-
-and the reusable concept should be:
-
-```text
-WhatsApp runtime host
-```
-
-An operator may deploy that host as a sidecar, a standalone service, a desktop
-background process, or inside the main application. Calling the product itself
-a sidecar incorrectly makes one optional deployment shape look mandatory.
+The sidecar package, wire protocol, and CLI are therefore removed rather than
+renamed. A generic daemon or HTTP client transport can be proposed later if a
+real non-Node or remote-process consumer proves that application-owned
+composition and backend-native clients are insufficient.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    WA["WhatsApp / Baileys"] --> SE["Session engine"]
+    AW["Application-owned account worker"] --> SE["Session engine"]
+    WA["WhatsApp / Baileys"] --> SE
     SE --> RT["WhatsApp runtime"]
 
     RT --> CS["CredentialStore"]
@@ -83,13 +76,11 @@ flowchart LR
     PB --> PC["PocketBase client"]
     CX --> CC["Convex client"]
     SB --> SC["Supabase client"]
-    SQL --> HC["HTTP client"]
     RT --> IC["In-process client"]
 
     PC --> WC["WhatsAppClient"]
     CC --> WC
     SC --> WC
-    HC --> WC
     IC --> WC
 
     WC --> RE["Headless React"]
@@ -99,14 +90,13 @@ flowchart LR
 The module boundaries are deliberately deeper than the current
 channel/sidecar split:
 
-| Module          | Owns                                                                                                                               | Does not own                                                 |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Session engine  | Baileys socket, pairing, credentials, reconnect, normalization, lazy live media, native WhatsApp commands                          | Databases, HTTP, React, PocketBase, Convex, agent frameworks |
-| Runtime         | Complete event ingestion, account stamping, durable projection, command execution, optimistic reconciliation, lifecycle and leases | Application inbox policy, agents, product retention, UI      |
-| Backend package | Credential/data/command implementations, migrations, constraints, realtime client, access-rule templates                           | The application’s identity model or product tables           |
-| Client          | Snapshot-first reads, live patches, commands, connection state                                                                     | React and visual rendering                                   |
-| Headless React  | Provider, hooks, selectors, optimistic state, render slots                                                                         | DOM, CSS, component library, backend SDK selection           |
-| Runtime host    | Optional process lifecycle and HTTP transport                                                                                      | A requirement that every deployment use another process      |
+| Module          | Owns                                                                                                                             | Does not own                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Session engine  | Baileys socket, credentials, reconnect, normalization, lazy live media, native WhatsApp commands                                 | Databases, HTTP, React, PocketBase, Convex, agent frameworks  |
+| Runtime         | Account creation, dynamic pairing, complete event ingestion, durable projection, commands, reconciliation, lifecycle, and leases | Application identity, process supervision, product policy, UI |
+| Backend package | Credential/data/command implementations, migrations, constraints, realtime client, access-rule templates                         | The application’s identity model or product tables            |
+| Client          | Snapshot-first reads, live patches, commands, connection state                                                                   | React and visual rendering                                    |
+| Headless React  | Provider, hooks, selectors, optimistic state, render slots                                                                       | DOM, CSS, component library, backend SDK selection            |
 
 ## Why the current seams should not survive
 
@@ -154,18 +144,20 @@ Eve, Flue, webhooks, or a mandatory second process.
 
 ## Core session boundary
 
-`createSession()` remains usable by consumers that need only a live connection:
+`createSession()` remains usable by consumers that need only the current
+low-level live connection API:
 
 ```ts
 const session = createSession({
-  auth: pairingAuth(phone),
+  auth: qrAuth(),
   store: fileCredentialStore("./data/whatsapp-auth"),
 });
 
 await session.start();
 ```
 
-The runtime is additive:
+The durable runtime does not require a phone number or pairing method at
+construction:
 
 ```ts
 const backend = pocketBaseBackend({
@@ -175,12 +167,31 @@ const backend = pocketBaseBackend({
 
 const whatsapp = createWhatsAppRuntime({
   accountId: "personal",
-  auth: pairingAuth(phone),
   backend,
 });
 
 await whatsapp.start();
 ```
+
+`start()` resumes when credentials already exist and otherwise reports that the
+account needs pairing. The application can then choose either method at
+runtime:
+
+```ts
+// Pairing-code UI:
+const challenge = await whatsapp.pair({
+  method: "pairing_code",
+  phoneE164: phoneCollectedFromTheUser,
+});
+
+// Or QR UI:
+const qr = await whatsapp.pair({ method: "qr" });
+```
+
+The phone is validated when the pairing command crosses the runtime boundary.
+It is neither an environment-only value nor permanent account configuration.
+Pairing is rejected once usable credentials exist unless the account is
+explicitly unlinked first.
 
 One backend factory may provide all capabilities over one configured
 connection, but the capabilities stay logically separate and independently
@@ -189,7 +200,6 @@ replaceable:
 ```ts
 const whatsapp = createWhatsAppRuntime({
   accountId: "personal",
-  auth: pairingAuth(phone),
   backend: {
     credentials: libsqlCredentialStore({
       client: localDatabase,
@@ -495,12 +505,13 @@ createInProcessWhatsAppClient(runtime)
 createPocketBaseWhatsAppClient({ client: authenticatedPocketBase })
 createConvexWhatsAppClient({ client: authenticatedConvex })
 createSupabaseWhatsAppClient({ client: authenticatedSupabase })
-createHttpWhatsAppClient({ baseUrl, getAccessToken })
 createMemoryWhatsAppClient(...)
 ```
 
 The backend client is chosen once at the application composition root. The UI
-does not contain `if (pocketbase)` or backend-specific query code.
+does not contain `if (pocketbase)` or backend-specific query code. A future
+remote transport can implement the same contract without changing React, but
+it is not part of the initial package family.
 
 ## Headless React
 
@@ -571,22 +582,21 @@ dependency or the new product foundation.
 
 ## Backend packages
 
-The target public package family is:
+The initial public package family is limited to working vertical slices:
 
 ```text
 whatsappd
 @whatsappd/react
 @whatsappd/pocketbase
-@whatsappd/convex
-@whatsappd/libsql
-@whatsappd/postgres
-@whatsappd/supabase
-@whatsappd/testing
 ```
 
-`whatsappd` contains the session, runtime, domain contracts, in-process client,
-and optional runtime host. Backend SDKs and React do not enter its default
-dependency graph.
+`@whatsappd/convex` is added when the Convex vertical slice begins. libSQL,
+Postgres, Supabase, and shared testing packages are published only when their
+complete adapter surfaces have real consumers; empty placeholder packages are
+not shipped.
+
+`whatsappd` contains the session, runtime, domain contracts, and in-process
+client. Backend SDKs and React do not enter its default dependency graph.
 
 Each backend package may expose server and client subpaths:
 
@@ -653,8 +663,8 @@ pocketBaseDataStore(...)
 pocketBaseCommandStore(...)
 ```
 
-The server adapter uses privileged host credentials. The browser client uses an
-already-authenticated application client.
+The server adapter uses privileged account-worker credentials. The browser
+client uses an already-authenticated application client.
 
 Default collections are conceptually:
 
@@ -716,7 +726,11 @@ account-scoped, normalized writes and server-only credentials.
 ## Convex adapter
 
 Convex is a first-class peer of PocketBase, not an application-specific
-projection:
+projection. Baileys never runs inside a Convex function: a long-lived
+application-owned Node worker owns the socket and calls the Convex deployment
+through its JavaScript client.
+
+The installed component owns the durable schema and functions:
 
 ```ts
 // convex/convex.config.ts
@@ -725,13 +739,40 @@ import whatsappd from "@whatsappd/convex/component";
 app.use(whatsappd);
 ```
 
+The external worker composes the runtime with the server adapter:
+
 ```ts
+// Long-lived Node process, not a Convex function.
 const backend = convexBackend({
-  component: components.whatsappd,
   accountId: "personal",
-  client: serverConvexClient,
+  client: serviceAuthenticatedConvexClient,
+  api: api.whatsappService,
 });
 
+const whatsapp = createWhatsAppRuntime({
+  accountId: "personal",
+  backend,
+});
+
+await whatsapp.start();
+```
+
+`api.whatsappService` is application-mounted server glue. It verifies the
+worker’s service credential, then calls the component:
+
+```ts
+export const ingest = mutation({
+  args: serviceIngestArgs,
+  handler: async (ctx, args) => {
+    await requireWhatsAppWorker(ctx, args.serviceToken, args.accountId);
+    return ctx.runMutation(components.whatsappd.ingest, args.event);
+  },
+});
+```
+
+The browser uses the ordinary authenticated Convex React client:
+
+```ts
 const client = createConvexWhatsAppClient({
   client: authenticatedConvexReactClient,
   api: api.whatsapp,
@@ -739,17 +780,27 @@ const client = createConvexWhatsAppClient({
 });
 ```
 
-The component owns its schema, transactional mutations, queries, command
-records, and current WhatsApp mirror. Convex queries are reactive and
-consistent, so the browser adapter should translate those native query updates
-into `WhatsAppClient` snapshots/patches instead of implementing a second
-websocket protocol.
+The worker writes normalized events through Convex mutations and uses a
+long-lived Convex subscription to receive pending commands for its account. It
+executes each command against Baileys, then records the result and authoritative
+outbound echo through another mutation. Convex owns transactions, queries,
+command records, and the current mirror; it does not own the socket lifecycle.
+
+Convex queries are reactive and consistent, so the browser adapter translates
+native query updates into `WhatsAppClient` snapshots and patches instead of
+implementing a second websocket protocol. `@whatsappd/react` therefore works
+unchanged: it consumes `WhatsAppClient`, not the worker process.
 
 Convex components do not directly receive the parent application’s auth
 context. The package therefore supplies application-side query/mutation
 wrappers that authenticate with the host app and pass an authorized principal
 or account scope into the component. It must not pretend that installing a
 component automatically defines the app’s user-to-account policy.
+
+The external worker authenticates as a service, not as an application user.
+Its credential and mutation functions validate that service boundary and are
+never re-exported to browser clients. WhatsApp device credentials are encrypted
+before storage and can be read only through that service-authorized path.
 
 Relevant native facilities:
 
@@ -791,20 +842,12 @@ Plain Postgres follows the same server-side contract once there is a concrete
 consumer. It does not require a generic ORM, collection abstraction, or
 database-agnostic query language.
 
-For libSQL and plain Postgres browser applications, `whatsappd serve` supplies
-the HTTP client transport:
-
-```ts
-serveWhatsAppRuntime({
-  runtime,
-  authorize: async (request, operation) => {
-    return applicationAuth.authorize(request, operation);
-  },
-});
-```
-
-The host application supplies authorization. `whatsappd` validates commands
-and enforces the returned account scope, but does not mint users or sessions.
+libSQL and plain Postgres do not automatically provide a browser-safe client or
+application authentication. Their first adapters are therefore server-side
+only. An application may expose its own authorized routes over
+`WhatsAppClient`; a reusable HTTP transport remains deferred until a real
+consumer proves that repeated application glue warrants another public
+package.
 
 ## Supabase adapter
 
@@ -828,7 +871,8 @@ The service role key and WhatsApp credentials never enter browser bundles.
 
 There are three distinct identities:
 
-1. WhatsApp device credentials used by the host to maintain the linked device.
+1. WhatsApp device credentials used by the account worker to maintain the
+   linked device.
 2. Backend service credentials used by the runtime to mutate the mirror.
 3. Application user identity used by a browser to read accounts and submit
    commands.
@@ -842,59 +886,40 @@ They must not be conflated.
 - Convex wrappers use the application’s `ctx.auth` and pass authorized scope
   into the component.
 - Supabase clients arrive with an Auth session and are constrained by RLS.
-- HTTP deployments receive an application-owned `authorize(request,
-operation)` callback.
-- direct in-process clients inherit the host process trust boundary.
+- application-owned HTTP routes perform application authorization before
+  calling a server-side client.
+- direct in-process clients inherit the application process trust boundary.
 
 Backend packages ship secure defaults and authorization integration points.
 The application decides which user or organization can access which WhatsApp
 account.
 
-## Runtime deployment modes
+## Application-owned account workers
 
-### Embedded runtime
-
-Use when the application already has a long-lived Node process:
-
-```text
-application process
-  -> WhatsApp runtime
-  -> selected backend
-```
-
-This is the simplest default and matches current Ambient Agent and Open
-Coworker practice.
-
-### Runtime host
-
-Use when the web application cannot hold a long-lived socket, when independent
-restart/scaling is valuable, or when a local/desktop agent needs a background
-daemon:
+The runtime always lives in application-owned long-running Node code. The
+application may embed it in an existing server or run the same small worker
+entrypoint once per WhatsApp account:
 
 ```text
-whatsappd serve
-  -> WhatsApp runtime
-  -> selected backend
-
-web application
-  -> backend-native client or authenticated HTTP client
+account worker: master -> WhatsApp runtime(accountId=master) -> backend
+account worker: self   -> WhatsApp runtime(accountId=self)   -> backend
 ```
 
-If deployed in the same pod or machine as another service, this host is
-operationally a sidecar. The package API remains the runtime host.
+“Application-owned” describes who composes the runtime, not how many operating
+system processes exist. Each account worker must acquire its account lease
+before opening Baileys, so accidentally starting the same account twice fails
+closed.
 
-### Backend-native browser path
-
-PocketBase, Convex, and Supabase clients normally read the backend directly
-under native auth and realtime:
+PocketBase, Convex, and Supabase clients read the backend directly under native
+auth and realtime:
 
 ```text
 browser -> authenticated backend client -> WhatsApp mirror/commands
-runtime -> privileged backend adapter -> WhatsApp mirror/commands
+account worker -> privileged backend adapter -> WhatsApp mirror/commands
 ```
 
-The browser does not need to connect to the runtime host merely because the
-runtime is in another process.
+The browser and `@whatsappd/react` do not need to connect to the account worker
+merely because it is another process.
 
 ## Implementation plan
 
@@ -957,13 +982,13 @@ Exit proof matches PocketBase except that schema/function installation,
 component isolation, and application auth wrappers replace collection/rule
 readback.
 
-### Slice 5: libSQL plus runtime host
+### Slice 5: libSQL server adapter
 
 - Extend the existing libSQL integration from credentials to the durable
   mirror and commands.
 - Add SQL migrations and constraints.
-- Implement the authenticated HTTP client transport in `whatsappd serve`.
-- Prove a clean browser client over HTTP and a process-replacement snapshot.
+- Prove an application-owned server client and a process-replacement snapshot.
+- Do not add a generic HTTP transport without a concrete remote consumer.
 
 ### Slice 6: retirement and package cleanup
 
@@ -977,7 +1002,9 @@ contracts are planned; speculative implementations are not.
 
 ## Shared conformance suite
 
-`@whatsappd/testing` should let every backend prove the same behavior:
+The conformance suite starts as repository-internal test support and every
+backend must pass it. It becomes `@whatsappd/testing` only when a real
+out-of-repository adapter author needs the harness:
 
 ### Credential store
 
@@ -1092,6 +1119,6 @@ Not yet proven:
 - backend-native authorization rules for a real application;
 - snapshot-first client ordering;
 - the headless React package;
-- the runtime host that replaces the existing sidecar.
+- application-owned account workers against the production adapters.
 
 Those claims become proven only through the exit proofs above.
