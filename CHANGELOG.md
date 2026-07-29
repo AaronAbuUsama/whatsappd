@@ -9,6 +9,13 @@
 - Use WhatsApp's canonical Chrome companion identity for pairing codes and pin
   Baileys 7.0.0-rc14.
 
+## 0.2.1
+
+### Patch Changes
+
+- Start channel-backed sessions without blocking adapter startup, while ensuring
+  a stop during socket startup still tears down the late-opened socket.
+
 ## 0.2.0
 
 ### Minor Changes

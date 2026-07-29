@@ -1,7 +1,10 @@
+import type { BaileysEventMap } from "baileys";
 import { expect, test } from "./_expect.ts";
+import { toMessagesUpsertEvents } from "../src/baileys/socket.ts";
 import { createSession } from "../src/session.ts";
 import { pairingAuth, qrAuth } from "../src/ports.ts";
 import { memoryStore } from "../src/stores/memory.ts";
+import { baseMessage } from "./fixtures.ts";
 
 // createSession is inert until start() — it opens no socket — so the public
 // registrar wiring and command guards can be exercised without a phone.
@@ -106,7 +109,6 @@ test("pairing-code session reaches online when the provider rejects requests bef
         creds: JSON.stringify({
           registered: true,
           me: { id: "15551234567:1@s.whatsapp.net" },
-          accountSyncCounter: 1,
         }),
       });
       yield {
@@ -129,6 +131,7 @@ test("pairing-code session reaches online when the provider rejects requests bef
     events: (async function* () {
       yield { t: "open" } as const;
       yield { t: "pending_drained" } as const;
+      yield { t: "conversation_sync_complete" } as const;
       yield {
         t: "close",
         fault: { reason: "intentional", retryable: false, disposition: "retryable" },
@@ -224,24 +227,29 @@ test("live fromMe messages stay visible to consumers and can be replied to", asy
   let releaseMessage!: () => void;
   const messageHandled = new Promise<void>((resolve) => (releaseMessage = resolve));
   const sent: unknown[] = [];
+  const liveEvents = toMessagesUpsertEvents({
+    type: "notify",
+    messages: [
+      baseMessage(
+        {
+          remoteJid: "15551234567@s.whatsapp.net",
+          fromMe: true,
+          id: "SELF1",
+        },
+        { conversation: "ping" },
+      ),
+    ],
+  } as BaileysEventMap["messages.upsert"]);
+  expect(liveEvents.length).toBe(1);
+  expect(liveEvents[0]).toMatchObject({
+    t: "message",
+    msg: { fromMe: true, live: true, text: "ping" },
+  });
   const fakeConn = {
     events: (async function* () {
       yield { t: "open" } as const;
       yield { t: "pending_drained" } as const;
-      yield {
-        t: "message",
-        msg: {
-          id: "SELF1",
-          chatId: "15551234567@s.whatsapp.net",
-          from: "15551234567@s.whatsapp.net",
-          fromMe: true,
-          timestamp: 1,
-          live: true,
-          isGroup: false,
-          kind: "text",
-          text: "ping",
-        },
-      } as const;
+      for (const event of liveEvents) yield event;
       await messageHandled;
       yield {
         t: "close",

@@ -1,7 +1,7 @@
-import { getCompanionPlatformId, proto, type BaileysEventMap } from "baileys";
+import { Browsers, getCompanionPlatformId, proto, type BaileysEventMap } from "baileys";
 import { expect, test } from "./_expect.ts";
 import {
-  PAIRING_BROWSER,
+  browserForOpen,
   shouldRequestFullHistoryOnOpen,
   toMessagingHistoryEvents,
   toMessagingHistoryStatusEvents,
@@ -13,8 +13,12 @@ type HistoryPayload = BaileysEventMap["messaging-history.set"];
 type HistoryStatusPayload = BaileysEventMap["messaging-history.status"];
 type MessagesUpsert = BaileysEventMap["messages.upsert"];
 
-test("pairing uses WhatsApp's canonical web companion platform", () => {
-  expect(getCompanionPlatformId(PAIRING_BROWSER)).toBe("1");
+test("only unregistered pairing-code sockets use WhatsApp's canonical web companion platform", () => {
+  expect(getCompanionPlatformId(browserForOpen("pairing_code", { creds: {} }))).toBe("1");
+  expect(browserForOpen("pairing_code", { creds: { registered: true } })).toEqual(
+    Browsers.macOS("Desktop"),
+  );
+  expect(browserForOpen("qr", { creds: {} })).toEqual(Browsers.macOS("Desktop"));
 });
 
 test("fresh companion registration defers full-history until registration completes", () => {
@@ -163,6 +167,35 @@ test("messages.upsert notify still emits live inbound messages", () => {
     id: "LIVE1",
     chatId: "1555@s.whatsapp.net",
     live: true,
+  });
+});
+
+test("messages.upsert notify preserves live fromMe messages", () => {
+  const events = toMessagesUpsertEvents({
+    type: "notify",
+    messages: [
+      baseMessage(
+        {
+          remoteJid: "1555@s.whatsapp.net",
+          fromMe: true,
+          id: "SELF1",
+        },
+        { conversation: "ping" },
+      ),
+    ],
+  } as MessagesUpsert);
+
+  expect(events.length).toBe(1);
+  expect(events[0]).toMatchObject({
+    t: "message",
+    msg: {
+      id: "SELF1",
+      chatId: "1555@s.whatsapp.net",
+      fromMe: true,
+      live: true,
+      kind: "text",
+      text: "ping",
+    },
   });
 });
 
