@@ -1,6 +1,7 @@
-import { proto, type BaileysEventMap } from "baileys";
+import { getCompanionPlatformId, proto, type BaileysEventMap } from "baileys";
 import { expect, test } from "./_expect.ts";
 import {
+  PAIRING_BROWSER,
   shouldRequestFullHistoryOnOpen,
   toMessagingHistoryEvents,
   toMessagingHistoryStatusEvents,
@@ -12,7 +13,11 @@ type HistoryPayload = BaileysEventMap["messaging-history.set"];
 type HistoryStatusPayload = BaileysEventMap["messaging-history.status"];
 type MessagesUpsert = BaileysEventMap["messages.upsert"];
 
-test("fresh Desktop registration defers full-history until companion registration completes", () => {
+test("pairing uses WhatsApp's canonical web companion platform", () => {
+  expect(getCompanionPlatformId(PAIRING_BROWSER)).toBe("1");
+});
+
+test("fresh companion registration defers full-history until registration completes", () => {
   expect(shouldRequestFullHistoryOnOpen({ creds: {} })).toBe(false);
   expect(
     shouldRequestFullHistoryOnOpen({

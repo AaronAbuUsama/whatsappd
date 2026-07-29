@@ -6,6 +6,8 @@
 
 - Wait for socket readiness before requesting pairing codes, and document that
   `phase: "online"`—not conversation-sync batches—is the readiness signal.
+- Use WhatsApp's canonical Chrome companion identity for pairing codes and pin
+  Baileys 7.0.0-rc14.
 
 ## 0.2.0
 
