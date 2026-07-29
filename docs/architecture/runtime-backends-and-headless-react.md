@@ -396,6 +396,35 @@ client must never be sufficient to read WhatsApp device credentials.
 The session normalizes one internal ordered event union:
 
 ```ts
+export type ConversationSyncSource =
+  | "initial_bootstrap"
+  | "recent"
+  | "on_demand"
+  | "full"
+  | "unknown";
+
+export interface ConversationSyncContext {
+  readonly source: ConversationSyncSource;
+  readonly isLatest?: boolean;
+  readonly chunkOrder?: number;
+  readonly progress?: number;
+  readonly requestSessionId?: string;
+  readonly projection:
+    | { readonly mode: "upsert" }
+    | {
+        readonly mode: "authoritative_replacement";
+        readonly scope: "account" | { readonly chatId: string };
+      };
+}
+
+export interface ConversationSyncBatch {
+  readonly context: ConversationSyncContext;
+  readonly chats: readonly HistoryChat[];
+  readonly contacts: readonly HistoryContact[];
+  readonly self?: HistoryContact;
+  readonly messages: readonly InboundMessage[];
+}
+
 export type WhatsAppEvent =
   | { type: "connection"; status: Status }
   | { type: "conversation_sync"; batch: ConversationSyncBatch }
@@ -463,19 +492,27 @@ handle while making awaited completion, cross-category order, and deterministic
 test emission part of one contract. EventEmitter naming was rejected because
 its conventional fire-and-forget semantics contradict this backpressure.
 
-The runtime maps all durable handler arms into account-scoped source events:
+Connection and presence are ordered live signals, not durable source inputs.
+The runtime maps the remaining handler arms into account-scoped source events:
 
 ```ts
+export type WhatsAppDurableEvent = Exclude<WhatsAppEvent, { type: "connection" | "presence" }>;
+
 export interface WhatsAppDataEvent {
   readonly accountId: string;
   readonly eventId: string;
   readonly observedAt: number;
-  readonly event: Exclude<WhatsAppEvent, { type: "presence" }>;
+  readonly event: WhatsAppDurableEvent;
 }
 ```
 
-Presence stays live-only. Persisting and replaying “typing” or “online” would
-manufacture false current state.
+Persisting and replaying “typing”, `online`, or a pairing challenge would
+manufacture false current state. A backend may publish connection state for
+remote clients only with the current lease holder, fencing token, observation
+time, and expiry. Clients treat an expired record or lease mismatch as
+unavailable and never hydrate the last stored status as current. Durable
+account lifecycle facts such as `needs_pairing` and terminal suspension remain
+in `runtime_state`; ephemeral socket phase does not.
 
 For each durable event, the runtime first captures media when present, then
 calls `data.accept()`. The backend transaction appends the source batch,
@@ -524,7 +561,7 @@ message_receipts
 media                       metadata, durable opaque ref, capture state
 commands
 command_attempts
-runtime_state               revision, sync state, last error
+runtime_state               revision, durable lifecycle, sync checkpoint, last error
 pairing_challenges           protected short-lived secret capability
 account_leases              single-writer claims, always present
 ```
@@ -542,9 +579,17 @@ group:        (account_id, group_id)
 participant:  (account_id, group_id, participant_id)
 message:      (account_id, chat_id, message_id)
 reaction:     (account_id, chat_id, message_id, actor_id)
-receipt:      (account_id, chat_id, message_id, actor_id, receipt_kind)
+receipt:      (account_id, chat_id, message_id, receipt_subject)
 command:      (account_id, client_command_id)
 ```
+
+`receipt_subject` is always non-null. A participant receipt uses
+`participant:<canonical WhatsApp address>`; the actorless status emitted by an
+ordinary direct-chat `messages.update` uses the reserved value `aggregate`.
+Receipt status is projected data, not part of the identity, so replay advances
+one current receipt instead of inserting another row. SQL adapters enforce this
+with a non-null column and a compound unique constraint rather than relying on
+nullable uniqueness.
 
 Message edits and revocations update the current message projection. Their
 distinct normalized inputs remain in accepted source batches so systems such as
@@ -555,8 +600,14 @@ Conversation sync is an upsert, not an unconditional replacement:
 
 - a returning linked session may emit zero history batches;
 - zero batches must preserve the previous snapshot;
+- the normalizer retains source, `isLatest`, chunk order, progress, and request
+  session metadata instead of discarding them;
+- `isLatest` or `progress === 100` alone never implies replacement;
 - records are removed only when WhatsApp emits a definite removal/revocation or
-  the protocol marks a synchronization batch as an authoritative replacement;
+  the normalizer emits an explicitly proven
+  `projection.mode === "authoritative_replacement"` with a bounded scope;
+- until live protocol proof establishes such a mapping, every conversation
+  sync batch uses `projection.mode === "upsert"`;
 - replaying the same message, update, contact, or group event is idempotent.
 
 ## Media boundary
@@ -669,7 +720,18 @@ export interface WhatsAppCommandStore {
     options?: { signal?: AbortSignal },
   ): AsyncIterable<ClaimedWhatsAppCommand>;
 
-  complete(accountId: string, commandId: string, result: WhatsAppCommandResult): Promise<void>;
+  startAttempt(
+    accountId: string,
+    commandId: string,
+    claimId: string,
+  ): Promise<{ started: true } | { started: false; reason: "lost" | "expired" }>;
+
+  complete(
+    accountId: string,
+    commandId: string,
+    claimId: string,
+    result: WhatsAppCommandResult,
+  ): Promise<void>;
 }
 ```
 
@@ -677,13 +739,21 @@ The runtime is the only component that executes these commands against the
 session. Command state is:
 
 ```text
-pending -> running -> succeeded | failed
+pending -> claimed (leased) -> executing -> succeeded | failed | outcome_unknown
+              | expired before execution
+              +-------------------------> pending
+executing lease expires ----------------> outcome_unknown
 ```
 
 Each submission has an application-generated idempotency key. Transport
 retries may safely return the same receipt, but WhatsApp command execution is
-not transparently retried after an ambiguous socket failure. A retry of
-`sendMessage` can duplicate a real message.
+not transparently retried after an ambiguous socket failure. Claims use backend
+time, an attempt identifier, and a short lease. Expiry before `startAttempt()`
+may safely return the command to pending; expiry after execution begins writes
+the terminal `outcome_unknown` result. A replacement worker cannot claim that
+attempt again. The client may offer an explicit new command, but it must show
+that the prior outcome is unknown because retrying `sendMessage` can duplicate
+a real message.
 
 The client may show an optimistic message keyed by `clientCommandId`. The
 runtime reconciles it with the authoritative outbound message echo or command
@@ -788,7 +858,21 @@ it is not part of the initial package family.
 ## Headless React
 
 `@whatsappd/react` owns state synchronization and interaction behavior, not
-markup or styling.
+markup or styling. It does not reimplement generic transcript scrolling.
+
+The preferred proof consumer composes the package with shadcn's general chat
+components. `@shadcn/react/message-scroller` owns anchored turns, live-edge
+following, prepend preservation, jumping, and visibility. Application-owned
+registry components such as `Message`, `Bubble`, `Attachment`, and `Marker`
+own DOM and presentation. They explicitly do not own messages, transport,
+persistence, or model state, so their boundary matches `WhatsAppClient`.
+
+`@whatsappd/react` does not take a hard shadcn dependency. It supplies stable
+message identities, saved-page actions, explicit WhatsApp-backfill state,
+selectors, commands, and render slots that compose naturally with those
+primitives. An official proof application demonstrates the integration. AI
+Elements remain suitable for model-streaming views, but WhatsApp records are
+not converted into AI SDK roles or message parts merely to use them.
 
 ```tsx
 const client = createPocketBaseWhatsAppClient({
@@ -859,6 +943,34 @@ The provider does not render a `div`, ship CSS, require Tailwind, assume a
 component library, or imitate WhatsApp’s visual design. Open Coworker can donate
 interaction and information-architecture lessons, but it is not a package
 dependency or the new product foundation.
+
+### Browser proof and database oracle
+
+The React package is not accepted by typechecking hooks or rendering isolated
+stories. One committed proof application composes deterministic and real
+PocketBase or Convex clients through the same provider, hooks, render slots, and
+shadcn chat presentation.
+
+An AI drives that application at fixed desktop and mobile viewports to prove:
+
+- snapshot hydration and database-consistent message order;
+- saved-page prepend without moving the visible message;
+- live messages arriving without stealing a reader's scroll position;
+- honest separation of saved-page exhaustion and WhatsApp backfill;
+- stored and failed media states;
+- optimistic command reconciliation without duplication;
+- typing expiry, reconnect, degraded state, and revision-gap replacement;
+- keyboard behavior, accessible names, console health, and network health.
+
+Each run retains semantic and interaction assertions plus privacy-safe
+screenshots. A screenshot alone is not acceptance.
+
+For durable or backend-backed claims, a read-only Database Oracle generates
+sanitized stable identities, timestamps, revisions, counts, and hashes. Public
+client or browser behavior is asserted first and cross-checked against that
+manifest second. Component tests never use direct database queries as their
+primary seam, and personal message bodies, native addresses, media, pairing
+secrets, and credentials never enter published evidence.
 
 ## Backend packages
 
@@ -1280,13 +1392,17 @@ Exit proof:
 ### Slice 3: headless React vertical slice
 
 - Implement `WhatsAppProvider`, core hooks, and the conversation render slots.
-- Build one unstyled test application against the PocketBase client.
+- Build one AI-drivable proof application against deterministic and PocketBase
+  clients using shadcn MessageScroller, Message, Bubble, Attachment, and Marker
+  presentation.
 - Prove hydration, live inbound updates, optimistic send/reconciliation,
   typing expiry, read batching, stored paging, explicit history-request states,
-  revision-gap recovery, reconnect, and error state.
+  revision-gap recovery, reconnect, and error state through deterministic tests
+  and real-browser receipts.
 
 This is the point at which the “WhatsApp UI SDK” is real. A typechecked provider
-without a live backend/browser proof is not acceptance.
+without a live backend/browser proof, database-order cross-check, and
+privacy-safe screenshots is not acceptance.
 
 ### Slice 4: Convex vertical slice
 
@@ -1373,10 +1489,13 @@ assert.deepEqual(test.commands.sent[0]?.content, { text: "Received" });
 ### Data store
 
 - idempotent message and sync replay;
+- conversation-sync metadata survives normalization and only an explicitly
+  proven, scope-bounded replacement may delete records;
 - update-before-message and message-before-update handling;
 - contact/group/participant upserts;
-- current reactions and receipts;
+- current reactions and actorless or participant receipts;
 - zero-sync reconnect retention;
+- stale connection or pairing status is never hydrated as current truth;
 - transaction rollback on a failed multi-record batch;
 - accepted source append, current projection, and revision stamp are one
   transaction;
@@ -1406,6 +1525,8 @@ assert.deepEqual(test.commands.sent[0]?.content, { text: "Received" });
 - idempotent submission;
 - one claim for one command;
 - terminal result visibility;
+- expired pre-execution claims return to pending;
+- expired executing attempts become terminal `outcome_unknown`;
 - no automatic re-execution after an ambiguous failure;
 - account isolation.
 
@@ -1428,6 +1549,25 @@ assert.deepEqual(test.commands.sent[0]?.content, { text: "Received" });
 - heartbeat renewal extends the claim; expiry releases it;
 - backend time and fencing token reject stale-holder writes;
 - account isolation.
+
+### Proof ladder
+
+Every implementation ticket declares its first red test, minimum green behavior,
+required proof rung, evidence receipt, and Database Oracle boundary:
+
+| Rung | Required evidence                                                  |
+| ---- | ------------------------------------------------------------------ |
+| P0   | Types, formatting, build, exports, and package graph               |
+| P1   | Deterministic public-seam behavior                                 |
+| P2   | Real database, restart, rollback, fault injection, and durability  |
+| P3   | Native backend transactions, authorization, rules, and realtime    |
+| P4   | Actual linked WhatsApp account, phone, history, media, and verdict |
+| P5   | AI-driven browser assertions, health checks, and screenshots       |
+| P6   | Packed clean consumer or installed published release               |
+
+Passing P1 does not imply database durability; passing P3 does not imply live
+WhatsApp behavior; a P5 screenshot does not imply correct persistence. Claims
+stop at the highest rung actually evidenced.
 
 ## Acceptance criteria
 
@@ -1453,11 +1593,15 @@ assert.deepEqual(test.commands.sent[0]?.content, { text: "Received" });
       published.
 - [ ] Acceptance failures are visible and tested.
 - [ ] Zero-sync reconnects preserve prior data.
+- [ ] Conversation-sync replacement requires retained, explicit, scope-bounded
+      metadata; `isLatest` alone cannot delete records.
 - [ ] Accepted batches carry per-account monotonic revisions.
 - [ ] Snapshots contain summaries; active-chat messages use stored pages.
 - [ ] Stored paging and WhatsApp history backfill are distinct operations.
 - [ ] Opening an already-claimed account fails closed on the lease.
 - [ ] Presence is never restored as current truth.
+- [ ] Connection state expires with its live lease and stale `online` or pairing
+      state is never hydrated as current truth.
 - [ ] Credential clearing cannot erase the WhatsApp mirror.
 - [ ] Every inbound media message attempts immediate durable capture.
 - [ ] Stored raw voice audio survives transcription failure.
@@ -1470,8 +1614,16 @@ assert.deepEqual(test.commands.sent[0]?.content, { text: "Received" });
 - [ ] Revision gaps replace state with a fresh snapshot.
 - [ ] The UI distinguishes no older stored messages from WhatsApp exhaustion.
 - [ ] Optimistic sends reconcile with authoritative results.
+- [ ] A crashed executing command becomes visible as `outcome_unknown` and is
+      never automatically reclaimed.
 - [ ] Headless components render no DOM or CSS.
 - [ ] Hooks and render slots work with at least PocketBase and Convex clients.
+- [ ] The proof consumer composes shadcn chat primitives without backend
+      branches inside React components.
+- [ ] Browser acceptance includes semantic assertions, interaction assertions,
+      console and network health, and privacy-safe screenshots.
+- [ ] Rendered stable message order is independently cross-checked against a
+      sanitized Database Oracle.
 
 ### Authentication and security
 

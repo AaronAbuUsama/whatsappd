@@ -4,7 +4,7 @@ status: accepted
 
 # Accepted source batches are durable and followable
 
-The data store durably appends each normalized, non-presence source batch,
+The data store durably appends each normalized, non-ephemeral source batch,
 projects that batch into the current mirror, and stamps its next account
 revision in one backend transaction. Only then may the runtime publish the
 resulting client patch. A failed acceptance is retried or fails closed; it is
@@ -32,5 +32,7 @@ though the client mirror projects their current state.
 - Durable acceptance begins at the backend transaction. A process can still die
   after the protocol delivers an event but before any local transaction begins;
   live fault-injection must define the remaining protocol replay boundary.
-- Presence is not appended because replaying stale typing or availability would
-  manufacture current state.
+- Presence and connection state are not appended because replaying stale
+  typing, availability, `online`, or pairing status would manufacture current
+  state. Connection state is live and expiry-aware; durable account lifecycle
+  facts remain in runtime state.
