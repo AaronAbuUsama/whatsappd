@@ -83,45 +83,90 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
   expect(ended).toBe(true); // the late-opened socket was torn down
 });
 
-test("pairing code is requested only after the first QR proves socket readiness", async () => {
-  const order: string[] = [];
-  const statuses: string[] = [];
-  const fakeConn = {
+test("pairing-code session reaches online when the provider rejects requests before QR readiness", async () => {
+  const store = memoryStore();
+  let socketReady = false;
+  const proof = {
+    openedSockets: 0,
+    requestedCodes: 0,
+    requestedBeforeReady: false,
+    requestedDigits: "",
+    challengeCode: "",
+    online: false,
+    backedOff: false,
+  };
+
+  const firstConn = {
     events: (async function* () {
-      order.push("connecting");
       yield { t: "connecting" } as const;
-      expect(order).toEqual(["connecting"]);
-
-      order.push("qr");
+      socketReady = true;
       yield { t: "qr", qr: "socket-ready" } as const;
-      expect(order).toEqual(["connecting", "qr", "request"]);
-
+      yield { t: "paired" } as const;
+      await store.write({
+        creds: JSON.stringify({
+          registered: true,
+          me: { id: "15551234567:1@s.whatsapp.net" },
+          accountSyncCounter: 1,
+        }),
+      });
+      yield {
+        t: "close",
+        fault: { reason: "restart_required", retryable: true, disposition: "retryable" },
+      } as const;
+    })(),
+    requestPairingCode: async (digits: string) => {
+      proof.requestedCodes++;
+      proof.requestedDigits = digits;
+      if (!socketReady) {
+        proof.requestedBeforeReady = true;
+        throw Object.assign(new Error("Connection Closed"), { statusCode: 428 });
+      }
+      return "ABCD-1234";
+    },
+    end: () => {},
+  };
+  const returningConn = {
+    events: (async function* () {
+      yield { t: "open" } as const;
+      yield { t: "pending_drained" } as const;
       yield {
         t: "close",
         fault: { reason: "intentional", retryable: false, disposition: "retryable" },
       } as const;
     })(),
-    requestPairingCode: async (digits: string) => {
-      expect(digits).toBe("15551234567");
-      order.push("request");
-      return "ABCD-1234";
+    requestPairingCode: async () => {
+      throw new Error("returning socket must not request another pairing code");
     },
     end: () => {},
   };
 
   const s = createSession({
-    store: memoryStore(),
+    store,
     auth: pairingAuth("+15551234567"),
-    openSocket: async () => fakeConn,
+    openSocket: async () => (++proof.openedSockets === 1 ? firstConn : returningConn),
   } as unknown as Parameters<typeof createSession>[0]);
   s.onStatus((status) => {
-    statuses.push(status.phase);
+    if (status.phase === "pairing" && status.pairing.step === "challenge_live") {
+      proof.challengeCode = status.pairing.code ?? "";
+    }
+    if (status.phase === "online") proof.online = true;
+    if (status.phase === "backing_off") {
+      proof.backedOff = true;
+      void s.stop();
+    }
   });
 
   await s.start();
 
-  expect(order).toEqual(["connecting", "qr", "request"]);
-  expect(statuses.some((phase) => phase === "pairing")).toBe(true);
+  expect(proof).toEqual({
+    openedSockets: 2,
+    requestedCodes: 1,
+    requestedBeforeReady: false,
+    requestedDigits: "15551234567",
+    challengeCode: "ABCD-1234",
+    online: true,
+    backedOff: false,
+  });
 });
 
 test("returning sessions reach online without conversation-sync batches", async () => {
