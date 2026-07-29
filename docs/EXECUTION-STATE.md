@@ -1,74 +1,127 @@
 # Execution state — WhatsApp application substrate
 
-Last updated: 2026-07-29. Grill-with-docs session complete: **three rounds,
-every question answered and confirmed by Aaron, every answer recorded.**
-This file is the resume point for a new session.
+Last updated: 2026-07-29. The rescue Batch Grill and Grill-with-Docs frontier is
+settled through ADR-0015. This branch contains architecture decisions, not the
+SDK implementation. Run `/to-spec` and `/to-tickets` before implementation.
 
 ## Where everything lives
 
-| Artifact                        | Location                                                   |
-| ------------------------------- | ---------------------------------------------------------- |
-| The spec (single target design) | `docs/architecture/runtime-backends-and-headless-react.md` |
-| Glossary (15 terms)             | `CONTEXT.md`                                               |
-| Decisions                       | `docs/adr/0001` … `0013`                                   |
-| Branch / PR                     | `codex/setup-agent-skills-architecture` → PR #12           |
+| Artifact                         | Location                                                   |
+| -------------------------------- | ---------------------------------------------------------- |
+| Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
+| Shared domain language           | `CONTEXT.md`                                               |
+| Accepted architecture decisions  | `docs/adr/0001` … `0015`                                   |
+| Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
+| Branch / PR                      | `codex/setup-agent-skills-architecture` → PR #12           |
 
-The spec was updated after every round, so it is fully consistent with the
-ADRs. There is no separate PRD: the spec's Decision section, slice plan, exit
-proofs, acceptance criteria, and non-goals are the product requirements.
+The architecture document is grill output: a single coherent target with code
+sketches, consequences, implementation slices, and proof boundaries. Per the
+ask-matt route, it must become a build spec and a tracer-bullet ticket graph
+before any slice starts.
 
-## Decision ledger — all confirmed
+## Accepted decision ledger
 
-**Round 1** (commits `754ee0c`, `f21bada`):
+### Original confirmed boundary
 
-| Q   | Decision                                                               | ADR  |
-| --- | ---------------------------------------------------------------------- | ---- |
-| —   | Message sender is an actual WhatsApp address                           | 0001 |
-| 1B  | Connection readiness ≠ history bootstrap                               | 0002 |
-| 2B  | whatsappd owns the canonical current mirror                            | 0003 |
-| 3B  | Credentials / data / commands / leases are independent capabilities    | 0004 |
-| —   | Pairing is a dynamic runtime command, not constructor config           | 0005 |
-| 4A  | Application-owned account workers; sidecar retired, no daemon/HTTP     | 0006 |
-| 5B  | Application/backend-native authorization; whatsappd has no user system | 0007 |
-| 6C  | Core + proven integration packages only (react, pocketbase first)      | 0008 |
+| Decision                                                         | ADR  |
+| ---------------------------------------------------------------- | ---- |
+| Message sender is an actual WhatsApp address                     | 0001 |
+| Connection readiness is separate from history bootstrap          | 0002 |
+| whatsappd owns the canonical current mirror                      | 0003 |
+| Backend capabilities remain independently replaceable            | 0004 |
+| Pairing method and phone number are dynamic runtime inputs       | 0005 |
+| Applications compose account workers; current sidecar is retired | 0006 |
+| Applications and native backends own user authorization          | 0007 |
+| Only complete, proven integrations become packages               | 0008 |
 
-**Round 2** (commit `f3ae956`):
+### Rescued frontier
 
-| Q   | Decision                                                                   | ADR                    |
-| --- | -------------------------------------------------------------------------- | ---------------------- |
-| 7B  | Account lease is a required capability; double-start fails closed          | 0009                   |
-| 8C  | Ingestion write failure = pause-and-retry in place, visible degraded state | spec only (reversible) |
-| 9B  | Snapshots are windowed; older history via `messages()` pages               | 0010                   |
-| 10A | Patches are record upserts with per-account monotonic revisions            | 0011                   |
+| Decision                                                                                 | ADR / artifact |
+| ---------------------------------------------------------------------------------------- | -------------- |
+| Account-scoped backend lease is required; duplicate account start fails closed           | 0009           |
+| Summary snapshots, stored paging, and WhatsApp backfill are distinct                     | 0010           |
+| Patches require contiguous `fromRevision`; a gap replaces state with a snapshot          | 0011           |
+| Pair/unlink use the command queue; raw challenge secrets use a protected capability      | 0012           |
+| `session.subscribe({ ...handlers })` is the sole awaited live-session API                | 0013           |
+| Accepted source batches are durable, cursor-followable, and distinct from current mirror | 0014           |
+| Every inbound media attachment attempts immediate durable byte capture                   | 0015           |
+| Ambient Brain follows accepted source batches, not live callbacks or mirror patches      | Architecture   |
+| Voice transcription is derived from retained raw PTT audio and cannot replace it         | 0015           |
+| No compatibility aliases or wrappers ship in the hard-cut package line                   | 0013 / spec    |
+| `whatsappd/testing` provides awaited event driving and command recording without sleeps  | 0013 / spec    |
+| Changesets releases the package family as a fixed lockstep group                         | Spec           |
 
-**Round 3** (commit `605faf5`):
+## Semantics that must not be collapsed
 
-| Q   | Decision                                                                                           | ADR                           |
-| --- | -------------------------------------------------------------------------------------------------- | ----------------------------- |
-| 11C | Changesets releases, fixed lockstep group across the family                                        | spec only (one-line reversal) |
-| 12B | Pair/unlink ride the command queue; challenges surface in `runtime_state`; unlink keeps the mirror | 0012                          |
-| 13B | The seven session streams + callbacks retire at slice 6; `events` is the only surface              | 0013                          |
+```text
+session.subscribe({ ...handlers })
+    live low-level processing with awaited backpressure
 
-## Open items — blocked, not undecided
+accepted source feed
+    durable backend catch-up for consumers such as Ambient Brain
 
-- Convex service-auth glue: designed in the spec, built in slice 4.
-- Durable media bytes: separate capability, waits for a real consumer.
-- `src/session.ts:273` swallows a failed credential wipe
-  (`store.clear().catch(() => {})`), breaking the stated "creds are gone on
-  logged_out" guarantee. Fix during slice 1.
+WhatsAppClient
+    summary snapshot, contiguous patches, stored paging, history requests,
+    commands, and headless React
+```
+
+Likewise:
+
+```text
+initial WhatsApp sync
+    connection-driven protocol delivery
+
+messages()
+    deterministic reads of records already stored in the mirror
+
+requestHistory()
+    explicit, asynchronous, per-chat request to the linked phone
+```
+
+## Prototype gates, not design questions
+
+The build graph must block dependent claims on runnable proof of:
+
+1. Baileys on-demand history request/result correlation, completion, empty or
+   exhausted behavior, boundary inclusivity, multi-chunk ordering, counts above
+   50, and phone-offline/error behavior.
+2. The remaining pre-acceptance crash boundary between protocol delivery and
+   the first durable backend transaction.
+3. Contiguous patch gap detection and fresh-snapshot replacement through a real
+   backend subscription.
+4. Lease acquire/renew/loss behavior under concurrent processes for each
+   backend, including PocketBase server transactions and fencing tokens.
+5. Immediate media capture, restart durability, failed-capture visibility, and
+   blob-orphan cleanup.
+
+Until the first prototype proves otherwise, UI language may say “no older saved
+messages” and “request sent”; it may not say “all history loaded”, “no more
+WhatsApp messages”, or report a delivered count tied to the request.
+
+## Known implementation inputs
+
+- `src/session.ts` currently swallows a failed credential wipe, breaking the
+  stated terminal-clear guarantee. Fix it under its separate bug ticket.
+- Current callback handlers are fire-and-forget, current channels are
+  memory-only, and downstream tests use sleeps and hand-built multi-stream
+  fakes. The hard-cut session implementation replaces those surfaces rather
+  than wrapping them.
+- The Ambient Agent v3 PocketBase spike remains pinned to the old whatsappd
+  package as fixture evidence. Its production integration must wait for a
+  published release containing the accepted-source reader, durable media, final
+  subscription API, and official test driver.
 
 ## Next step
 
-Begin **Slice 1: contracts and memory proof** (spec § Implementation plan):
-rename `SessionStore`→`CredentialStore`, add the unified `WhatsAppEvent`
-surface, define the durable/command/client contracts including
-`WhatsAppPatch` revisions and the windowed snapshot, implement the runtime
-with memory data/command/lease stores, and land the conformance suite. Exit
-proofs are enumerated in the spec and include the lease fail-closed proof and
-loss-free ingestion recovery. Slices 2–6 follow in order.
+1. Run `/to-spec` over the architecture, glossary, and ADRs.
+2. Run `/to-tickets` to create tracer-bullet slices and blocking prototype
+   edges.
+3. Do not start Slice 1 merely because the documentation PR is mechanically
+   green.
 
 ## Resuming in a new session
 
-Read this file, then the spec, then `CONTEXT.md`. Do not re-litigate ledger
-decisions — they are confirmed; reopening one requires superseding its ADR
-explicitly.
+Read this file, then the architecture, `CONTEXT.md`, and ADR-0001 through
+ADR-0015. Treat current source as evidence of the old package, not evidence that
+the target APIs already exist. Reopening an accepted decision requires an
+explicit superseding ADR.

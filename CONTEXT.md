@@ -37,19 +37,39 @@ _Avoid_: Sidecar, whatsappd daemon, hypervisor
 
 **Current Mirror**:
 The canonical, durable, account-scoped WhatsApp state maintained by the runtime
-for clients; applications may derive separate archives and product projections.
-_Avoid_: Event archive, application database
+for clients. It projects current records from Accepted Source Batches; it is not
+itself the source-event history.
+_Avoid_: Event archive, application database, observation log
+
+**Accepted Source Batch**:
+A durable, account-scoped, revisioned batch of normalized WhatsApp events,
+appended at the same acceptance boundary that projects the Current Mirror.
+Backend consumers follow these batches from their own cursor when they require
+source history rather than current state.
+_Avoid_: Client patch, live callback, application observation
 
 **Backend Capability**:
 One independently replaceable runtime persistence responsibility: credentials,
-current data, commands, or account leases. A backend factory may conveniently
-provide several capabilities without merging their contracts.
+accepted/current data, commands, account leases, protected pairing challenges,
+or media bytes. A backend factory may conveniently provide several capabilities
+without merging their contracts.
 _Avoid_: Generic database abstraction, application repository
 
 **WhatsApp Client**:
-The backend-independent snapshot, update, and command contract consumed by
-applications and the headless React bindings.
+The backend-independent snapshot, patch, stored-message-page, history-request,
+and command contract consumed by applications and the headless React bindings.
 _Avoid_: HTTP client, backend SDK
+
+**Stored Message Page**:
+An indexed read of messages already present in the Current Mirror for one chat,
+using a stable database cursor. It never contacts WhatsApp.
+_Avoid_: History sync, phone request, complete history
+
+**History Backfill Request**:
+An explicit per-chat command asking WhatsApp for messages older than a known
+message key and timestamp. Its request size, phone dependency, and asynchronous
+result are distinct from Stored Message Page semantics.
+_Avoid_: Pagination, `loadOlder`, proof of available history
 
 **Application Authorization**:
 The application-owned policy mapping an authenticated application identity to
@@ -65,23 +85,39 @@ _Avoid_: Optional deployment detail, advisory lock
 
 **Degraded State**:
 The visible runtime condition in which the live session is up but durable
-application is failing and being retried in place; ingestion pauses rather
-than skips or drops.
+acceptance is failing and being retried in place; processing backpressures
+rather than logging and skipping the event.
 _Avoid_: Silent retry, crash loop
 
 **Revision**:
-The per-account monotonic number the data store stamps on every applied batch;
-snapshots report the revision they include and patches apply only above it.
+The per-account monotonic number the data store stamps on every Accepted Source
+Batch; snapshots report their revision and a patch applies only when its
+`fromRevision` exactly matches the client’s current revision.
 _Avoid_: Timestamp ordering, heuristic deduplication
 
 **Snapshot Window**:
-The bounded first frame of a client watch — the account, chats, contacts,
-groups, and each chat’s most recent messages; older history arrives only
-through paged reads.
+The bounded first frame of a client watch — the account, chat summaries,
+contacts, and groups. An active conversation loads Stored Message Pages
+separately.
 _Avoid_: Full-mirror dump, event replay
 
 **Lifecycle Operation**:
 An account-scoped command that changes link state rather than chat state —
 pairing and unlinking — carried on the same authorized command queue as chat
-commands, with challenges surfaced through runtime state.
+commands. Runtime state exposes challenge metadata; the raw challenge is read
+through a protected short-lived capability.
 _Avoid_: Worker-only API, bespoke application glue
+
+**Live Session Subscription**:
+The one callback-style live consumption API:
+`session.subscribe({ ...typedHandlers })`. Matching async handlers are awaited
+in source order; message reply is a session-local callback action rather than a
+function stored on the message.
+_Avoid_: Seven independent streams, EventEmitter, public event iterator
+
+**Media Capture**:
+The immediate attempt to preserve inbound media bytes while the live Baileys
+download handle remains usable, producing an opaque durable reference or an
+explicit failed state. Voice transcription is a later derivation from stored
+audio.
+_Avoid_: Media metadata, lazy future download, transcript as source

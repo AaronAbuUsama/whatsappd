@@ -17,9 +17,11 @@ exports the Eve-era channel adapter, sidecar, and agent tools.
 `whatsappd` should become an application substrate for WhatsApp:
 
 1. The existing session remains the live WhatsApp protocol engine.
-2. A new runtime consumes the complete normalized session event stream and
-   maintains a durable WhatsApp-native mirror.
-3. Optional backend packages provide credentials, durable data, commands,
+2. A new runtime consumes one awaited typed-handler subscription, durably
+   accepts normalized source batches, and projects a WhatsApp-native current
+   mirror.
+3. Optional backend packages provide credentials, accepted/current data,
+   commands, protected pairing challenges, account leases, durable media,
    realtime delivery, migrations, and browser clients for PocketBase, Convex,
    libSQL, Postgres, and Supabase.
 4. A backend-independent client contract feeds a headless React package.
@@ -30,6 +32,10 @@ exports the Eve-era channel adapter, sidecar, and agent tools.
    immutable runtime-constructor configuration.
 7. `ChannelEvent`, `WhatsAppChannelAdapter`, the Eve adapter, the current
    webhook sidecar, and agent-specific tools leave the core product.
+8. Stored database paging and on-demand WhatsApp history backfill are separate
+   client operations.
+9. The next package line is a hard cut: old streams, callbacks, aliases, and
+   agent-era entry points receive no compatibility wrappers.
 
 The important ownership boundary is:
 
@@ -67,6 +73,8 @@ flowchart LR
     RT --> DS["WhatsAppDataStore"]
     RT --> CQ["CommandStore"]
     RT --> LS["AccountLeaseStore"]
+    RT --> PS["PairingChallengeStore"]
+    RT --> MS["MediaStore"]
 
     DS --> PB["PocketBase"]
     DS --> CX["Convex"]
@@ -85,18 +93,21 @@ flowchart LR
 
     WC --> RE["Headless React"]
     RE --> UI["Application-owned UI"]
+
+    DS --> SF["Accepted source feed"]
+    SF --> BC["Backend consumers / Ambient Brain"]
 ```
 
 The module boundaries are deliberately deeper than the current
 channel/sidecar split:
 
-| Module          | Owns                                                                                                                             | Does not own                                                  |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Session engine  | Baileys socket, credentials, reconnect, normalization, lazy live media, native WhatsApp commands                                 | Databases, HTTP, React, PocketBase, Convex, agent frameworks  |
-| Runtime         | Account creation, dynamic pairing, complete event ingestion, durable projection, commands, reconciliation, lifecycle, and leases | Application identity, process supervision, product policy, UI |
-| Backend package | Credential/data/command implementations, migrations, constraints, realtime client, access-rule templates                         | The application’s identity model or product tables            |
-| Client          | Snapshot-first reads, live patches, commands, connection state                                                                   | React and visual rendering                                    |
-| Headless React  | Provider, hooks, selectors, optimistic state, render slots                                                                       | DOM, CSS, component library, backend SDK selection            |
+| Module          | Owns                                                                                                                               | Does not own                                                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Session engine  | Baileys socket, credentials, reconnect, normalization, one awaited typed-handler subscription, live media handles, native commands | Databases, HTTP, React, PocketBase, Convex, agent frameworks  |
+| Runtime         | Pairing, accepted-source ingestion, current projection, immediate media capture, commands, reconciliation, lifecycle, and leases   | Application identity, process supervision, product policy, UI |
+| Backend package | Capability implementations, migrations, constraints, accepted-source reader, realtime client, access-rule templates                | The application’s identity model or product tables            |
+| Client          | Snapshot-first reads, contiguous live patches, stored paging, history requests, commands, connection state                         | React, visual rendering, append-only product knowledge        |
+| Headless React  | Provider, hooks, selectors, optimistic state, history/backfill behavior, render slots                                              | DOM, CSS, component library, backend SDK selection            |
 
 ## Why the current seams should not survive
 
@@ -131,13 +142,13 @@ The replacement is not a larger `ChannelEvent`. It is a complete normalized
 The local applications do not establish the current sidecar as the reusable
 architecture:
 
-| Application      | Observed integration                                                                                                                             | Consequence                                                                                              |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Ambient Agent    | Creates `WhatsAppSession` in-process and projects it into its own archive before Flue dispatch                                                   | The socket/runtime can be embedded; Flue is downstream product policy                                    |
-| Ambient Agent v3 | Subscribes directly to all session streams and writes a raw PocketBase corpus                                                                    | PocketBase is a real first consumer; account stamping and awaited persistence are missing from the spike |
-| Open Coworker    | Its design explicitly embeds the WhatsApp supervisor in the long-lived Hono server                                                               | Useful donor for UI and supervision, but deprecated as a destination                                     |
-| Twinin           | Has an app-specific “sidecar” composition that does not yet open Baileys sockets, while its current live path is in-process and writes to Convex | Convex needs an adapter; this does not validate the existing `whatsappd/sidecar`                         |
-| ok-sync          | Describes a possible future separate process but does not currently consume `whatsappd` that way                                                 | Future topology is not a reason to hard-code sidecar ownership now                                       |
+| Application      | Observed integration                                                                                                                             | Consequence                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Ambient Agent    | Creates `WhatsAppSession` in-process and projects it into its own archive before Flue dispatch                                                   | The socket/runtime can be embedded; Flue is downstream product policy                                  |
+| Ambient Agent v3 | Its disposable spike uses six old callbacks, writes a raw PocketBase corpus, and eagerly stores media; the planned Brain is not implemented      | PocketBase and immediate media are proven needs; production waits for a published accepted-source feed |
+| Open Coworker    | Its design explicitly embeds the WhatsApp supervisor in the long-lived Hono server                                                               | Useful donor for UI and supervision, but deprecated as a destination                                   |
+| Twinin           | Has an app-specific “sidecar” composition that does not yet open Baileys sockets, while its current live path is in-process and writes to Convex | Convex needs an adapter; this does not validate the existing `whatsappd/sidecar`                       |
+| ok-sync          | Describes a possible future separate process but does not currently consume `whatsappd` that way                                                 | Future topology is not a reason to hard-code sidecar ownership now                                     |
 
 The common denominator is a long-lived runtime plus a durable projection, not
 Eve, Flue, webhooks, or a mandatory second process.
@@ -153,8 +164,37 @@ const session = createSession({
   store: fileCredentialStore("./data/whatsapp-auth"),
 });
 
+const unsubscribe = session.subscribe(
+  {
+    connection(status) {
+      renderStatus(status);
+    },
+
+    message: async (message, { reply }) => {
+      await acceptMessage(message);
+      if (shouldReply(message)) await reply("Got it");
+    },
+
+    update: async (update) => {
+      await acceptUpdate(update);
+    },
+  },
+  { signal },
+);
+
 await session.start();
 ```
+
+`subscribe()` is the only public live-consumption shape. A consumer supplies any
+subset of typed handlers in one registration and receives one cleanup handle.
+The dispatcher awaits every matching asynchronous handler across subscriptions
+before accepting the next normalized event. A rejected handler fails the
+processing pipeline; persistence failures are not observability warnings.
+
+The seven per-category streams, seven `onX` methods, public event iterator, and
+bound `IncomingMessage.reply` shape are removed in the new package line without
+compatibility wrappers. The internal ordered `WhatsAppEvent` union still exists
+for normalization and durable source records.
 
 The durable runtime does not require a phone number or pairing method at
 construction:
@@ -214,6 +254,12 @@ const whatsapp = createWhatsAppRuntime({
     leases: pocketBaseLeaseStore({
       client: adminPocketBase,
     }),
+    pairingChallenges: pocketBasePairingChallengeStore({
+      client: adminPocketBase,
+    }),
+    media: pocketBaseMediaStore({
+      client: adminPocketBase,
+    }),
   },
 });
 ```
@@ -223,7 +269,8 @@ making applications implement WhatsApp persistence themselves.
 
 ## Credentials and WhatsApp data are separate capabilities
 
-The existing `SessionStore` contract is a credential store:
+The existing `SessionStore` contract becomes `CredentialStore` in the hard-cut
+release:
 
 ```ts
 export interface CredentialStore {
@@ -231,31 +278,52 @@ export interface CredentialStore {
   write(entries: Record<string, string | null>): Promise<void>;
   clear(): Promise<void>;
 }
-
-/** @deprecated Use CredentialStore. */
-export type SessionStore = CredentialStore;
 ```
 
 Durable WhatsApp state has different invariants:
 
 ```ts
-export interface WhatsAppDataStore {
-  apply(accountId: string, events: readonly WhatsAppDataEvent[]): Promise<AppliedWhatsAppBatch>;
+export interface AcceptedWhatsAppBatch {
+  readonly accountId: string;
+  readonly fromRevision: number;
+  readonly revision: number;
+  readonly events: readonly WhatsAppDataEvent[];
+  readonly patch: WhatsAppPatch;
+}
 
-  snapshot(accountId: string, window?: SnapshotWindow): Promise<WhatsAppSnapshot>;
+export interface StoredMessageCursor {
+  readonly timestamp: number;
+  readonly messageId: string;
+}
+
+export interface StoredMessagePage {
+  readonly items: readonly MessageRecord[];
+  readonly next?: StoredMessageCursor;
+}
+
+export interface WhatsAppDataStore {
+  accept(accountId: string, events: readonly WhatsAppDataEvent[]): Promise<AcceptedWhatsAppBatch>;
+
+  snapshot(accountId: string): Promise<WhatsAppSnapshot>;
 
   messages(
     accountId: string,
     chatId: string,
-    page: { before?: MessageRef; limit: number },
-  ): Promise<readonly MessageRecord[]>;
+    page: { before?: StoredMessageCursor; limit: number },
+  ): Promise<StoredMessagePage>;
+
+  followAccepted(
+    accountId: string,
+    options: { afterRevision: number; signal?: AbortSignal },
+  ): AsyncIterable<AcceptedWhatsAppBatch>;
 }
 ```
 
-`apply()` stamps every durable batch with the account’s next monotonic
-revision and returns it on `AppliedWhatsAppBatch`; snapshots report the
-revision they include. Snapshots are windowed (see the client contract), and
-older history is served through `messages()` pages.
+`accept()` appends the normalized source batch, projects it into the current
+mirror, and stamps the account’s next revision in one backend transaction.
+`followAccepted()` is the durable backend-consumer boundary for systems such as
+Ambient Brain. Snapshots contain summaries, while active-chat history is served
+through stored `messages()` pages.
 
 They must not be collapsed into one store because:
 
@@ -275,6 +343,8 @@ export interface WhatsAppBackend {
   readonly data: WhatsAppDataStore;
   readonly commands: WhatsAppCommandStore;
   readonly leases: AccountLeaseStore;
+  readonly pairingChallenges: PairingChallengeStore;
+  readonly media: MediaStore;
 }
 ```
 
@@ -286,14 +356,44 @@ ratchet state and can corrupt credentials, so a double-start must fail closed
 rather than race. The memory backend ships an in-process lease store for tests
 and single-process composition.
 
+Lease acquisition uses backend time, a TTL, and a monotonically increasing
+fencing token. PocketBase requires a server-side transaction, Convex an atomic
+mutation on the canonical account document, and SQL a conditional upsert.
+Client-side read-then-update is not a valid adapter implementation.
+
+```ts
+export interface AccountLease {
+  readonly accountId: string;
+  readonly holderId: string;
+  readonly fencingToken: string;
+  readonly expiresAt: number;
+}
+
+export interface AccountLeaseStore {
+  acquire(
+    accountId: string,
+    holderId: string,
+    ttlMs: number,
+  ): Promise<{ acquired: true; lease: AccountLease } | { acquired: false; heldUntil: number }>;
+
+  renew(
+    lease: AccountLease,
+    ttlMs: number,
+  ): Promise<
+    { renewed: true; lease: AccountLease } | { renewed: false; reason: "lost" | "expired" }
+  >;
+
+  release(lease: AccountLease): Promise<boolean>;
+}
+```
+
 Remote credential adapters should require host-side encryption material or an
 equivalent trusted secret-store integration. A browser-authenticated backend
 client must never be sufficient to read WhatsApp device credentials.
 
-## Complete normalized event surface
+## Ordered normalization and typed live subscription
 
-The session should add one ordered event surface at the point where normalized
-events are already produced:
+The session normalizes one internal ordered event union:
 
 ```ts
 export type WhatsAppEvent =
@@ -304,80 +404,115 @@ export type WhatsAppEvent =
   | { type: "contact"; contact: ContactUpdate }
   | { type: "group"; group: GroupUpdate }
   | { type: "presence"; presence: PresenceUpdate };
+```
+
+Applications do not consume that union through a public iterator. They register
+one typed handler map:
+
+```ts
+type Awaitable<T> = T | Promise<T>;
+
+export interface WhatsAppSessionHandlers {
+  connection?(status: Status): Awaitable<void>;
+  conversationSync?(batch: ConversationSyncBatch): Awaitable<void>;
+  message?(
+    message: InboundMessage,
+    actions: {
+      reply(content: Outbound | string, options?: SendOptions): Promise<MessageRef>;
+    },
+  ): Awaitable<void>;
+  update?(update: Update): Awaitable<void>;
+  contact?(contact: ContactUpdate): Awaitable<void>;
+  group?(group: GroupUpdate): Awaitable<void>;
+  presence?(presence: PresenceUpdate): Awaitable<void>;
+}
 
 export interface WhatsAppSession {
-  readonly events: AsyncIterable<WhatsAppEvent>;
-  // Per-category streams and callbacks remain only until slice 6.
+  subscribe(handlers: WhatsAppSessionHandlers, options?: { signal?: AbortSignal }): Unsubscribe;
 }
 ```
 
-The seven per-category streams and the callback trio are migration
-scaffolding: they are removed with the agent-era surface in slice 6, and
-`events` becomes the session’s only event surface. Parallel independent
-queues cannot express the cross-category ordering the durable mirror
-requires.
+The dispatcher performs one property lookup per subscription and event, awaits
+all matching handlers, and only then advances. This retains narrow callback DX,
+provides real backpressure, avoids seven independent buffers, and makes
+completion deterministic in tests. Observability hooks that must never affect
+the connection remain explicit fire-and-forget configuration, not subscribers.
 
-The session emits WhatsApp-native events. The runtime adds `accountId`,
-observation metadata, and durable revision information:
+### Public session API decision rubric
+
+Scores use 1 (materially fails) through 5 (directly satisfies). Correctness and
+testability are gates: an option below 4 on either is rejected regardless of
+the other scores.
+
+| Option                            | Correctness / integrity | Testability | Public DX | Performance / backpressure | One-way API fit |
+| --------------------------------- | ----------------------- | ----------- | --------- | -------------------------- | --------------- |
+| Seven rebuilt `onX` methods       | 4                       | 4           | 5         | 4                          | 3               |
+| Typed `subscribe({ handlers })`   | 5                       | 5           | 5         | 5                          | 5               |
+| Typed `on("message", handler)`    | 4                       | 4           | 5         | 4                          | 4               |
+| Public async iterable event union | 5                       | 3           | 3         | 5                          | 4               |
+
+| Option                            | Floor-first | Reversibility | Blast-radius containment | Parallelizability | Fit with current code |
+| --------------------------------- | ----------- | ------------- | ------------------------ | ----------------- | --------------------- |
+| Seven rebuilt `onX` methods       | 4           | 4             | 3                        | 4                 | 5                     |
+| Typed `subscribe({ handlers })`   | 5           | 4             | 4                        | 5                 | 5                     |
+| Typed `on("message", handler)`    | 4           | 4             | 4                        | 4                 | 4                     |
+| Public async iterable event union | 4           | 4             | 3                        | 4                 | 4                     |
+
+The handler map wins because it retains narrow callback types and one cleanup
+handle while making awaited completion, cross-category order, and deterministic
+test emission part of one contract. EventEmitter naming was rejected because
+its conventional fire-and-forget semantics contradict this backpressure.
+
+The runtime maps all durable handler arms into account-scoped source events:
 
 ```ts
 export interface WhatsAppDataEvent {
   readonly accountId: string;
+  readonly eventId: string;
   readonly observedAt: number;
   readonly event: Exclude<WhatsAppEvent, { type: "presence" }>;
 }
 ```
 
-Presence stays live-only initially. Persisting “typing” or “online” and
-restoring it after a restart would manufacture false current state.
+Presence stays live-only. Persisting and replaying “typing” or “online” would
+manufacture false current state.
 
-The runtime must await durable application before publishing the corresponding
-client patch:
+For each durable event, the runtime first captures media when present, then
+calls `data.accept()`. The backend transaction appends the source batch,
+projects the mirror, stamps the next revision, and returns the client patch:
 
 ```ts
-for await (const event of session.events) {
-  if (event.type === "presence") {
-    publishLivePresence(accountId, event.presence);
-    continue;
-  }
-
-  const applied = await data.apply(accountId, [
-    {
-      accountId,
-      observedAt: Date.now(),
-      event,
-    },
-  ]);
-
-  publish(applied.patch);
+async function accept(event: WhatsAppDataEvent): Promise<void> {
+  const durableEvent = await captureMedia(event, media);
+  const accepted = await data.accept(accountId, [durableEvent]);
+  publish(accepted.patch);
 }
 ```
 
-This is a semantic requirement, not illustrative error handling:
+This is a semantic requirement:
 
 - a failed write is observable;
 - the event is not reported to clients as durably accepted;
 - a webhook-style “log and discard” path is not allowed.
 
-The explicit failure policy is pause-and-retry. A failed `apply()` is retried
-in place with capped exponential backoff; because the ingestion loop pulls
-nothing further while a retry is pending, the session streams buffer upstream
-and no ordered event is skipped or dropped. While retrying, the runtime records
-a degraded status (error, attempt count) in `runtime_state` and surfaces it
-through client connection frames; the first successful write clears it and
-ingestion resumes exactly where it paused. The known ceiling is unbounded
-session-buffer growth during a very long outage; a cap that closes the socket
-instead of dropping events can be added as a knob when a real deployment needs
-it.
+Failed acceptance is retried in place with capped exponential backoff and
+visible degraded state; exhaustion stops the socket rather than skipping the
+event. Once accepted, source batches survive process replacement and backend
+consumers resume from their own revision cursor. Fault injection must still
+define the narrow pre-acceptance boundary where the protocol has delivered an
+event but no backend transaction has begun.
 
 ## Canonical durable mirror
 
-The mirror represents current WhatsApp state, not an application event archive.
-Its portable domain model is:
+The current mirror represents current WhatsApp state. Accepted source batches
+retain the ordered normalized inputs needed by durable backend consumers; they
+are not application beliefs, archives, or UI patches. The portable domain model
+is:
 
 ```text
 credentials                 server-only, separate lifecycle
 
+accepted_source_batches     durable normalized source inputs + revision
 accounts
 chats
 contacts
@@ -386,10 +521,11 @@ group_members
 messages
 message_reactions
 message_receipts
-media                       metadata and durability state, not necessarily bytes
+media                       metadata, durable opaque ref, capture state
 commands
 command_attempts
 runtime_state               revision, sync state, last error
+pairing_challenges           protected short-lived secret capability
 account_leases              single-writer claims, always present
 ```
 
@@ -410,9 +546,10 @@ receipt:      (account_id, chat_id, message_id, actor_id, receipt_kind)
 command:      (account_id, client_command_id)
 ```
 
-Message edits and revocations update the current message projection. Keeping an
-immutable edit history is an application archive concern unless a concrete
-WhatsApp-client requirement later proves otherwise.
+Message edits and revocations update the current message projection. Their
+distinct normalized inputs remain in accepted source batches so systems such as
+Ambient Brain can append separate observations without treating the mirror as
+an archive.
 
 Conversation sync is an upsert, not an unconditional replacement:
 
@@ -424,34 +561,46 @@ Conversation sync is an upsert, not an unconditional replacement:
 
 ## Media boundary
 
-The initial mirror persists normalized media metadata:
-
-```text
-mimetype
-file_name
-file_length
-duration
-dimensions
-caption
-availability
-```
-
-It does not claim that media bytes are durable. The current `MediaHandle`
-contains a live `download()` closure and cannot survive JSON serialization or a
-process restart.
-
-The initial clients may expose:
+The current `MediaHandle` contains a live `download()` closure that cannot
+survive JSON serialization or a process restart. The runtime therefore starts
+capture for every inbound image, video, audio, document, and sticker while that
+handle can still decrypt or request re-upload.
 
 ```ts
-type MediaAvailability =
-  | { status: "live"; download: () => Promise<Uint8Array> }
-  | { status: "stored"; url: string }
-  | { status: "unavailable" };
+export interface MediaStore {
+  put(input: {
+    accountId: string;
+    message: MessageRef;
+    kind: "image" | "video" | "audio" | "document" | "sticker";
+    bytes: Uint8Array;
+    mimetype?: string;
+  }): Promise<{ ref: string; byteLength: number }>;
+}
+
+export type MediaRecord =
+  | {
+      state: "stored";
+      ref: string;
+      byteLength: number;
+      meta: MediaMeta;
+    }
+  | {
+      state: "failed";
+      error: string;
+      meta: MediaMeta;
+    };
 ```
 
-Durable blob storage is a separate optional capability to add when a real
-consumer needs it. PocketBase files, Convex storage, Supabase Storage, and an
-HTTP host should implement the same media contract when that slice exists.
+The media store is required by the durable runtime and independently
+replaceable from structured data. PocketBase uses protected files; Convex uses
+storage; Supabase uses Storage; local SQL composition supplies a durable
+filesystem/blob implementation. Blob writes use idempotent account/message keys
+and orphan cleanup because blob storage and database transactions cannot be
+made one portable atomic operation.
+
+Voice-note transcription is a derived consumer loop over stored audio
+(`kind: "audio"` and `ptt: true`). A transcript is a separate artifact or
+observation; failure never removes or downgrades the stored raw audio.
 
 ## Commands and optimistic reconciliation
 
@@ -465,22 +614,46 @@ export type WhatsAppCommand =
   | ReactCommand
   | EditMessageCommand
   | RevokeMessageCommand
+  | RequestHistoryCommand
   | PairCommand
   | UnlinkCommand;
 ```
 
 Account lifecycle rides the same queue. `PairCommand` carries the method and,
 for pairing codes, the dynamically supplied phone number; the runtime executes
-it and publishes the resulting QR or pairing-code challenge into
-`runtime_state`, where a pairing UI watches it like any other mirror record.
+it and writes only challenge identifier, method, state, and expiry into
+`runtime_state`. The raw QR or pairing code is returned through an authorized,
+short-lived `PairingChallengeStore`; it never enters ordinary snapshots,
+subscriptions, backups, or diagnostic dumps.
+
 `UnlinkCommand` performs a Baileys logout so the phone forgets the device,
-clears that account’s credentials, and sets `runtime_state` to
-`needs_pairing`; the mirror is retained. The worker-local `runtime.pair()`
-remains for bootstrap and CLI composition — the queue is the authorized
-browser path, not a replacement for it. Because linking is the most
-privileged account operation, application authorization rules may distinguish
-lifecycle commands from chat commands, but both flow through the same
-application-authorization surface.
+clears that account’s credentials, and sets `runtime_state` to `needs_pairing`;
+the mirror is retained. The worker-local `runtime.pair()` remains for bootstrap
+and CLI composition — the queue is the authorized browser path, not a
+replacement for it. Because linking is the most privileged account operation,
+application authorization rules may distinguish lifecycle commands from chat
+commands, but both flow through the same application-authorization surface.
+
+```ts
+export interface PairingChallengeStore {
+  publish(input: {
+    accountId: string;
+    challengeId: string;
+    encryptedSecret: Uint8Array;
+    expiresAt: number;
+  }): Promise<void>;
+
+  consume(accountId: string, challengeId: string): Promise<string | undefined>;
+
+  clear(accountId: string, challengeId: string): Promise<void>;
+}
+```
+
+`RequestHistoryCommand` carries one chat and the oldest stored WhatsApp message
+key plus timestamp. Its count is validated at the protocol maximum of 50. The
+command receipt proves submission, not delivery or exhaustion; later accepted
+history batches update the mirror and request state as far as live Baileys
+correlation proof permits.
 
 `MarkReadCommand` carries real message references. It must not repeat the
 current channel adapter’s empty-message-ID shortcut.
@@ -534,8 +707,17 @@ export interface WhatsAppClient {
 
   messages(
     chatId: string,
-    page: { before?: MessageRef; limit: number },
-  ): Promise<readonly MessageRecord[]>;
+    page: { before?: StoredMessageCursor; limit: number },
+  ): Promise<StoredMessagePage>;
+
+  requestHistory(
+    input: {
+      chatId: string;
+      before: MessageRef & { timestamp: number };
+      count?: number;
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<WhatsAppCommandReceipt>;
 
   execute(
     command: WhatsAppCommand,
@@ -544,12 +726,26 @@ export interface WhatsAppClient {
 }
 ```
 
-The snapshot is a bounded window, not the whole mirror: the account, every
-chat, contacts, groups, and each chat’s most recent messages (a configurable
-window). Older history is read on demand through `messages()`, which is what
-the React `loadOlder` slot calls. A full-mirror first frame on a real
-multi-year account is tens of megabytes per `watch()` and is not a supported
-contract shape.
+The snapshot contains the account, chat summaries (including last-message
+preview), contacts, and groups. It contains no message window for every chat.
+Opening an active conversation calls `messages()` for its first stored page;
+further stored pages remain deterministic backend reads.
+
+An exhausted stored cursor means only that no older messages are currently in
+the mirror. `requestHistory()` separately asks WhatsApp for older messages and
+may expose “requesting”, “request sent”, “new messages stored”, or “failed”. It
+does not expose “all history loaded” or “no more WhatsApp messages” without the
+blocked live protocol proof.
+
+```ts
+export type OlderHistoryState =
+  | { state: "showing_saved_messages" }
+  | { state: "no_older_saved_messages"; canRequest: boolean }
+  | { state: "requesting_from_linked_phone" }
+  | { state: "request_sent"; requestId: string }
+  | { state: "new_messages_saved"; count: number }
+  | { state: "request_failed"; message: string };
+```
 
 Every `watch()` starts with a store-backed snapshot. Live patches delivered
 after it are ordered after that snapshot by revision, not by heuristics:
@@ -557,6 +753,7 @@ after it are ordered after that snapshot by revision, not by heuristics:
 ```ts
 export interface WhatsAppPatch {
   readonly accountId: string;
+  readonly fromRevision: number;
   readonly revision: number;
   readonly upserts: readonly MirrorRecord[];
   readonly deletes: readonly MirrorRecordKey[];
@@ -564,17 +761,14 @@ export interface WhatsAppPatch {
 ```
 
 Patches carry normalized mirror records, not WhatsApp events: projection logic
-runs once, server-side, in the runtime. The data store stamps every applied
-batch with the account’s next monotonic revision, and every snapshot reports
-the revision it includes. A client applies a patch if and only if
-`patch.revision > snapshot.revision`, which closes the subscribe-during-read
-race deterministically. The contract owns that race; React components do not.
-A backend with consistent reactive queries may translate native query updates
-into these upserts instead of shipping a second event protocol.
+runs once, server-side, in the runtime. A client applies a patch only when
+`patch.fromRevision` exactly equals its current revision. Stale patches are
+ignored; a future base is a gap and triggers a fresh snapshot. The contract owns
+that race and recovery; React components do not.
 
-On reconnect, the client receives a fresh snapshot. A general durable event
-journal and resumable replay cursor are deferred until a real consumer proves
-snapshot replacement insufficient.
+On reconnect, the UI client receives a fresh snapshot. Durable backend
+consumers do not use UI snapshots: they follow accepted source batches through
+the backend package from their own revision cursor.
 
 Concrete clients are:
 
@@ -604,8 +798,14 @@ const client = createPocketBaseWhatsAppClient({
 <WhatsAppProvider client={client}>
   <Conversation.Root chatId={chatId}>
     <Conversation.Messages>
-      {({ messages, status, loadOlder }) => (
-        <MyMessageList messages={messages} status={status} onLoadOlder={loadOlder} />
+      {({ messages, status, loadOlderSaved, requestOlderFromWhatsApp, historyState }) => (
+        <MyMessageList
+          messages={messages}
+          status={status}
+          historyState={historyState}
+          onLoadOlderSaved={loadOlderSaved}
+          onRequestBackfill={requestOlderFromWhatsApp}
+        />
       )}
     </Conversation.Messages>
 
@@ -646,6 +846,8 @@ The provider owns:
 
 - one client subscription per provider;
 - snapshot hydration and patch application;
+- gap detection and fresh-snapshot recovery;
+- active-chat stored paging and explicit WhatsApp backfill state;
 - selectors and structural sharing;
 - optimistic command state and reconciliation;
 - typing expiry;
@@ -669,9 +871,10 @@ whatsappd
 ```
 
 `@whatsappd/convex` is added when the Convex vertical slice begins. libSQL,
-Postgres, Supabase, and shared testing packages are published only when their
-complete adapter surfaces have real consumers; empty placeholder packages are
-not shipped.
+Postgres, Supabase, and standalone testing packages are published only when
+their complete adapter surfaces have real consumers; empty placeholder packages
+are not shipped. Deterministic core session test support ships from the
+`whatsappd/testing` subpath rather than creating another package.
 
 Releases use the installed Changesets flow with a fixed (lockstep) group:
 `whatsappd` and every `@whatsappd/*` package share one version and release
@@ -695,17 +898,13 @@ Each backend package may expose server and client subpaths:
 @whatsappd/convex/component
 ```
 
-Existing credential imports remain compatibility aliases during migration:
-
-```text
-whatsappd/stores/memory  -> memoryCredentialStore
-whatsappd/stores/libsql  -> libsqlCredentialStore
-```
-
-The old agent-era subpaths are retired rather than carried into the new
+Old aliases and agent-era subpaths are retired rather than carried into the new
 architecture:
 
 ```text
+SessionStore
+whatsappd/stores/memory
+whatsappd/stores/libsql
 whatsappd/adapters/eve
 whatsappd/sidecar
 whatsappd/tools
@@ -746,6 +945,10 @@ It also exposes the capabilities independently:
 pocketBaseCredentialStore(...)
 pocketBaseDataStore(...)
 pocketBaseCommandStore(...)
+pocketBaseLeaseStore(...)
+pocketBasePairingChallengeStore(...)
+pocketBaseMediaStore(...)
+pocketBaseAcceptedSource(...)
 ```
 
 The server adapter uses privileged account-worker credentials. The browser
@@ -755,6 +958,7 @@ Default collections are conceptually:
 
 ```text
 whatsappd_credentials
+whatsappd_accepted_source_batches
 whatsappd_accounts
 whatsappd_chats
 whatsappd_contacts
@@ -767,6 +971,7 @@ whatsappd_media
 whatsappd_commands
 whatsappd_command_attempts
 whatsappd_runtime_state
+whatsappd_pairing_challenges
 whatsappd_account_leases
 ```
 
@@ -778,12 +983,17 @@ Requirements:
 - writes are idempotent upserts;
 - multi-record mutations use PocketBase’s transactional batch API or a
   server-side transaction;
+- accepted source append, mirror projection, and revision increment share one
+  server-side transaction;
+- the accepted-source reader is service-authorized and cursor-resumable;
 - migrations are versioned, inspectable, and committed;
 - collection prefix is configurable without leaking collection names into the
   domain contract;
 - realtime subscriptions obey collection access rules;
 - credential `clear()` affects only one account’s credential rows;
-- protected media files are not exposed by public URLs.
+- protected media files are not exposed by public URLs;
+- raw pairing challenges are protected separately from ordinary runtime-state
+  reads and expire promptly.
 
 PocketBase View collections may provide backend-native derived read models, but
 the portable client and store contracts do not expose PocketBase collection or
@@ -805,8 +1015,10 @@ decide which application users belong to an account.
 
 The current v3 spike remains evidence and fixture material, not the production
 schema. It writes a raw event collection with fire-and-forget callbacks and
-filesystem credentials. The adapter replaces those behaviors with awaited,
-account-scoped, normalized writes and server-only credentials.
+filesystem credentials. Ambient production integration blocks on the published
+whatsappd release, then follows accepted source batches with a Brain-owned
+cursor. It does not reconstruct observations from mirror patches or copy
+unpublished contracts.
 
 ## Convex adapter
 
@@ -898,7 +1110,8 @@ Relevant native facilities:
 libSQL is the SQL reference because the repository already ships a credential
 adapter and already has an optional `@libsql/client` dependency.
 
-The existing credential table remains the compatibility floor:
+The existing credential table is migration input for the renamed credential
+capability; the old import path is not preserved:
 
 ```sql
 CREATE TABLE wa_auth (
@@ -913,11 +1126,12 @@ The libSQL package:
 
 - preserves the current account-scoped `wa_auth` behavior;
 - exposes `libsqlCredentialStore(...)`, `libsqlDataStore(...)`, and
-  `libsqlCommandStore(...)` independently as well as through
-  `libsqlBackend(...)`;
+  `libsqlCommandStore(...)` independently; `libsqlBackend(...)` also requires
+  lease, protected challenge, and durable filesystem/blob media capabilities;
 - adds versioned client-data migrations;
 - uses database constraints for canonical identities;
-- applies related projection changes in a transaction;
+- appends accepted source batches, applies their projections, and increments
+  revision in a transaction;
 - reconstructs the same `WhatsAppSnapshot` as PocketBase;
 - supports separate database clients for credentials and data;
 - does not claim to provide application authentication or browser-safe
@@ -1010,20 +1224,31 @@ merely because it is another process.
 
 ### Slice 1: contracts and memory proof
 
-- Rename `SessionStore` to `CredentialStore` with a compatibility alias.
-- Add the complete ordered `WhatsAppEvent` surface without removing existing
-  streams.
-- Define normalized durable events, snapshots, patches, commands, and the
-  client contract.
-- Implement the runtime with memory data/command/lease stores.
-- Add shared credential, data, command, and client conformance tests.
-- Prove persist-before-publish and snapshot-first ordering.
+- Hard-cut `SessionStore` to `CredentialStore` and remove the old session
+  streams, `onX` methods, bound reply shape, channel, sidecar, Eve adapter, and
+  agent tools without aliases or wrappers.
+- Implement one awaited `session.subscribe({ ...handlers })` dispatcher.
+- Ship `whatsappd/testing` with deterministic awaited event emission and command
+  recording.
+- Define accepted source batches, current mirror, summary snapshots, stable
+  stored pages, contiguous patches, history requests, commands, pairing
+  challenges, leases, durable media, and clients.
+- Implement the runtime with memory capabilities and one accepted-source/current
+  projection transaction.
+- Run the on-demand Baileys history prototype before promising correlation,
+  completion, exhaustion, or phone-offline states.
 
 Exit proof:
 
+- a test emits message then update without WhatsApp or sleeps and observes
+  awaited source order;
+- a rejected handler fails the processing pipeline rather than being skipped;
 - replaying the same inputs produces one current mirror;
-- a failed data write produces no successful client patch;
-- ingestion resumes without loss after transient write failures;
+- a failed acceptance produces neither a successful client patch nor a source
+  cursor advance;
+- an accepted source batch survives process replacement;
+- a patch gap triggers snapshot replacement;
+- immediate media capture records stored bytes or explicit failure;
 - a second `start()` on a claimed account fails closed;
 - a returning session with zero sync batches retains its snapshot;
 - real message references reach `markRead`;
@@ -1031,12 +1256,14 @@ Exit proof:
 
 ### Slice 2: PocketBase vertical slice
 
-- Ship PocketBase credentials, data, commands, migrations, indexes, and access
-  rule templates.
-- Replace the Ambient Agent v3 raw spike path with the production adapter.
+- Ship PocketBase credentials, accepted/current data, commands, pairing
+  challenges, leases, protected media, migrations, indexes, and access rules.
+- Publish the PocketBase accepted-source reader and cursor contract.
 - Prove process replacement, collection/index/rule readback, terminal
   credential clearing, and authenticated account isolation.
 - Implement the PocketBase `WhatsAppClient`.
+- Keep Ambient Agent v3 pinned to its old spike until this package line is
+  published; its production integration is a downstream release-gated task.
 
 Exit proof:
 
@@ -1045,6 +1272,8 @@ Exit proof:
 - restart the runtime;
 - reconnect with zero history batches;
 - read the retained snapshot as an authorized browser user;
+- resume an accepted-source consumer after its last committed revision;
+- store one real media attachment and retain it across restart;
 - send one command and reconcile its outbound echo;
 - prove another authenticated user cannot read or command the account.
 
@@ -1053,7 +1282,8 @@ Exit proof:
 - Implement `WhatsAppProvider`, core hooks, and the conversation render slots.
 - Build one unstyled test application against the PocketBase client.
 - Prove hydration, live inbound updates, optimistic send/reconciliation,
-  typing expiry, read batching, reconnect, and error state.
+  typing expiry, read batching, stored paging, explicit history-request states,
+  revision-gap recovery, reconnect, and error state.
 
 This is the point at which the “WhatsApp UI SDK” is real. A typechecked provider
 without a live backend/browser proof is not acceptance.
@@ -1077,23 +1307,61 @@ readback.
 - Prove an application-owned server client and a process-replacement snapshot.
 - Do not add a generic HTTP transport without a concrete remote consumer.
 
-### Slice 6: retirement and package cleanup
+### Slice 6: release proof and package cleanup
 
-- Remove channel, Eve adapter, current sidecar, and core agent tools.
-- Remove the per-category session streams and the callback registration trio;
-  `events` becomes the only session event surface.
-- Update package description, keywords, exports, README, and examples.
-- Preserve only deliberate credential-store compatibility aliases.
-- Run packed clean-consumer tests for every public package/subpath.
+- Update package description, keywords, exports, README, and examples for the
+  hard-cut product.
+- Configure Changesets’ fixed group for every package that actually exists.
+- Run packed clean-consumer tests for every public package and subpath,
+  including `whatsappd/testing`.
+- Publish only after the release candidate proves no old alias or agent-era
+  entry point remains.
 
 Supabase and plain Postgres follow after a concrete consumer chooses them. Their
 contracts are planned; speculative implementations are not.
 
 ## Shared conformance suite
 
-The conformance suite starts as repository-internal test support and every
-backend must pass it. It becomes `@whatsappd/testing` only when a real
-out-of-repository adapter author needs the harness:
+Backend conformance remains repository-internal test support. The public
+`whatsappd/testing` subpath is narrower: it drives the real session subscription
+contract deterministically for application tests without publishing a
+standalone testing package.
+
+### Live session subscription
+
+```ts
+import { createTestWhatsAppSession, textMessage } from "whatsappd/testing";
+
+const test = createTestWhatsAppSession();
+const order: string[] = [];
+
+test.session.subscribe({
+  message: async (message, { reply }) => {
+    order.push("accepted");
+    await reply("Received");
+  },
+});
+
+await test.emit({
+  type: "message",
+  message: textMessage({
+    id: "m1",
+    chatId: "person@s.whatsapp.net",
+    text: "Hello",
+  }),
+});
+
+assert.deepEqual(order, ["accepted"]);
+assert.deepEqual(test.commands.sent[0]?.content, { text: "Received" });
+```
+
+- `emit()` resolves only after matching async handlers complete;
+- source order crosses message, update, sync, contact, group, and presence
+  categories;
+- rejection is observable and prevents advancement;
+- unsubscribe and `AbortSignal` stop later delivery;
+- message reply records the correct quoted send;
+- no test requires WhatsApp, sleeps, or an application-built session fake.
 
 ### Credential store
 
@@ -1110,10 +1378,28 @@ out-of-repository adapter author needs the harness:
 - current reactions and receipts;
 - zero-sync reconnect retention;
 - transaction rollback on a failed multi-record batch;
+- accepted source append, current projection, and revision stamp are one
+  transaction;
+- source consumers resume strictly after their committed revision;
 - equivalent snapshot normalization;
 - monotonic revision stamping across restarts;
-- windowed snapshots and stable `messages()` page boundaries;
-- media metadata never implies stored bytes.
+- summary snapshots and stable active-chat `messages()` page boundaries;
+- stored-page exhaustion does not claim WhatsApp exhaustion.
+
+### Media store
+
+- every supported media kind records stored or failed state;
+- the opaque blob reference is account/message scoped and idempotent;
+- process replacement preserves stored bytes;
+- a transcription failure cannot alter the raw media record;
+- orphan cleanup handles upload-before-record failure.
+
+### Pairing challenge store
+
+- ordinary runtime snapshots expose metadata only;
+- an authorized consumer can read the live secret;
+- unauthorized, expired, and consumed reads fail closed;
+- challenge clearing does not affect credentials or the mirror.
 
 ### Command store
 
@@ -1126,8 +1412,11 @@ out-of-repository adapter author needs the harness:
 ### Client
 
 - first frame is a snapshot carrying its revision;
-- subsequent patches carry revisions greater than the snapshot’s;
+- a patch applies only when `fromRevision` equals the current revision;
+- a future patch base causes fresh-snapshot recovery;
 - paging older history never duplicates or skips a message across a live patch;
+- stored paging never submits a WhatsApp request;
+- history requests expose only states proven by the protocol prototype;
 - reconnect replaces state with a fresh snapshot;
 - cancellation releases subscriptions;
 - unauthorized reads and commands fail closed.
@@ -1137,6 +1426,7 @@ out-of-repository adapter author needs the harness:
 - acquire is compare-and-swap: one holder per account;
 - a second acquire fails closed while the lease is held;
 - heartbeat renewal extends the claim; expiry releases it;
+- backend time and fencing token reject stale-holder writes;
 - account isolation.
 
 ## Acceptance criteria
@@ -1144,8 +1434,11 @@ out-of-repository adapter author needs the harness:
 ### Architecture
 
 - [ ] The session remains usable without a data backend.
+- [ ] `session.subscribe({ ...handlers })` is the only public live event API.
+- [ ] Matching async handlers are awaited in source order.
 - [ ] The runtime consumes every normalized WhatsApp event category.
-- [ ] Credentials, data, commands, and leases are separate capabilities.
+- [ ] Credentials, accepted/current data, commands, pairing challenges, leases,
+      and media are separate capabilities.
 - [ ] One backend can conveniently provide all capabilities.
 - [ ] Capabilities from different backends can be mixed.
 - [ ] “Sidecar” appears only as an optional deployment description.
@@ -1153,22 +1446,29 @@ out-of-repository adapter author needs the harness:
 ### Persistence
 
 - [ ] Every durable record is explicitly account-scoped.
-- [ ] Ingestion is idempotent.
-- [ ] Persistence completes before a successful client patch is published.
-- [ ] Persistence failures are visible and tested.
+- [ ] Accepted-source ingestion is idempotent.
+- [ ] Source append, current projection, and revision stamping share one
+      backend transaction.
+- [ ] Durable acceptance completes before a successful client patch is
+      published.
+- [ ] Acceptance failures are visible and tested.
 - [ ] Zero-sync reconnects preserve prior data.
-- [ ] Applied batches carry per-account monotonic revisions.
-- [ ] Snapshots are windowed; older history is served by paged reads.
+- [ ] Accepted batches carry per-account monotonic revisions.
+- [ ] Snapshots contain summaries; active-chat messages use stored pages.
+- [ ] Stored paging and WhatsApp history backfill are distinct operations.
 - [ ] Opening an already-claimed account fails closed on the lease.
 - [ ] Presence is never restored as current truth.
 - [ ] Credential clearing cannot erase the WhatsApp mirror.
-- [ ] Media metadata does not claim durable bytes.
+- [ ] Every inbound media message attempts immediate durable capture.
+- [ ] Stored raw voice audio survives transcription failure.
 
 ### Client and UI
 
 - [ ] React imports no PocketBase, Convex, Supabase, or SQL SDK.
 - [ ] Every watch begins with a consistent snapshot.
-- [ ] Patch application is gated on revision comparison.
+- [ ] Patch application requires a contiguous `fromRevision`.
+- [ ] Revision gaps replace state with a fresh snapshot.
+- [ ] The UI distinguishes no older stored messages from WhatsApp exhaustion.
 - [ ] Optimistic sends reconcile with authoritative results.
 - [ ] Headless components render no DOM or CSS.
 - [ ] Hooks and render slots work with at least PocketBase and Convex clients.
@@ -1177,6 +1477,8 @@ out-of-repository adapter author needs the harness:
 
 - [ ] WhatsApp credentials are host-only and encrypted appropriately at rest.
 - [ ] Backend service credentials never enter browser bundles.
+- [ ] Raw pairing challenges never enter ordinary runtime snapshots.
+- [ ] Accepted-source feeds require backend-consumer authorization.
 - [ ] PocketBase rules, Convex wrappers, Supabase RLS, and HTTP authorization
       fail closed.
 - [ ] Multi-user and multi-account isolation have executable proof.
@@ -1184,9 +1486,9 @@ out-of-repository adapter author needs the harness:
 ### Packaging
 
 - [ ] Default `whatsappd` does not install backend or React SDKs.
-- [ ] Existing credential-store consumers remain source-compatible during
-      migration.
+- [ ] The hard-cut release contains no compatibility aliases or wrappers.
 - [ ] Agent-era exports are removed from the target product.
+- [ ] `whatsappd/testing` proves consumer behavior without a phone or sleeps.
 - [ ] The package family versions and releases in lockstep through Changesets.
 - [ ] Packed clean-consumer tests prove every public entry point.
 
@@ -1199,8 +1501,9 @@ out-of-repository adapter author needs the harness:
 - A database-agnostic query language or ORM.
 - A mandatory separate process.
 - Styled React components or a WhatsApp visual clone.
-- Durable media bytes in the first vertical slice.
 - Transparent retry of ambiguous outbound WhatsApp commands.
+- Voice transcription, speech-model selection, or transcript knowledge
+  semantics inside whatsappd.
 
 ## Proof boundary
 
@@ -1211,17 +1514,21 @@ Proven today:
 - the current credential store is a separate opaque persistence seam;
 - applications already embed the live session successfully;
 - Ambient Agent v3 has demonstrated PocketBase as a concrete destination for
-  the emitted data;
+  emitted data and immediate media bytes;
 - the current channel and webhook sidecar lose information required by a
   durable client.
 
 Not yet proven:
 
-- the target runtime and unified event ordering;
+- the target runtime, awaited typed subscription, and deterministic test driver;
+- durable accepted-source/current projection transactions;
+- process-crash behavior between protocol delivery and local acceptance;
+- on-demand history correlation, completion, exhaustion, and offline behavior;
 - any production PocketBase or Convex adapter;
 - the canonical mirror schema under real replay and restart;
 - backend-native authorization rules for a real application;
 - snapshot-first client ordering;
+- required durable media adapters;
 - the headless React package;
 - application-owned account workers against the production adapters.
 
