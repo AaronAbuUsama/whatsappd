@@ -79,3 +79,9 @@ The bounded first frame of a client watch — the account, chats, contacts,
 groups, and each chat’s most recent messages; older history arrives only
 through paged reads.
 _Avoid_: Full-mirror dump, event replay
+
+**Lifecycle Operation**:
+An account-scoped command that changes link state rather than chat state —
+pairing and unlinking — carried on the same authorized command queue as chat
+commands, with challenges surfaced through runtime state.
+_Avoid_: Worker-only API, bespoke application glue

@@ -307,9 +307,15 @@ export type WhatsAppEvent =
 
 export interface WhatsAppSession {
   readonly events: AsyncIterable<WhatsAppEvent>;
-  // Existing streams and callbacks remain during migration.
+  // Per-category streams and callbacks remain only until slice 6.
 }
 ```
+
+The seven per-category streams and the callback trio are migration
+scaffolding: they are removed with the agent-era surface in slice 6, and
+`events` becomes the session’s only event surface. Parallel independent
+queues cannot express the cross-category ordering the durable mirror
+requires.
 
 The session emits WhatsApp-native events. The runtime adds `accountId`,
 observation metadata, and durable revision information:
@@ -458,8 +464,23 @@ export type WhatsAppCommand =
   | SetTypingCommand
   | ReactCommand
   | EditMessageCommand
-  | RevokeMessageCommand;
+  | RevokeMessageCommand
+  | PairCommand
+  | UnlinkCommand;
 ```
+
+Account lifecycle rides the same queue. `PairCommand` carries the method and,
+for pairing codes, the dynamically supplied phone number; the runtime executes
+it and publishes the resulting QR or pairing-code challenge into
+`runtime_state`, where a pairing UI watches it like any other mirror record.
+`UnlinkCommand` performs a Baileys logout so the phone forgets the device,
+clears that account’s credentials, and sets `runtime_state` to
+`needs_pairing`; the mirror is retained. The worker-local `runtime.pair()`
+remains for bootstrap and CLI composition — the queue is the authorized
+browser path, not a replacement for it. Because linking is the most
+privileged account operation, application authorization rules may distinguish
+lifecycle commands from chat commands, but both flow through the same
+application-authorization surface.
 
 `MarkReadCommand` carries real message references. It must not repeat the
 current channel adapter’s empty-message-ID shortcut.
@@ -651,6 +672,13 @@ whatsappd
 Postgres, Supabase, and shared testing packages are published only when their
 complete adapter surfaces have real consumers; empty placeholder packages are
 not shipped.
+
+Releases use the installed Changesets flow with a fixed (lockstep) group:
+`whatsappd` and every `@whatsappd/*` package share one version and release
+together, so no compatibility matrix exists while the contracts are young.
+The publish workflow iterates the workspace with per-package
+skip-if-published and npm provenance. The group can be unfixed later when the
+contracts stabilize.
 
 `whatsappd` contains the session, runtime, domain contracts, and in-process
 client. Backend SDKs and React do not enter its default dependency graph.
@@ -1052,6 +1080,8 @@ readback.
 ### Slice 6: retirement and package cleanup
 
 - Remove channel, Eve adapter, current sidecar, and core agent tools.
+- Remove the per-category session streams and the callback registration trio;
+  `events` becomes the only session event surface.
 - Update package description, keywords, exports, README, and examples.
 - Preserve only deliberate credential-store compatibility aliases.
 - Run packed clean-consumer tests for every public package/subpath.
@@ -1157,6 +1187,7 @@ out-of-repository adapter author needs the harness:
 - [ ] Existing credential-store consumers remain source-compatible during
       migration.
 - [ ] Agent-era exports are removed from the target product.
+- [ ] The package family versions and releases in lockstep through Changesets.
 - [ ] Packed clean-consumer tests prove every public entry point.
 
 ## Non-goals
