@@ -80,7 +80,9 @@ void (async () => {
 // Loop 2 — inbound messages (the "messages = events" stream).
 void (async () => {
   for await (const m of session.inbound) {
-    if (m.fromMe || !m.live) continue;
+    // Keep fromMe events so "Message Yourself" can prove a one-account round trip.
+    // The exact ping trigger cannot loop: the emitted response is "pong".
+    if (!m.live) continue;
     const desc = m.kind === "text" ? m.text : `[${m.kind}]`;
     console.log(`📩 ${m.from}: ${desc}`);
     if (m.kind === "text" && m.text.trim().toLowerCase() === "ping") {
