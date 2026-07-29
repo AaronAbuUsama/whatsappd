@@ -60,8 +60,7 @@ and `stop()`.
 ## Credentials
 
 `CredentialStore` is an opaque string key/value capability. The package ships
-file and memory stores from the root entry point and an optional account-scoped
-libSQL store from `whatsappd/stores/libsql`.
+file and memory stores from the root entry point.
 
 ## Deterministic application tests
 

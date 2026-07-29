@@ -1,10 +1,6 @@
 /**
  * Public entry point for the WhatsApp session engine and its pure model types.
  *
- * The `libsqlStore` implementation is intentionally not re-exported here;
- * import it from `whatsappd/stores/libsql` so the optional
- * `@libsql/client` dependency stays out of this entry's resolution path.
- *
  * @packageDocumentation
  */
 
