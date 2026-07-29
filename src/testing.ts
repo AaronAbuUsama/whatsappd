@@ -15,6 +15,10 @@ export interface TextMessageInput {
 }
 
 export function textMessage(input: TextMessageInput): InboundMessage {
+  const isGroup = input.isGroup ?? input.chatId.endsWith("@g.us");
+  if (isGroup && (!input.from || input.from === input.chatId)) {
+    throw new TypeError("group messages require an actual sender");
+  }
   return {
     id: input.id,
     chatId: input.chatId,
@@ -22,7 +26,7 @@ export function textMessage(input: TextMessageInput): InboundMessage {
     fromMe: input.fromMe ?? false,
     timestamp: input.timestamp ?? 0,
     live: input.live ?? true,
-    isGroup: input.isGroup ?? input.chatId.endsWith("@g.us"),
+    isGroup,
     kind: "text",
     text: input.text,
   };

@@ -194,3 +194,71 @@ test("a rejected handler poisons the pipeline and prevents advancement", async (
 
   expect(updateDelivered).toBe(false);
 });
+
+test("a rejection waits for every matching handler to finish", async () => {
+  const driver = createTestWhatsAppSession();
+  let release!: () => void;
+  const suspended = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  driver.session.subscribe({
+    message: () => {
+      throw new Error("acceptance failed");
+    },
+  });
+  driver.session.subscribe({
+    message: () => suspended,
+  });
+
+  let settled = false;
+  const emitted = driver
+    .emit({
+      type: "message",
+      message: textMessage({
+        id: "m1",
+        chatId: "person@s.whatsapp.net",
+        text: "Hello",
+      }),
+    })
+    .finally(() => {
+      settled = true;
+    });
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(settled).toBe(false);
+  release();
+  await assert.rejects(emitted, /acceptance failed/);
+});
+
+test("group replies quote the actual participant", async () => {
+  const driver = createTestWhatsAppSession();
+  driver.session.subscribe({
+    message: async (_message, { reply }) => {
+      await reply("Received");
+    },
+  });
+
+  await driver.emit({
+    type: "message",
+    message: textMessage({
+      id: "m1",
+      chatId: "room@g.us",
+      from: "person@s.whatsapp.net",
+      text: "Hello",
+    }),
+  });
+
+  expect(driver.commands.sent[0]?.options?.quote).toEqual({
+    id: "m1",
+    chatId: "room@g.us",
+    fromMe: false,
+    participant: "person@s.whatsapp.net",
+  });
+  expect(() =>
+    textMessage({
+      id: "m2",
+      chatId: "room@g.us",
+      text: "Missing sender",
+    }),
+  ).toThrow(/group messages require an actual sender/);
+});

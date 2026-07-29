@@ -99,11 +99,9 @@ export function createSubscriptionDispatcher(send: Send): {
           }
         }),
       );
-      try {
-        await Promise.all(pending);
-      } catch (error) {
-        throw new SubscriptionHandlerError(error);
-      }
+      const results = await Promise.allSettled(pending);
+      const rejected = results.find((result) => result.status === "rejected");
+      if (rejected?.status === "rejected") throw new SubscriptionHandlerError(rejected.reason);
     },
   };
 }

@@ -79,6 +79,72 @@ test("a rejected subscription handler fails the session pipeline", async () => {
   expect(ended).toBe(true);
 });
 
+test("timer transitions wait for message delivery and fail the session pipeline", async () => {
+  const store = memoryStore();
+  await store.write({
+    creds: JSON.stringify({
+      registered: true,
+      me: { id: "15551234567:1@s.whatsapp.net" },
+      accountSyncCounter: 1,
+    }),
+  });
+  let markMessageStarted!: () => void;
+  const messageStarted = new Promise<void>((resolve) => {
+    markMessageStarted = resolve;
+  });
+  let releaseMessage!: () => void;
+  const suspended = new Promise<void>((resolve) => {
+    releaseMessage = resolve;
+  });
+  let onlineDelivered = false;
+  let ended = false;
+  const fakeConn = {
+    events: (async function* () {
+      yield { t: "open" } as const;
+      yield {
+        t: "message",
+        msg: textMessage({
+          id: "m1",
+          chatId: "person@s.whatsapp.net",
+          text: "Hello",
+        }),
+      } as const;
+      await new Promise<void>(() => {});
+    })(),
+    end: () => {
+      ended = true;
+    },
+  };
+  const session = createSession({
+    store,
+    auth: qrAuth(),
+    syncGraceMs: 5,
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  const failure = new Error("online persistence failed");
+  session.subscribe({
+    message: async () => {
+      markMessageStarted();
+      await suspended;
+    },
+    connection(status) {
+      if (status.phase === "online") {
+        onlineDelivered = true;
+        throw failure;
+      }
+    },
+  });
+
+  const started = session.start();
+  await messageStarted;
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  expect(onlineDelivered).toBe(false);
+  releaseMessage();
+  await assert.rejects(started, failure);
+  expect(onlineDelivered).toBe(true);
+  expect(ended).toBe(true);
+});
+
 test("stop() during socket startup tears down the late-opened socket and awaits teardown", async () => {
   // stop() can land while openSocket() is still in flight — conn is undefined,
   // so stop()'s `conn?.end()` is a no-op. The supervisor must tear down the

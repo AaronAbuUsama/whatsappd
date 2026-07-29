@@ -212,6 +212,15 @@ export function createSession(config: SessionConfig): WhatsAppSession {
   // the first history/app-state sync already completed. Fresh post-pairing creds
   // are registered but must still wait for history status.
   let syncTimer: ReturnType<typeof setTimeout> | undefined;
+  let eventPipeline = Promise.resolve();
+  let signalPipelineFailure: (error: unknown) => void = () => {};
+
+  function enqueue(work: () => Promise<void>): Promise<void> {
+    const task = eventPipeline.then(work);
+    eventPipeline = task;
+    void task.catch(signalPipelineFailure);
+    return task;
+  }
 
   async function apply(input: Input): Promise<void> {
     const next = transition(status, input, ctx, Date.now());
@@ -237,14 +246,16 @@ export function createSession(config: SessionConfig): WhatsAppSession {
 
   function armSync(): void {
     clearSync();
-    syncTimer = setTimeout(() => void apply({ t: "synced" }), syncGraceMs);
+    syncTimer = setTimeout(() => {
+      void enqueue(() => apply({ t: "synced" }));
+    }, syncGraceMs);
   }
 
   function fireVerdict(): void {
     if (verdictFired) return;
     verdictFired = true;
     clearVerdict();
-    void apply({ t: "pairing_rejected" }); // the silent 400 — no event ever came
+    void enqueue(() => apply({ t: "pairing_rejected" })); // the silent 400 — no event ever came
   }
 
   async function handle(ev: RawEvent): Promise<void> {
@@ -331,26 +342,46 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     verdictFired = false;
     clearVerdict();
     clearSync();
-
-    const auth = await loadAuth(store);
-    initialSyncComplete = auth.initialSyncComplete;
-    conn = await openSocketImpl({
-      auth: { creds: auth.creds, keys: auth.keys },
-      authMethod: config.auth.method,
-      saveCreds: auth.saveCreds,
-      logger,
+    eventPipeline = Promise.resolve();
+    let reportFailure!: (error: unknown) => void;
+    const pipelineFailure = new Promise<unknown>((resolve) => {
+      reportFailure = resolve;
     });
+    signalPipelineFailure = reportFailure;
 
-    // stop() may have run while openSocket() was in flight — conn was still
-    // undefined then, so stop()'s `conn?.end()` was a no-op. Without this guard
-    // the freshly opened socket would leak: the loop below would block on its
-    // events after the session was already stopped. Tear it down and bail.
-    if (stopped) {
-      conn.end();
-      return;
+    try {
+      const auth = await loadAuth(store);
+      initialSyncComplete = auth.initialSyncComplete;
+      conn = await openSocketImpl({
+        auth: { creds: auth.creds, keys: auth.keys },
+        authMethod: config.auth.method,
+        saveCreds: auth.saveCreds,
+        logger,
+      });
+
+      // stop() may have run while openSocket() was in flight — conn was still
+      // undefined then, so stop()'s `conn?.end()` was a no-op. Without this guard
+      // the freshly opened socket would leak: the loop below would block on its
+      // events after the session was already stopped. Tear it down and bail.
+      if (stopped) {
+        conn.end();
+        return;
+      }
+
+      const events = conn.events[Symbol.asyncIterator]();
+      while (true) {
+        const next = await Promise.race([
+          events.next().then((result) => ({ type: "event" as const, result })),
+          pipelineFailure.then((error) => ({ type: "failure" as const, error })),
+        ]);
+        if (next.type === "failure") throw next.error;
+        if (next.result.done) break;
+        await enqueue(() => handle(next.result.value));
+      }
+      await eventPipeline;
+    } finally {
+      signalPipelineFailure = () => {};
     }
-
-    for await (const ev of conn.events) await handle(ev);
   }
 
   async function supervise(): Promise<void> {

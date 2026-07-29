@@ -21,7 +21,6 @@ try {
       private: true,
       type: "module",
       dependencies: {
-        "@libsql/client": "0.15.15",
         whatsappd: `file:./${archive}`,
       },
     }),
@@ -32,13 +31,7 @@ try {
     await readFile(path.join(consumer, "node_modules/whatsappd/package.json"), "utf8"),
   ) as { readonly bin?: unknown; readonly exports: Record<string, unknown> };
   assert.equal(packageJson.bin, undefined);
-  assert.deepEqual(Object.keys(packageJson.exports).sort(), [
-    ".",
-    "./package.json",
-    "./stores/libsql",
-    "./stores/memory",
-    "./testing",
-  ]);
+  assert.deepEqual(Object.keys(packageJson.exports).sort(), [".", "./package.json", "./testing"]);
   const declarations = await readFile(
     path.join(consumer, "node_modules/whatsappd/dist/index.d.mts"),
     "utf8",
@@ -59,17 +52,14 @@ try {
       import assert from "node:assert/strict";
       import * as root from "whatsappd";
       import { createTestWhatsAppSession } from "whatsappd/testing";
-      import { memoryStore } from "whatsappd/stores/memory";
-      import { libsqlStore } from "whatsappd/stores/libsql";
 
       assert.equal(typeof root.createSession, "function");
       assert.equal(typeof createTestWhatsAppSession, "function");
-      assert.equal(typeof memoryStore, "function");
-      assert.equal(typeof libsqlStore, "function");
+      assert.equal(typeof root.memoryStore, "function");
       for (const removed of ["createChannelAdapter", "bindTools"]) {
         assert.equal(removed in root, false);
       }
-      for (const subpath of ["adapters/eve", "channel", "sidecar", "tools"]) {
+      for (const subpath of ["adapters/eve", "channel", "sidecar", "stores/libsql", "stores/memory", "tools"]) {
         await assert.rejects(import(\`whatsappd/\${subpath}\`), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
       }
     `,
