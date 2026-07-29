@@ -31,6 +31,10 @@ const session = createSession({
   auth: phone ? pairingAuth(phone) : qrAuth(),
   logger,
 });
+let conversationSyncBatches = 0;
+session.onConversationSync(() => {
+  conversationSyncBatches++;
+});
 
 // Loop 1 — status transitions (the "status = events" stream).
 void (async () => {
@@ -52,7 +56,9 @@ void (async () => {
         console.log(`… ${ev.sync.step}`);
         break;
       case "online":
-        console.log("🟢 ONLINE — connected and synced");
+        console.log(
+          `🟢 ONLINE — connected and synced (${conversationSyncBatches} conversation-sync batches)`,
+        );
         break;
       case "backing_off":
         console.log(
