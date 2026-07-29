@@ -210,3 +210,83 @@ test("returning sessions reach online without conversation-sync batches", async 
   expect(online).toBe(true);
   expect(syncBatches).toBe(0);
 });
+
+test("live fromMe messages stay visible to consumers and can be replied to", async () => {
+  const store = memoryStore();
+  await store.write({
+    creds: JSON.stringify({
+      registered: true,
+      me: { id: "15551234567:1@s.whatsapp.net" },
+      accountSyncCounter: 1,
+    }),
+  });
+
+  let releaseMessage!: () => void;
+  const messageHandled = new Promise<void>((resolve) => (releaseMessage = resolve));
+  const sent: unknown[] = [];
+  const fakeConn = {
+    events: (async function* () {
+      yield { t: "open" } as const;
+      yield { t: "pending_drained" } as const;
+      yield {
+        t: "message",
+        msg: {
+          id: "SELF1",
+          chatId: "15551234567@s.whatsapp.net",
+          from: "15551234567@s.whatsapp.net",
+          fromMe: true,
+          timestamp: 1,
+          live: true,
+          isGroup: false,
+          kind: "text",
+          text: "ping",
+        },
+      } as const;
+      await messageHandled;
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    send: async (...args: unknown[]) => {
+      sent.push(args);
+      releaseMessage();
+      return {
+        id: "PONG1",
+        chatId: "15551234567@s.whatsapp.net",
+        fromMe: true,
+      };
+    },
+    end: () => {},
+  };
+
+  const s = createSession({
+    store,
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  let observedFromMe = false;
+  s.onMessage(async (message) => {
+    observedFromMe = message.fromMe;
+    if (message.kind === "text" && message.text.toLowerCase() === "ping") {
+      await message.reply("pong");
+    }
+  });
+
+  await s.start();
+
+  expect(observedFromMe).toBe(true);
+  expect(sent).toEqual([
+    [
+      "15551234567@s.whatsapp.net",
+      { text: "pong" },
+      {
+        quote: {
+          id: "SELF1",
+          chatId: "15551234567@s.whatsapp.net",
+          fromMe: true,
+        },
+      },
+    ],
+  ]);
+});
