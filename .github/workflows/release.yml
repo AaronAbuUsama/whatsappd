@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,6 +20,7 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: pnpm
+      - run: npm install --global npm@11.5.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test
@@ -29,7 +31,7 @@ jobs:
           if ( cd "$RUNNER_TEMP" && npm view "whatsappd@$VERSION" version ) >/dev/null 2>&1; then
             echo "whatsappd@$VERSION is already on npm — skipping publish."
           else
-            npm publish --provenance --access public
+            pnpm pack --pack-destination "$RUNNER_TEMP"
+            cd "$RUNNER_TEMP"
+            npm publish "whatsappd-$VERSION.tgz" --provenance --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
