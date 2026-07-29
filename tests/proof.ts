@@ -4,8 +4,8 @@
  *   QR login:            node --experimental-strip-types tests/proof.ts
  *   Pairing-code login:  node --experimental-strip-types tests/proof.ts +15551234567
  *
- * Scan the QR (or enter the printed code). On "🟢 ONLINE", message the device
- * "ping" from another phone and it replies "pong". Auth persists in ./.wa-auth.
+ * Scan the QR (or enter the printed code). On "🟢 ONLINE", use Message Yourself
+ * (or another account) to send "ping"; the daemon replies "pong". Auth persists in ./.wa-auth.
  * LOG_LEVEL=debug to see the protocol trace.
  */
 import path from "node:path";
@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { createSession, fileStore, pairingAuth, qrAuth } from "../src/index.ts";
+import { replyToProofPing } from "./proof-handler.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const authDir = process.env.AUTH_DIR
@@ -80,15 +81,15 @@ void (async () => {
 // Loop 2 — inbound messages (the "messages = events" stream).
 void (async () => {
   for await (const m of session.inbound) {
+    const replied = await replyToProofPing(m, async (chatId, text) => {
+      await session.send(chatId, { text });
+    });
     // Keep fromMe events so "Message Yourself" can prove a one-account round trip.
     // The exact ping trigger cannot loop: the emitted response is "pong".
     if (!m.live) continue;
     const desc = m.kind === "text" ? m.text : `[${m.kind}]`;
     console.log(`📩 ${m.from}: ${desc}`);
-    if (m.kind === "text" && m.text.trim().toLowerCase() === "ping") {
-      await session.send(m.chatId, { text: "pong" });
-      console.log(`📤 replied "pong" to ${m.chatId}`);
-    }
+    if (replied) console.log(`📤 replied "pong" to ${m.chatId}`);
     // Live media check: pull bytes on demand and save to disk.
     if (
       m.kind === "image" ||

@@ -407,6 +407,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     initialSyncComplete = auth.initialSyncComplete;
     conn = await openSocketImpl({
       auth: { creds: auth.creds, keys: auth.keys },
+      authMethod: config.auth.method,
       saveCreds: auth.saveCreds,
       logger,
     });

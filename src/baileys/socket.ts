@@ -11,11 +11,13 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   proto,
   type BaileysEventMap,
+  type WABrowserDescription,
   type WAMessage,
   type WASocket,
 } from "baileys";
 import type { Logger } from "pino";
 import { classifyDisconnect, type WhatsAppFault } from "../errors.ts";
+import type { AuthStrategy } from "../ports.ts";
 import type {
   GroupMetadata,
   GroupUpdate,
@@ -158,9 +160,19 @@ function historySetTelemetry(payload: MessagingHistoryPayload) {
 
 export interface OpenSocketOpts {
   auth: Pick<BaileysAuth, "creds" | "keys">;
+  authMethod: AuthStrategy["method"];
   /** Persist creds on every `creds.update`. */
   saveCreds: () => Promise<void>;
   logger: Logger;
+}
+
+export function browserForOpen(
+  authMethod: AuthStrategy["method"],
+  auth: { readonly creds: { readonly registered?: boolean } },
+): WABrowserDescription {
+  return authMethod === "pairing_code" && auth.creds.registered !== true
+    ? PAIRING_BROWSER
+    : Browsers.macOS("Desktop");
 }
 
 export function shouldRequestFullHistoryOnOpen(auth: {
@@ -275,18 +287,19 @@ function connectionUpdateTelemetry(update: BaileysEventMap["connection.update"])
 }
 
 export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
-  const { auth, saveCreds, logger } = opts;
+  const { auth, authMethod, saveCreds, logger } = opts;
   const { version } = await fetchLatestBaileysVersion();
   const queue = new EventQueue();
   let intentional = false;
   const requestFullHistory = shouldRequestFullHistoryOnOpen(auth);
+  const browser = browserForOpen(authMethod, auth);
   logger.info(
     {
       version,
       requestFullHistory,
       credsRegistered: auth.creds.registered === true,
       hasCredsMe: Boolean(auth.creds.me),
-      browser: PAIRING_BROWSER.join(" "),
+      browser: browser.join(" "),
     },
     "opening baileys socket",
   );
@@ -294,7 +307,7 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
   const sock: WASocket = makeWASocket({
     version,
     logger,
-    browser: PAIRING_BROWSER,
+    browser,
     // Fresh companion registration is not complete at pair-success. Baileys first
     // persists `creds.me`, then later sets `creds.registered` after the
     // link_code_companion_reg finish notification. Asking for full history in

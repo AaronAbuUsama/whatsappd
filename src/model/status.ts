@@ -28,7 +28,12 @@ export type SyncState =
   /** history sync in flight */
   | { step: "syncing"; progress?: number };
 
-/** The connection lifecycle, with the pairing and sync sub-states nested in. */
+/**
+ * The connection lifecycle, with the pairing and sync sub-states nested in.
+ *
+ * `phase: "online"` is the authoritative readiness signal for commands.
+ * Conversation-sync callbacks are advisory data batches and may be absent.
+ */
 export type Status =
   | { phase: "disconnected" }
   | { phase: "connecting"; retryAttempt?: number } // retryAttempt carried across backoff→reconnect
