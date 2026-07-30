@@ -391,7 +391,13 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         stopped = true;
         teardownFailed = true;
         teardownError = error;
-        await apply({ t: "stop" }).catch(() => {});
+        // The stop transition still notifies subscribers, and a handler that
+        // rejects it owns the failure: per ADR-0013 an awaited rejection fails
+        // the pipeline, and a subscriber's own error outranks the teardown one.
+        await apply({ t: "stop" }).catch((dispatchError: unknown) => {
+          if (dispatchError instanceof SubscriptionHandlerError)
+            teardownError = dispatchError.cause;
+        });
       }
     }
     if (teardownFailed) throw teardownError;

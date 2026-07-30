@@ -414,6 +414,32 @@ test("stop() still awaits supervisor teardown when conn.end() rejects", async ()
   await started;
 });
 
+test("a handler rejecting the disconnected notification outranks the teardown error", async () => {
+  // Clean run, then conn.end() rejects — and the connection handler rejects the
+  // resulting `disconnected` notification too. Per ADR-0013 that rejection must
+  // fail the pipeline, and the subscriber's error outranks the teardown error.
+  const teardownFailure = new Error("credential persistence failed");
+  const handlerFailure = new Error("disconnected persistence failed");
+  const fakeConn = {
+    events: (async function* () {})(), // a clean run: the stream simply ends
+    end: async () => {
+      throw teardownFailure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      if (status.phase === "disconnected") throw handlerFailure;
+    },
+  });
+
+  await assert.rejects(session.start(), handlerFailure);
+});
+
 test("a falsy teardown rejection still fails start() and stop()", async () => {
   // A store may reject with a falsy reason. Truthiness checks would swallow it
   // and let both start() and stop() resolve despite failed persistence, so the
