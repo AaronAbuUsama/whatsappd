@@ -322,10 +322,16 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
   });
 
   let credentialWrites = Promise.resolve();
+  // A separate flag, not truthiness of the reason: a store may reject with a
+  // falsy value (undefined, 0, ""), and the FIRST failure must be the one kept.
+  let credentialWriteFailed = false;
   let credentialWriteError: unknown;
   sock.ev.on("creds.update", () => {
     credentialWrites = credentialWrites.then(saveCreds).catch((error: unknown) => {
-      credentialWriteError ??= error;
+      if (!credentialWriteFailed) {
+        credentialWriteFailed = true;
+        credentialWriteError = error;
+      }
     });
   });
   let ending: Promise<void> | undefined;
@@ -338,7 +344,7 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
         pending = credentialWrites;
         await pending;
       } while (pending !== credentialWrites);
-      if (credentialWriteError) throw credentialWriteError;
+      if (credentialWriteFailed) throw credentialWriteError;
     })());
 
   // Media bytes are pulled on demand via this factory — never buffered here.
