@@ -33,13 +33,11 @@ const session = createSession({
   logger,
 });
 let conversationSyncBatches = 0;
-session.onConversationSync(() => {
-  conversationSyncBatches++;
-});
-
-// Loop 1 — status transitions (the "status = events" stream).
-void (async () => {
-  for await (const ev of session.connection) {
+session.subscribe({
+  conversationSync() {
+    conversationSyncBatches++;
+  },
+  connection(ev) {
     switch (ev.phase) {
       case "pairing": {
         const p = ev.pairing;
@@ -75,18 +73,14 @@ void (async () => {
         process.exit(1);
         break;
     }
-  }
-})();
-
-// Loop 2 — inbound messages (the "messages = events" stream).
-void (async () => {
-  for await (const m of session.inbound) {
+  },
+  async message(m) {
     const replied = await replyToProofPing(m, async (chatId, text) => {
       await session.send(chatId, { text });
     });
     // Keep fromMe events so "Message Yourself" can prove a one-account round trip.
     // The exact ping trigger cannot loop: the emitted response is "pong".
-    if (!m.live) continue;
+    if (!m.live) return;
     const desc = m.kind === "text" ? m.text : `[${m.kind}]`;
     console.log(`📩 ${m.from}: ${desc}`);
     if (replied) console.log(`📤 replied "pong" to ${m.chatId}`);
@@ -109,8 +103,8 @@ void (async () => {
         console.error(`media download failed:`, err);
       }
     }
-  }
-})();
+  },
+});
 
 process.on("SIGINT", () => {
   console.log("\n…stopping");

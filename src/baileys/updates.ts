@@ -1,6 +1,6 @@
 /**
  * Update protos → `Update`. The companion to the inbound mapper, for the
- * updates stream. Three socket events feed it (all confined here):
+ * update handler. Three socket events feed it (all confined here):
  *
  *   - `messages.update`        — multiplexed: per-message status (receipt),
  *                                 plus edits and revokes (both arrive rewritten
@@ -9,7 +9,7 @@
  *   - `messages.reaction`      — a reaction added or cleared.
  *
  * All pure: proto in, `Update` out. Edits reuse the inbound mapper so the new
- * content lands in the exact same shape as anything on the inbound stream.
+ * content lands in the same normalized shape as a message handler receives.
  */
 import {
   proto,

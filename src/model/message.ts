@@ -4,7 +4,7 @@
  * @remarks
  * A closed discriminated union with an `unsupported` catch-all, so it is
  * type-impossible to crash on — or silently drop — a message. Media bodies are
- * a lazy {@link MediaHandle}: the bytes never sit in the event stream and are
+ * a lazy {@link MediaHandle}: the bytes never sit in the event payload and are
  * fetched on demand, so the media kinds carry metadata only until you download.
  *
  * @packageDocumentation
@@ -68,7 +68,7 @@ export interface MediaMeta {
 /**
  * Opaque, on-demand media: metadata now, bytes when you ask.
  * `download()` fetches + decrypts, transparently re-uploading expired media.
- * Bytes never travel in the event stream — the consumer pulls them when ready.
+ * Bytes never travel in the event payload — the consumer pulls them when ready.
  */
 export interface MediaHandle extends MediaMeta {
   download(): Promise<Buffer>;

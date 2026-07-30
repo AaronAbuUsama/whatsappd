@@ -1,5 +1,5 @@
 /** Barrel for the pure domain model types. Protocol-free and side-effect-free. */
-export type { Status, PairingState, SyncState, ConnectionEvent, WaIdentity } from "./status.ts";
+export type { Status, PairingState, SyncState, WaIdentity } from "./status.ts";
 export { isTerminal, isOnline } from "./status.ts";
 export type {
   InboundMessage,
@@ -23,9 +23,8 @@ export type {
 } from "./group.ts";
 export type {
   ConversationSyncBatch,
-  ConversationSyncChat,
-  ConversationSyncContact,
-  HistoryBatch,
+  ConversationSyncContext,
+  ConversationSyncSource,
   HistoryChat,
   HistoryContact,
 } from "./history.ts";

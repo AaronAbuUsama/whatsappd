@@ -1,12 +1,12 @@
 /**
- * One behavioural spec for the `SessionStore` port, run against every
+ * One behavioural spec for the `CredentialStore` port, run against every
  * implementation (memory / file / libsql). If a store passes this, it's a legal
  * credential backend — the session orchestrator can't tell them apart.
  *
  * `makeStore` must return a FRESH, isolated store on each call.
  */
 import { expect, test } from "./_expect.ts";
-import type { SessionStore } from "../src/ports.ts";
+import type { CredentialStore } from "../src/ports.ts";
 
 // A value that exercises the things real creds contain: braces, quotes, newlines,
 // unicode — proving the store treats the blob as opaque bytes, not structured data.
@@ -14,7 +14,7 @@ const TRICKY = '{"k":"v","b":"AQID//8=","emoji":"🔐","nl":"a\nb"}';
 
 export function conformsToStore(
   name: string,
-  makeStore: () => SessionStore | Promise<SessionStore>,
+  makeStore: () => CredentialStore | Promise<CredentialStore>,
 ): void {
   test(`[${name}] read of a missing key → null`, async () => {
     const store = await makeStore();

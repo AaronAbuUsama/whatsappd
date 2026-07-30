@@ -1,11 +1,11 @@
 /**
- * An in-memory {@link SessionStore} backed by a `Map`. Credentials vanish when
+ * An in-memory {@link CredentialStore} backed by a `Map`. Credentials vanish when
  * the process exits, so this suits tests and short-lived scripts — use
- * {@link fileStore} or `libsqlStore` for anything that must survive a restart.
+ * {@link fileStore} for anything that must survive a restart.
  */
-import type { SessionStore } from "../ports.ts";
+import type { CredentialStore } from "../ports.ts";
 
-export function memoryStore(): SessionStore {
+export function memoryStore(): CredentialStore {
   const map = new Map<string, string>();
   return {
     async read(key) {

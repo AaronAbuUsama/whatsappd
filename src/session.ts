@@ -2,7 +2,7 @@
  * The session orchestrator. Feeds raw socket events through the pure connection
  * state machine, owns the timers the machine cannot (the pairing verdict window
  * and reconnect backoff), drives reconnection, and exposes the public surface:
- * a set of async-iterable streams plus `start`/`send`/`stop`. It makes only
+ * one awaited typed subscription plus `start`/`send`/`stop`. It makes only
  * timing decisions — never protocol ones.
  */
 import pino, { type Logger } from "pino";
@@ -10,31 +10,18 @@ import { assertE164 } from "./errors.ts";
 import { createPacer } from "./pacer.ts";
 import type { MetricEvent, MetricsHook } from "./model/metrics.ts";
 import { initialState, transition, type Input, type MachineCtx } from "./machine.ts";
-import type {
-  ContactUpdate,
-  ConversationSyncBatch,
-  ConnectionEvent,
-  GroupUpdate,
-  InboundMessage,
-  PresenceUpdate,
-  GroupMetadata,
-  Outbound,
-  Status,
-  Update,
-  WaIdentity,
-} from "./model/index.ts";
+import type { GroupMetadata, Outbound, Status, WaIdentity } from "./model/index.ts";
 import type { MessageRef, SendOptions } from "./model/outbound.ts";
 import { isTerminal } from "./model/index.ts";
-import type { AuthStrategy, SessionStore } from "./ports.ts";
+import type { AuthStrategy, CredentialStore } from "./ports.ts";
 import { loadAuth } from "./baileys/authState.ts";
 import { openSocket, type BaileysConn, type RawEvent } from "./baileys/socket.ts";
-import { Channel } from "./stream.ts";
-import { incoming, type IncomingMessage, type Send } from "./incoming.ts";
-
-/** A stream listener; may be async — thrown errors are logged, never fatal. */
-export type Listener<T> = (value: T) => void | Promise<void>;
-/** Removes a {@link Listener} registered through an `onX` method. */
-export type Unsubscribe = () => void;
+import {
+  createSubscriptionDispatcher,
+  SubscriptionHandlerError,
+  type Unsubscribe,
+  type WhatsAppSessionHandlers,
+} from "./subscription.ts";
 
 const QR_FIRST_MS = 60_000;
 const QR_REFRESH_MS = 20_000;
@@ -42,7 +29,7 @@ const QR_REFRESH_MS = 20_000;
 /** Configuration for {@link createSession}. */
 export interface SessionConfig {
   /** Where this session's credentials are persisted. */
-  store: SessionStore;
+  store: CredentialStore;
   /** How this session logs in — {@link qrAuth} or {@link pairingAuth}. */
   auth: AuthStrategy;
   /**
@@ -67,7 +54,7 @@ export interface SessionConfig {
   reconnectMaxMs?: number;
   /**
    * Whether to surface WhatsApp Status/story posts (`status@broadcast`) on the
-   * inbound stream.
+   * message handler.
    *
    * @defaultValue `false`
    */
@@ -87,57 +74,20 @@ export interface SessionConfig {
 }
 
 /**
- * One WhatsApp account's live session: a set of read-only event streams plus
- * the commands that act on the connection. Create one with {@link createSession}
+ * One WhatsApp account's live session: one awaited subscription plus the
+ * commands that act on the connection. Create one with {@link createSession}
  * and call {@link WhatsAppSession.start | start} to connect.
  */
 export interface WhatsAppSession {
-  /** The current connection status (also emitted on {@link connection}). */
+  /** The current connection status. */
   readonly status: Status;
-  /** Connection lifecycle. `phase: "online"` is the settled readiness signal. */
-  readonly connection: AsyncIterable<ConnectionEvent>;
-  /** Incoming messages, normalized into a closed union. */
-  readonly inbound: AsyncIterable<InboundMessage>;
-  /**
-   * Advisory initial-link history batches. Reconnects may emit none; use
-   * `phase: "online"`, not this stream, as the sync-complete/readiness signal.
-   */
-  readonly conversationSync: AsyncIterable<ConversationSyncBatch>;
-  /** Receipts, reactions, edits, and revokes on existing messages. */
-  readonly updates: AsyncIterable<Update>;
-  /** Address-book and profile-metadata updates from contact events. */
-  readonly contacts: AsyncIterable<ContactUpdate>;
-  /** Group metadata and participant updates from group events. */
-  readonly groups: AsyncIterable<GroupUpdate>;
-  /** Ephemeral remote typing/recording/availability signals. */
-  readonly presence: AsyncIterable<PresenceUpdate>;
+  /** Register any subset of handlers and receive one cleanup function. */
+  subscribe(
+    handlers: WhatsAppSessionHandlers,
+    options?: { readonly signal?: AbortSignal },
+  ): Unsubscribe;
 
-  /**
-   * Register a callback for connection-status events. Returns an unsubscribe.
-   * Any number of listeners receive each event; a listener that throws or
-   * rejects is logged and isolated, never fatal to the connection.
-   */
-  onStatus(handler: Listener<Status>): Unsubscribe;
-  /**
-   * Register a callback for inbound messages, each enriched with a bound
-   * {@link IncomingMessage.reply | reply}. Returns an unsubscribe.
-   */
-  onMessage(handler: Listener<IncomingMessage>): Unsubscribe;
-  /** Register a callback for receipts/reactions/edits/revokes. */
-  onUpdate(handler: Listener<Update>): Unsubscribe;
-  /**
-   * Register for advisory initial-link history batches. Reconnects may emit
-   * none; this is not a sync-complete/readiness callback.
-   */
-  onConversationSync(handler: Listener<ConversationSyncBatch>): Unsubscribe;
-  /** Register a callback for address-book and profile-metadata updates. */
-  onContact(handler: Listener<ContactUpdate>): Unsubscribe;
-  /** Register a callback for group metadata and participant updates. */
-  onGroup(handler: Listener<GroupUpdate>): Unsubscribe;
-  /** Register a callback for remote typing/recording/availability signals. */
-  onPresence(handler: Listener<PresenceUpdate>): Unsubscribe;
-
-  /** Connect to WhatsApp and begin emitting on the streams above. */
+  /** Connect to WhatsApp and begin delivering subscribed events. */
   start(): Promise<void>;
   /**
    * Send a message to a chat.
@@ -192,8 +142,8 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *
  * @remarks
  * The returned session is inert until {@link WhatsAppSession.start | start} is
- * called. Consume its streams to observe the connection lifecycle and incoming
- * messages; call its command methods to send and interact.
+ * called. Subscribe to observe live events; call its command methods to send
+ * and interact.
  *
  * @param config - Store, auth strategy, and optional tuning — see
  * {@link SessionConfig}.
@@ -208,11 +158,13 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  *   auth: qrAuth(),
  * });
  *
- * for await (const status of session.connection) {
- *   if (status.phase === "pairing" && status.pairing.step === "challenge_live") {
- *     console.log("scan:", status.pairing.qr ?? status.pairing.code);
- *   }
- * }
+ * session.subscribe({
+ *   connection(status) {
+ *     if (status.phase === "pairing" && status.pairing.step === "challenge_live") {
+ *       console.log("scan:", status.pairing.qr ?? status.pairing.code);
+ *     }
+ *   },
+ * });
  *
  * await session.start();
  * ```
@@ -240,21 +192,13 @@ export function createSession(config: SessionConfig): WhatsAppSession {
   const verdictWindowMs = config.verdictWindowMs ?? 30_000;
   const syncGraceMs = config.syncGraceMs ?? 3_000;
 
-  // A listener that throws or rejects is logged and isolated here — never
-  // allowed to break event delivery or the connection.
-  const onHandlerError = (err: unknown): void => logger.warn({ err }, "event listener threw");
-  const connection = new Channel<ConnectionEvent>(onHandlerError);
-  const inbound = new Channel<InboundMessage>(onHandlerError);
-  const conversationSync = new Channel<ConversationSyncBatch>(onHandlerError);
-  const updates = new Channel<Update>(onHandlerError);
-  const contacts = new Channel<ContactUpdate>(onHandlerError);
-  const groups = new Channel<GroupUpdate>(onHandlerError);
-  const presence = new Channel<PresenceUpdate>(onHandlerError);
-
   let status: Status = initialState;
   let stopped = false;
   let supervisor: Promise<void> | undefined;
   let conn: BaileysConn | undefined;
+  const dispatcher = createSubscriptionDispatcher((to, content, options) =>
+    send(to, content, options),
+  );
   // Test seam: override how the underlying socket is opened (kept off the public
   // SessionConfig type). Defaults to the real openSocket.
   const openSocketImpl = (config as { openSocket?: typeof openSocket }).openSocket ?? openSocket;
@@ -268,6 +212,15 @@ export function createSession(config: SessionConfig): WhatsAppSession {
   // the first history/app-state sync already completed. Fresh post-pairing creds
   // are registered but must still wait for history status.
   let syncTimer: ReturnType<typeof setTimeout> | undefined;
+  let eventPipeline = Promise.resolve();
+  let signalPipelineFailure: (error: unknown) => void = () => {};
+
+  function enqueue(work: () => Promise<void>): Promise<void> {
+    const task = eventPipeline.then(work);
+    eventPipeline = task;
+    void task.catch(signalPipelineFailure);
+    return task;
+  }
 
   async function apply(input: Input): Promise<void> {
     const next = transition(status, input, ctx, Date.now());
@@ -278,16 +231,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     // that exits the moment it sees the event.
     if (next.phase === "logged_out") await store.clear().catch(() => {});
     status = next;
-    connection.push(status);
-    if (isTerminal(status)) {
-      connection.close();
-      inbound.close();
-      conversationSync.close();
-      updates.close();
-      contacts.close();
-      groups.close();
-      presence.close();
-    }
+    await dispatcher.dispatch({ type: "connection", status });
   }
 
   function clearVerdict(): void {
@@ -302,14 +246,16 @@ export function createSession(config: SessionConfig): WhatsAppSession {
 
   function armSync(): void {
     clearSync();
-    syncTimer = setTimeout(() => void apply({ t: "synced" }), syncGraceMs);
+    syncTimer = setTimeout(() => {
+      void enqueue(() => apply({ t: "synced" }));
+    }, syncGraceMs);
   }
 
   function fireVerdict(): void {
     if (verdictFired) return;
     verdictFired = true;
     clearVerdict();
-    void apply({ t: "pairing_rejected" }); // the silent 400 — no event ever came
+    void enqueue(() => apply({ t: "pairing_rejected" })); // the silent 400 — no event ever came
   }
 
   async function handle(ev: RawEvent): Promise<void> {
@@ -360,35 +306,29 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         await apply({ t: "synced" });
         return;
       case "conversation_sync":
-        conversationSync.push(ev.sync);
-        return;
+        return dispatcher.dispatch({ type: "conversation_sync", batch: ev.sync });
       case "message":
         // Status/story posts arrive as ordinary messages on a reserved jid;
         // most consumers don't want them, so drop unless explicitly opted in.
         if (!receiveStatusBroadcast && ev.msg.chatId === "status@broadcast") return;
-        inbound.push(ev.msg);
         emit({ type: "message_in", kind: ev.msg.kind, live: ev.msg.live });
-        return;
+        return dispatcher.dispatch({ type: "message", message: ev.msg });
       case "update":
-        updates.push(ev.update);
         emit({ type: "update_in", kind: ev.update.kind });
-        return;
+        return dispatcher.dispatch({ type: "update", update: ev.update });
       case "contact":
-        contacts.push(ev.contact);
         emit({
           type: "contact_in",
           hasDisplayName: Boolean(ev.contact.displayName),
           identityCount: ev.contact.nativeIds.length,
         });
-        return;
+        return dispatcher.dispatch({ type: "contact", contact: ev.contact });
       case "group":
-        groups.push(ev.group);
         emit({ type: "group_in", kind: ev.group.kind });
-        return;
+        return dispatcher.dispatch({ type: "group", group: ev.group });
       case "presence":
-        presence.push(ev.presence);
         emit({ type: "presence_in", kind: ev.presence.kind });
-        return;
+        return dispatcher.dispatch({ type: "presence", presence: ev.presence });
       case "close":
         clearVerdict();
         clearSync();
@@ -402,32 +342,57 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     verdictFired = false;
     clearVerdict();
     clearSync();
-
-    const auth = await loadAuth(store);
-    initialSyncComplete = auth.initialSyncComplete;
-    conn = await openSocketImpl({
-      auth: { creds: auth.creds, keys: auth.keys },
-      authMethod: config.auth.method,
-      saveCreds: auth.saveCreds,
-      logger,
+    eventPipeline = Promise.resolve();
+    let reportFailure!: (error: unknown) => void;
+    const pipelineFailure = new Promise<unknown>((resolve) => {
+      reportFailure = resolve;
     });
+    signalPipelineFailure = reportFailure;
 
-    // stop() may have run while openSocket() was in flight — conn was still
-    // undefined then, so stop()'s `conn?.end()` was a no-op. Without this guard
-    // the freshly opened socket would leak: the loop below would block on its
-    // events after the session was already stopped. Tear it down and bail.
-    if (stopped) {
-      conn.end();
-      return;
+    try {
+      const auth = await loadAuth(store);
+      initialSyncComplete = auth.initialSyncComplete;
+      conn = await openSocketImpl({
+        auth: { creds: auth.creds, keys: auth.keys },
+        authMethod: config.auth.method,
+        saveCreds: auth.saveCreds,
+        logger,
+      });
+
+      // stop() may have run while openSocket() was in flight — conn was still
+      // undefined then, so stop()'s `conn?.end()` was a no-op. Without this guard
+      // the freshly opened socket would leak: the loop below would block on its
+      // events after the session was already stopped. Tear it down and bail.
+      if (stopped) {
+        conn.end();
+        return;
+      }
+
+      const events = conn.events[Symbol.asyncIterator]();
+      while (true) {
+        const next = await Promise.race([
+          events.next().then((result) => ({ type: "event" as const, result })),
+          pipelineFailure.then((error) => ({ type: "failure" as const, error })),
+        ]);
+        if (next.type === "failure") throw next.error;
+        if (next.result.done) break;
+        await enqueue(() => handle(next.result.value));
+      }
+      await eventPipeline;
+    } finally {
+      signalPipelineFailure = () => {};
     }
-
-    for await (const ev of conn.events) await handle(ev);
   }
 
   async function supervise(): Promise<void> {
     await apply({ t: "start" });
     while (!stopped) {
       await runOnce().catch(async (err) => {
+        if (err instanceof SubscriptionHandlerError) {
+          stopped = true;
+          conn?.end();
+          throw err.cause;
+        }
         logger.error({ err }, "session run errored");
         // Treat an open/run failure as a retryable transport close.
         await apply({
@@ -449,16 +414,9 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       }
       // status is now `connecting` (515 restart or post-backoff) → reopen
     }
-    connection.close();
-    inbound.close();
-    conversationSync.close();
-    updates.close();
-    contacts.close();
-    groups.close();
-    presence.close();
   }
 
-  const send: Send = async (to, msg, opts) => {
+  const send: WhatsAppSession["send"] = async (to, msg, opts) => {
     if (status.phase !== "online" || !conn) throw new Error(`not online (phase: ${status.phase})`);
     const c = conn;
     const ref = await pacer.run(() => c.send(to, msg, opts)); // FIFO + anti-ban gap
@@ -470,20 +428,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     get status() {
       return status;
     },
-    connection,
-    inbound,
-    conversationSync,
-    updates,
-    contacts,
-    groups,
-    presence,
-    onStatus: (handler) => connection.on(handler),
-    onMessage: (handler) => inbound.on((m) => handler(incoming(m, send))),
-    onUpdate: (handler) => updates.on(handler),
-    onConversationSync: (handler) => conversationSync.on(handler),
-    onContact: (handler) => contacts.on(handler),
-    onGroup: (handler) => groups.on(handler),
-    onPresence: (handler) => presence.on(handler),
+    subscribe: (handlers, options) => dispatcher.subscribe(handlers, options),
     // Idempotent: hand back the one running supervisor so stop() can await it.
     start: () => (supervisor ??= supervise()),
     send,

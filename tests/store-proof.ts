@@ -31,9 +31,12 @@ async function connectOnce(label: string): Promise<"online" | "qr-shown"> {
     logger,
   });
   let sawQr = false;
-
-  const done = (async (): Promise<"online" | "qr-shown"> => {
-    for await (const ev of session.connection) {
+  let resolve!: (result: "online" | "qr-shown") => void;
+  const done = new Promise<"online" | "qr-shown">((doneResolve) => {
+    resolve = doneResolve;
+  });
+  session.subscribe({
+    connection(ev) {
       if (ev.phase === "pairing" && ev.pairing.step === "challenge_live" && ev.pairing.qr) {
         sawQr = true;
         console.log(`\n📱 [${label}] Scan in WhatsApp → Linked devices:\n`);
@@ -44,16 +47,15 @@ async function connectOnce(label: string): Promise<"online" | "qr-shown"> {
         console.log(
           `🟢 [${label}] ONLINE${sawQr ? " (after QR)" : " (NO QR — loaded from libsql)"}`,
         );
-        await session.stop();
-        return sawQr ? "qr-shown" : "online";
+        resolve(sawQr ? "qr-shown" : "online");
+        void session.stop();
       }
       if (ev.phase === "logged_out" || ev.phase === "suspended") {
         console.log(`terminal: ${ev.phase} (${ev.reason})`);
-        return "qr-shown";
+        resolve("qr-shown");
       }
-    }
-    return sawQr ? "qr-shown" : "online";
-  })();
+    },
+  });
 
   await session.start();
   return done;

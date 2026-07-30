@@ -1,5 +1,5 @@
 /**
- * Media download-handle factory. Bytes never sit in the event stream — each
+ * Media download-handle factory. Bytes never sit in the event payload — each
  * inbound media message carries a `download()` thunk that fetches and decrypts
  * on demand. The thunk closes over the live socket so expired media is
  * transparently re-uploaded via `updateMediaMessage` (the only way to recover a

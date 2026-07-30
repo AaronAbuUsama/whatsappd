@@ -1,9 +1,9 @@
 import { expect, test } from "./_expect.ts";
 import { loadAuth } from "../src/baileys/authState.ts";
-import type { SessionStore } from "../src/ports.ts";
+import type { CredentialStore } from "../src/ports.ts";
 
-/** In-memory KV store — the smallest possible SessionStore. */
-function memStore(): SessionStore & { dump(): Record<string, string> } {
+/** In-memory KV store — the smallest possible CredentialStore. */
+function memStore(): CredentialStore & { dump(): Record<string, string> } {
   const m = new Map<string, string>();
   return {
     read: (key) => Promise.resolve(m.get(key) ?? null),

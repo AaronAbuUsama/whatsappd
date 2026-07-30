@@ -1,8 +1,8 @@
 /**
  * Updates to messages that already exist — delivery/read receipts, reactions,
- * edits, and revokes. Kept on their own stream, separate from inbound messages,
- * so a consumer can persist messages and mutate them in place without
- * conflating the two. Protocol-free types.
+ * edits, and revokes. Delivered to update handlers separately from inbound
+ * messages, so a consumer can persist messages and mutate them in place
+ * without conflating the two. Protocol-free types.
  *
  * @packageDocumentation
  */
@@ -30,8 +30,8 @@ export type Update =
   /** Someone reacted, or cleared their reaction (`removed: true`, `emoji`
    *  undefined). `by` is the reactor. */
   | (UpdateBase & { kind: "reaction"; emoji?: string; by?: string; removed: boolean })
-  /** A message was edited; `message` is the new content, re-mapped to the same
-   *  shape as anything on the `inbound` stream. */
+  /** A message was edited; `message` is the new content in normalized
+   *  {@link InboundMessage} shape. */
   | (UpdateBase & { kind: "edit"; message: InboundMessage })
   /** A message was deleted for everyone (revoked). `by` is who revoked it. */
   | (UpdateBase & { kind: "revoke"; by?: string });

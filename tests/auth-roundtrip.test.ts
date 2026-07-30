@@ -10,14 +10,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "./_expect.ts";
 import { loadAuth } from "../src/baileys/authState.ts";
-import type { SessionStore } from "../src/ports.ts";
+import type { CredentialStore } from "../src/ports.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import { fileStore } from "../src/stores/file.ts";
 import { libsqlStore } from "../src/stores/libsql.ts";
 
 const b64 = (b: Uint8Array): string => Buffer.from(b).toString("base64");
 
-function roundTrips(name: string, makeStore: () => SessionStore): void {
+function roundTrips(name: string, makeStore: () => CredentialStore): void {
   test(`[${name}] fresh store → unregistered creds`, async () => {
     const auth = await loadAuth(makeStore());
     expect(auth.registered).toBe(false);

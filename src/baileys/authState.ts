@@ -1,6 +1,6 @@
 /**
  * Builds a Baileys auth state (creds + signal key store) backed by the opaque
- * `SessionStore` KV port. This is the ONLY place that knows both Baileys' auth
+ * `CredentialStore` KV port. This is the ONLY place that knows both Baileys' auth
  * shapes AND how they serialize — so no Baileys type ever crosses the port. A
  * direct re-implementation of `useMultiFileAuthState` over `read/write` instead
  * of files; values are BufferJSON strings, keys are `"creds"` / `"type:id"`.
@@ -12,7 +12,7 @@ import {
   type AuthenticationCreds,
   type SignalKeyStore,
 } from "baileys";
-import type { SessionStore } from "../ports.ts";
+import type { CredentialStore } from "../ports.ts";
 
 /** Internal — never exported from the package surface. */
 export interface BaileysAuth {
@@ -26,7 +26,7 @@ export interface BaileysAuth {
 
 const keyOf = (type: string, id: string): string => `${type}:${id}`;
 
-export async function loadAuth(store: SessionStore): Promise<BaileysAuth> {
+export async function loadAuth(store: CredentialStore): Promise<BaileysAuth> {
   const rawCreds = await store.read("creds");
   const creds: AuthenticationCreds = rawCreds
     ? JSON.parse(rawCreds, BufferJSON.reviver)

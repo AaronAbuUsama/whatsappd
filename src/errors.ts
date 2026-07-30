@@ -30,7 +30,7 @@ export type FaultReason =
 /**
  * Which terminal sink a fault lands in — the single source of truth.
  *   "retryable"  → the spine reconnects automatically.
- *   "logged_out" → creds are dead; wipe the SessionStore and re-pair.
+ *   "logged_out" → creds are dead; wipe the CredentialStore and re-pair.
  *   "suspended"  → account/device problem; re-pairing won't help.
  */
 export type Disposition = "retryable" | "logged_out" | "suspended";

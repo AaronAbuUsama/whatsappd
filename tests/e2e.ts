@@ -84,9 +84,8 @@ async function runSuite(): Promise<void> {
   console.log("\n✅ suite sent — verify the chat shows each item in order.\n");
 }
 
-// Connection lifecycle.
-void (async () => {
-  for await (const ev of session.connection) {
+session.subscribe({
+  async connection(ev) {
     console.log(`· phase: ${ev.phase}${ev.phase === "authenticated" ? ` (${ev.sync.step})` : ""}`);
     switch (ev.phase) {
       case "pairing":
@@ -104,13 +103,9 @@ void (async () => {
         console.log(`terminal: ${ev.phase} (${ev.reason})`);
         process.exit(1);
     }
-  }
-})();
-
-// Inbound: echo what arrives, and exercise quote+react+markRead+typing on ping.
-void (async () => {
-  for await (const m of session.inbound) {
-    if (!m.live) continue;
+  },
+  async message(m) {
+    if (!m.live) return;
     const summary = m.kind === "text" ? m.text : `[${m.kind}]`;
     console.log(`📩 ${m.fromMe ? "(me)" : m.from}: ${summary}`);
     if (!m.fromMe && m.kind === "text" && m.text.trim().toLowerCase() === "ping") {
@@ -126,12 +121,8 @@ void (async () => {
       await session.send(m.chatId, { react: { to: refOf(m), emoji: "🏓" } });
       console.log(`  ↪︎ read + typed + replied + reacted to ping`);
     }
-  }
-})();
-
-// Updates: receipts, reactions, edits, revokes on existing messages.
-void (async () => {
-  for await (const u of session.updates) {
+  },
+  update(u) {
     switch (u.kind) {
       case "receipt":
         console.log(`🧾 receipt ${u.status}${u.by ? ` by ${u.by}` : ""} → ${u.ref.id}`);
@@ -150,8 +141,8 @@ void (async () => {
         console.log(`🗑️  revoke${u.by ? ` by ${u.by}` : ""} → ${u.ref.id}`);
         break;
     }
-  }
-})();
+  },
+});
 
 process.on("SIGINT", () => void session.stop().then(() => process.exit(0)));
 await session.start();

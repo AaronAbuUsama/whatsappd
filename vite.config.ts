@@ -5,14 +5,7 @@ export default defineConfig({
     "*": "vp check --fix",
   },
   pack: {
-    entry: [
-      "src/index.ts",
-      "src/stores/memory.ts",
-      "src/stores/libsql.ts",
-      "src/tools/index.ts",
-      "src/adapters/eve.ts",
-      "src/sidecar/index.ts",
-    ],
+    entry: ["src/index.ts", "src/testing.ts"],
     dts: {
       tsgo: true,
     },

@@ -20,10 +20,9 @@ import { assertE164 } from "./errors.ts";
  * `"sender-key:…"`; a value is a serialized string, or `null` to delete the
  * entry.
  *
- * @see {@link memoryStore}, {@link fileStore}, and `libsqlStore` for the
- * built-in implementations.
+ * @see {@link memoryStore} and {@link fileStore} for the built-in implementations.
  */
-export interface SessionStore {
+export interface CredentialStore {
   /** Read one entry, resolving to `null` when the key is absent. */
   read(key: string): Promise<string | null>;
   /**
