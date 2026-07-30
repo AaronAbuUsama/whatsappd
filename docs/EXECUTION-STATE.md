@@ -141,14 +141,16 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Next step
 
-The initial executable frontier contains exactly two tickets:
+Issues #16 and #17 are closed (see the issue #15 re-plan receipt, 2026-07-30).
+Once the #16 salvage PR merges, the executable frontier is:
 
-1. GitHub issue #16 — establish the private live-account proof harness.
-2. GitHub issue #17 — hard-cut the live session to one awaited subscription.
+1. GitHub issue #18 — live history semantics.
+2. GitHub issue #19 — pre-acceptance crash boundary.
 
-Issue #18 opens only after #16. Issue #19 opens only after both #16 and #17.
-Every other issue remains blocked by the edges recorded in its body. Do not
-start a descendant merely because the documentation PR is mechanically green.
+#18 and #19 run in parallel; both feed #20. Issue #10 (sender-identity fix,
+ADR-0001) lands as a pre-#20 fix. Every other issue remains blocked by the
+edges recorded in its body. Do not start a descendant merely because the
+documentation PR is mechanically green.
 
 ## Resuming in a new session
 
