@@ -138,10 +138,10 @@ export interface WhatsAppSession {
    *
    * What live proof established (see `docs/history-semantics.md`):
    *
-   * - iPhone primaries were observed acknowledging delivery of every request
-   *   and answering **none** — a request that produces nothing is the normal
-   *   case there, not an error. Android primaries have been reported to
-   *   answer (upstream Baileys#2452).
+   * - The tested iPhone primary acknowledged delivery of every request and
+   *   answered **none** — treat a request that produces nothing as an
+   *   expected outcome, not an error. Android primaries have been reported
+   *   to answer (upstream Baileys#2452); the platform split is unconfirmed.
    * - If an answer comes, messages arrive later as `conversationSync` batches
    *   with `context.source === "on_demand"` and `context.requestSessionId`
    *   intended to echo this receipt's `requestId` — treat that match as

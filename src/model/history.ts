@@ -21,8 +21,8 @@ export interface HistoryContact {
  *   delivery. WhatsApp sends a linked device only a bounded slice (roughly the
  *   last ~3 months densely, plus fragments); no signal marks it complete.
  * - `on_demand` — an answer to {@link WhatsAppSession.requestHistory}. The
- *   phone may never send one at all: live proof observed iPhone primaries
- *   acknowledging delivery of every request and answering none
+ *   phone may never send one at all: live proof against the tested iPhone
+ *   primary saw every request acknowledged as delivered and none answered
  *   (`docs/history-semantics.md`).
  * - `unknown` — a batch the protocol did not label (e.g. offline catch-up
  *   appends).
@@ -37,10 +37,12 @@ export type ConversationSyncSource =
 export interface ConversationSyncContext {
   readonly source: ConversationSyncSource;
   /**
-   * Whether the protocol flagged this as the last chunk of a sync. NEVER set
-   * on `on_demand` batches (the protocol layer strips it), so it cannot be
-   * used as an exhaustion signal for requested history — nothing can: an
-   * absent batch and an exhausted chat are indistinguishable.
+   * Whether the protocol flagged this as the last chunk of a sync. whatsappd
+   * passes through whatever the protocol delivers; the current upstream layer
+   * strips this flag from on-demand syncs, so expect it absent on `on_demand`
+   * batches. Present or absent, it cannot establish exhaustion of requested
+   * history — nothing can: an absent batch and an exhausted chat are
+   * indistinguishable.
    */
   readonly isLatest?: boolean;
   /** Position of this chunk within its sync, when the protocol provided one. */
