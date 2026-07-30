@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,6 +77,7 @@ export type OpenLiveSession = (input: {
 
 interface ProofHarnessDependencies {
   openLiveSession?: OpenLiveSession;
+  onStaleLockObserved?: () => Promise<void>;
 }
 
 export class LiveAccountClaimedError extends Error {
@@ -119,9 +120,10 @@ async function databaseBundleSha256(file: string): Promise<string | null> {
 async function sqlite(
   file: string,
   statement: string,
-  options: { readonly?: boolean; json?: boolean } = {},
+  options: { readonly?: boolean; json?: boolean; timeout?: number } = {},
 ): Promise<string> {
   const args = [
+    ...(options.timeout ? ["-cmd", `.timeout ${options.timeout}`] : []),
     ...(options.readonly ? ["-readonly"] : []),
     ...(options.json ? ["-json"] : []),
     file,
@@ -133,6 +135,10 @@ async function sqlite(
 
 function identifier(value: string): string {
   return `"${value.replaceAll('"', '""')}"`;
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }
 
 function parseRows(stdout: string): Array<Record<string, unknown>> {
@@ -245,43 +251,51 @@ async function snapshotDatabase(sourceDb: string, snapshotDb: string): Promise<v
 async function acquireLiveAccountLock(
   credentialDb: string,
   account: string,
+  onStaleLockObserved?: () => Promise<void>,
 ): Promise<() => Promise<void>> {
   const canonicalCredentialDb = await canonicalPath(credentialDb);
   const id = createHash("sha256")
     .update(`${canonicalCredentialDb}\0${account}`)
     .digest("hex")
     .slice(0, 32);
-  const lockDir = join(tmpdir(), `whatsappd-live-account-${id}.lock`);
-  const ownerFile = join(lockDir, "owner");
+  const lockDb = join(tmpdir(), "whatsappd-live-account-locks.db");
+  const owner = randomUUID();
+  const execute = (statement: string, json = false): Promise<string> =>
+    sqlite(lockDb, statement, { json, timeout: 5_000 });
+  await execute(
+    "PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS live_account_locks (id TEXT PRIMARY KEY, owner TEXT NOT NULL, pid INTEGER NOT NULL);",
+  );
 
-  const claim = async (): Promise<void> => {
-    await mkdir(lockDir);
-    await writeFile(ownerFile, String(process.pid), { flag: "wx" });
-  };
-  try {
-    await claim();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const owner = Number.parseInt(await readFile(ownerFile, "utf8").catch(() => ""), 10);
-    const hasLiveOwner = Number.isSafeInteger(owner) && owner > 0;
-    try {
-      if (hasLiveOwner) process.kill(owner, 0);
-      if (hasLiveOwner) throw new LiveAccountClaimedError();
-    } catch (ownerError) {
-      if ((ownerError as NodeJS.ErrnoException).code !== "ESRCH") throw ownerError;
+  while (true) {
+    await execute(
+      `INSERT OR IGNORE INTO live_account_locks VALUES (${sqlString(id)}, ${sqlString(owner)}, ${process.pid});`,
+    );
+    const claimed = parseRows(
+      await execute(`SELECT owner, pid FROM live_account_locks WHERE id = ${sqlString(id)};`, true),
+    )[0];
+    if (claimed?.owner === owner) {
+      return async () => {
+        await execute(
+          `DELETE FROM live_account_locks WHERE id = ${sqlString(id)} AND owner = ${sqlString(owner)};`,
+        );
+      };
     }
-    await rm(lockDir, { recursive: true });
+
+    const claimedPid = Number(claimed?.pid);
+    const claimedOwner = typeof claimed?.owner === "string" ? claimed.owner : "";
     try {
-      await claim();
-    } catch (retryError) {
-      if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
+      if (Number.isSafeInteger(claimedPid) && claimedPid > 0) process.kill(claimedPid, 0);
+      if (Number.isSafeInteger(claimedPid) && claimedPid > 0) {
         throw new LiveAccountClaimedError();
       }
-      throw retryError;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     }
+    await onStaleLockObserved?.();
+    await execute(
+      `UPDATE live_account_locks SET owner = ${sqlString(owner)}, pid = ${process.pid} WHERE id = ${sqlString(id)} AND owner = ${sqlString(claimedOwner)};`,
+    );
   }
-
-  return () => rm(lockDir, { recursive: true });
 }
 
 export async function runProofHarness(
@@ -295,7 +309,7 @@ export async function runProofHarness(
     throw new Error("source and credential databases must be different files");
   }
   const release = options.live
-    ? await acquireLiveAccountLock(credentialDb, options.account)
+    ? await acquireLiveAccountLock(credentialDb, options.account, dependencies.onStaleLockObserved)
     : async () => {};
   const cancellation = new AbortController();
   const cancel = (reason: unknown): void => {
