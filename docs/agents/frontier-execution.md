@@ -28,22 +28,23 @@ One issue is one implementation lane, branch, worktree, and pull request.
 5. It works only its assigned issue, satisfies the written acceptance criteria,
    records the required proof, and opens one PR targeting `master`.
 
-## Independent review loop
+## GitHub review loop
 
-The implementing agent must not grade its own work. Once its PR is ready, it
-creates exactly one child review agent named `issue_<number>_review`.
+The implementing agent must not grade its own work and must not create a
+reviewer task or thread. Once its PR is ready, the same implementing agent
+triggers the GitHub Codex review bot and babysits the PR until the bot posts its
+verdict.
 
-The review agent:
+The implementing agent:
 
-- uses the repository Matt Pocock `code-review` skill;
-- reads the issue, architecture invariants, proof contract, full diff, tests,
-  and affected callers;
-- posts its verdict to the PR;
-- returns every actionable finding to the implementing agent.
+- asks the GitHub Codex review bot to review the current immutable PR head;
+- waits for the bot's complete verdict on the PR;
+- returns every actionable finding to its own implementation loop;
+- fixes findings, pushes the new head, and triggers the bot again;
+- repeats until the bot posts a clean verdict for the exact merge candidate.
 
-The same implementer fixes findings and the same reviewer rechecks them. A
-review pass means one complete reviewer verdict over the current PR head, not
-one comment or one finding.
+A review pass means one complete GitHub Codex bot verdict over the current PR
+head, not one comment or one finding.
 
 The hard ceiling is seven complete review passes:
 
@@ -54,8 +55,8 @@ The hard ceiling is seven complete review passes:
 - unresolved actionable findings after pass 7 block the lane and prohibit
   merge.
 
-This nested reviewer is the only delegation an implementing agent may perform.
-It may not claim another issue or create additional workers.
+The implementing agent may not delegate review, claim another issue, or create
+additional workers.
 
 ## Merge gate
 
@@ -63,7 +64,7 @@ A PR may merge only when all of these are true:
 
 - every acceptance criterion is met;
 - the required proof rung has current evidence for the PR head;
-- the independent reviewer has posted a clean verdict;
+- the GitHub Codex review bot has posted a clean verdict for the current head;
 - all actionable review findings are resolved;
 - repository CI is green;
 - the branch is current and mergeable against `master`;
