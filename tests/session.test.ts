@@ -154,10 +154,16 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
   let releaseSocket!: (conn: unknown) => void;
   const socket = new Promise((r) => (releaseSocket = r));
   let ended = false;
+  let endStarted!: () => void;
+  const didStartEnd = new Promise<void>((resolve) => (endStarted = resolve));
+  let releaseEnd!: () => void;
+  const endBarrier = new Promise<void>((resolve) => (releaseEnd = resolve));
 
   const fakeConn = {
-    end: () => {
+    end: async () => {
       ended = true;
+      endStarted();
+      await endBarrier;
     },
     events: (async function* () {})(), // never reached once the guard fires
   };
@@ -177,6 +183,13 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
 
   const stopped = s.stop(); // stop mid-startup
   releaseSocket(fakeConn); // ...and only now does openSocket resolve
+  await didStartEnd;
+  const stoppedBeforeEnd = await Promise.race([
+    stopped.then(() => true),
+    new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+  ]);
+  expect(stoppedBeforeEnd).toBe(false);
+  releaseEnd();
 
   let timer: ReturnType<typeof setTimeout>;
   const outcome = await Promise.race([

@@ -364,7 +364,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       // the freshly opened socket would leak: the loop below would block on its
       // events after the session was already stopped. Tear it down and bail.
       if (stopped) {
-        conn.end();
+        await conn.end();
         return;
       }
 
@@ -390,7 +390,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       await runOnce().catch(async (err) => {
         if (err instanceof SubscriptionHandlerError) {
           stopped = true;
-          conn?.end();
+          await conn?.end();
           throw err.cause;
         }
         logger.error({ err }, "session run errored");
@@ -457,7 +457,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       stopped = true;
       clearVerdict();
       clearSync();
-      conn?.end(); // close → classified intentional → machine → disconnected
+      await conn?.end(); // close → classified intentional → machine → disconnected
       // Wait for the supervisor to finish tearing down (incl. any socket opened
       // after this call) so stop() never returns while a live socket lingers.
       await supervisor;

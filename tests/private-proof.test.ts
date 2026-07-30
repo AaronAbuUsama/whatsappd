@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "./_expect.ts";
 import {
@@ -142,6 +143,34 @@ test("P4 revalidates the executed tree across preparation and both live opens", 
     expect(String(error)).toContain("clean tracked worktree");
     expect(opens).toBe(expectedOpens);
   }
+});
+
+test("P4 pins the proof head across a clean concurrent commit", async () => {
+  const root = await createPrivateFixture();
+  const baseline = process.listenerCount("SIGTERM");
+  let opens = 0;
+  const proof = runPrivateProof("p4", true, {
+    root,
+    openLiveSession: async () => {
+      opens++;
+      return { paired: false };
+    },
+  });
+  while (process.listenerCount("SIGTERM") === baseline) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await writeFile(join(root, "tracked"), "committed during prepare\n");
+  await execFileAsync("git", ["add", "tracked"], { cwd: root });
+  await execFileAsync("git", ["commit", "-qm", "concurrent commit"], { cwd: root });
+
+  let error: unknown;
+  try {
+    await proof;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(String(error)).toContain("same git head");
+  expect(opens).toBe(0);
 });
 
 test("P2 snapshots and restarts the fixed private corpus without changing its source", async () => {
@@ -491,9 +520,10 @@ test("the P4 command requires the exact live-account confirmation", async () => 
 });
 
 test("package scripts expose only the two fixed private proof commands", async () => {
-  const packageJson = JSON.parse(
-    await readFile(join(import.meta.dirname, "..", "package.json"), "utf8"),
-  ) as { scripts: Record<string, string> };
+  const testDir = fileURLToPath(new URL(".", import.meta.url));
+  const packageJson = JSON.parse(await readFile(join(testDir, "..", "package.json"), "utf8")) as {
+    scripts: Record<string, string>;
+  };
 
   expect(packageJson.scripts["proof:p2"]).toBe(
     "node --experimental-strip-types tests/private-proof.ts p2",
@@ -501,4 +531,6 @@ test("package scripts expose only the two fixed private proof commands", async (
   expect(packageJson.scripts["proof:p4"]).toBe(
     "node --experimental-strip-types tests/private-proof.ts p4",
   );
+  const runner = await readFile(join(testDir, "private-proof.ts"), "utf8");
+  expect(runner.includes("import.meta.dirname")).toBe(false);
 });

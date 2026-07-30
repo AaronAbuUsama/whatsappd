@@ -88,7 +88,7 @@ export interface BaileysConn {
   /** The connected account's own identity (jid/pushName/phone), once the socket is open. */
   identity(): WaIdentity | undefined;
   /** Intentional teardown — the resulting close is classified `intentional`. */
-  end(): void;
+  end(): void | Promise<void>;
 }
 
 type MessagesUpsertPayload = BaileysEventMap["messages.upsert"];
@@ -321,7 +321,13 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
     },
   });
 
-  sock.ev.on("creds.update", () => void saveCreds());
+  let credentialWrites = Promise.resolve();
+  let credentialWriteError: unknown;
+  sock.ev.on("creds.update", () => {
+    credentialWrites = credentialWrites.then(saveCreds).catch((error: unknown) => {
+      credentialWriteError ??= error;
+    });
+  });
 
   // Media bytes are pulled on demand via this factory — never buffered here.
   const makeDownload = mediaDownloader(sock, logger);
@@ -438,9 +444,11 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
       const phoneE164 = /^\d+$/.test(digits) ? `+${digits}` : undefined;
       return { jid: u.id, pushName: u.name ?? undefined, phoneE164 };
     },
-    end: () => {
+    end: async () => {
       intentional = true;
       void sock.end(undefined);
+      await credentialWrites;
+      if (credentialWriteError) throw credentialWriteError;
     },
   };
 }

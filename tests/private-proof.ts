@@ -77,13 +77,24 @@ async function databaseHash(file: string): Promise<string> {
   return hash(await sqlite(file, ".dump", true));
 }
 
-async function assertCleanExecutedTree(root: string): Promise<void> {
+async function gitHead(root: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root });
+  return stdout.trim();
+}
+
+async function assertCleanExecutedTree(root: string, expectedHead?: string): Promise<string> {
+  const before = await gitHead(root);
   const { stdout } = await execFileAsync(
     "git",
     ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).proof-receipts/**"],
     { cwd: root },
   );
+  const after = await gitHead(root);
+  if (before !== after || (expectedHead && before !== expectedHead)) {
+    throw new Error("private proof requires the same git head");
+  }
   if (stdout !== "") throw new Error("private proof requires a clean tracked worktree");
+  return before;
 }
 
 async function readConfig(root: string): Promise<PrivateConfig> {
@@ -158,6 +169,7 @@ async function oracle(
 async function prepareProof(
   root: string,
   tier: "P2" | "P4",
+  proofHead: string,
 ): Promise<{ config: PrivateConfig; receipt: ProofReceipt }> {
   const privateDir = join(root, ".proof-private");
   const receiptDir = join(root, ".proof-receipts");
@@ -180,10 +192,9 @@ async function prepareProof(
   if (!snapshotRestarted || sourceChecksumAfter !== sourceChecksumBefore) {
     throw new Error("P2 snapshot restart or source checksum proof failed");
   }
-  const { stdout: head } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: root });
   const receipt: ProofReceipt = {
     nonce: randomUUID(),
-    gitHead: head.trim(),
+    gitHead: proofHead,
     tier,
     sourceChecksumBefore,
     sourceChecksumAfter,
@@ -199,9 +210,10 @@ export async function runPrivateProof(
   confirmed: boolean,
   dependencies: ProofDependencies,
 ): Promise<ProofReceipt> {
-  await assertCleanExecutedTree(dependencies.root);
+  const proofHead = await assertCleanExecutedTree(dependencies.root);
   if (tier === "p2") {
-    const { receipt } = await prepareProof(dependencies.root, "P2");
+    const { receipt } = await prepareProof(dependencies.root, "P2", proofHead);
+    await assertCleanExecutedTree(dependencies.root, proofHead);
     await writeFile(
       join(dependencies.root, ".proof-receipts", "issue16-p2.json"),
       `${JSON.stringify(receipt, null, 2)}\n`,
@@ -227,9 +239,9 @@ export async function runPrivateProof(
   process.once("SIGTERM", cancel);
   // ponytail: crash-stale locks are manual cleanup; add reclamation only if operators need it.
   try {
-    const { config, receipt } = await prepareProof(dependencies.root, "P4");
+    const { config, receipt } = await prepareProof(dependencies.root, "P4", proofHead);
     cancellation.signal.throwIfAborted();
-    await assertCleanExecutedTree(dependencies.root);
+    await assertCleanExecutedTree(dependencies.root, proofHead);
     cancellation.signal.throwIfAborted();
     await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
@@ -238,7 +250,7 @@ export async function runPrivateProof(
       signal: cancellation.signal,
     });
     cancellation.signal.throwIfAborted();
-    await assertCleanExecutedTree(dependencies.root);
+    await assertCleanExecutedTree(dependencies.root, proofHead);
     cancellation.signal.throwIfAborted();
     const reconnect = await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
@@ -253,7 +265,7 @@ export async function runPrivateProof(
       throw new Error("P4 reconnect or source checksum proof failed");
     }
     cancellation.signal.throwIfAborted();
-    await assertCleanExecutedTree(dependencies.root);
+    await assertCleanExecutedTree(dependencies.root, proofHead);
     cancellation.signal.throwIfAborted();
     receipt.reconnected = true;
     const receiptPath = join(dependencies.root, ".proof-receipts", "issue16-p4.json");
@@ -305,6 +317,8 @@ async function openLiveWhatsApp(input: {
     auth: qrAuth(),
     logger: pino({ level: process.env.LOG_LEVEL ?? "silent" }),
   });
+  let teardown: Promise<void> | undefined;
+  const stopSession = (): Promise<void> => (teardown ??= session.stop());
   let paired = false;
   let online = false;
   const unsubscribe = session.subscribe({
@@ -312,7 +326,7 @@ async function openLiveWhatsApp(input: {
       if (event.phase === "pairing") {
         paired = true;
         if (!input.pairingAllowed) {
-          void session.stop();
+          void stopSession();
           throw new Error("P4 reconnect requested pairing");
         }
         if (event.pairing.step === "challenge_live" && event.pairing.qr) {
@@ -322,7 +336,7 @@ async function openLiveWhatsApp(input: {
       }
       if (event.phase === "online") {
         online = true;
-        void session.stop();
+        void stopSession();
       }
       if (event.phase === "logged_out" || event.phase === "suspended") {
         throw new Error(`live WhatsApp proof stopped: ${event.phase}`);
@@ -330,7 +344,7 @@ async function openLiveWhatsApp(input: {
     },
   });
   const stop = (): void => {
-    void session.stop();
+    void stopSession();
   };
   input.signal.addEventListener("abort", stop, { once: true });
   try {
@@ -342,12 +356,13 @@ async function openLiveWhatsApp(input: {
   } finally {
     input.signal.removeEventListener("abort", stop);
     unsubscribe();
+    await stopSession();
   }
 }
 
 async function main(): Promise<void> {
   const receipt = await runPrivateProofCommand(process.argv.slice(2), {
-    root: resolve(import.meta.dirname, ".."),
+    root: fileURLToPath(new URL("..", import.meta.url)),
     openLiveSession: openLiveWhatsApp,
   });
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
