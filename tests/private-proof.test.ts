@@ -1,5 +1,6 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,11 @@ async function sha256(file: string): Promise<string> {
     .digest("hex");
 }
 
+async function databaseSha256(file: string): Promise<string> {
+  const { stdout } = await execFileAsync("sqlite3", ["-readonly", file, ".dump"]);
+  return createHash("sha256").update(stdout).digest("hex");
+}
+
 async function createPrivateFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "whatsappd-private-proof-"));
   const privateDir = join(root, ".proof-private");
@@ -29,8 +35,12 @@ async function createPrivateFixture(): Promise<string> {
   await execFileAsync("git", ["init", "-q"], { cwd: root });
   await execFileAsync("git", ["config", "user.email", "proof@example.invalid"], { cwd: root });
   await execFileAsync("git", ["config", "user.name", "Private Proof"], { cwd: root });
+  await writeFile(
+    join(root, ".gitignore"),
+    ".proof-private/\nsource.db\nsource.db-*\ncredentials.db\ncredentials.db-*\n",
+  );
   await writeFile(join(root, "tracked"), "proof\n");
-  await execFileAsync("git", ["add", "tracked"], { cwd: root });
+  await execFileAsync("git", ["add", ".gitignore", "tracked"], { cwd: root });
   await execFileAsync("git", ["commit", "-qm", "fixture"], { cwd: root });
   await execFileAsync("sqlite3", [
     sourceDb,
@@ -75,6 +85,28 @@ test("a second P4 proof fails before opening WhatsApp", async () => {
   expect(openCount).toBe(2);
 });
 
+test("P4 rejects a dirty executed tree before opening WhatsApp", async () => {
+  const root = await createPrivateFixture();
+  let opens = 0;
+  await writeFile(join(root, "tracked"), "different working copy\n");
+
+  let error: unknown;
+  try {
+    await runPrivateProof("p4", true, {
+      root,
+      openLiveSession: async () => {
+        opens++;
+        return { paired: false };
+      },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(String(error)).toContain("clean tracked worktree");
+  expect(opens).toBe(0);
+});
+
 test("P2 snapshots and restarts the fixed private corpus without changing its source", async () => {
   const root = await createPrivateFixture();
   const privateDir = join(root, ".proof-private");
@@ -96,7 +128,8 @@ test("P2 snapshots and restarts the fixed private corpus without changing its so
     credentialDb,
     `INSERT INTO wa_auth VALUES ('private-account-id', 'creds', '${privateCredential}');`,
   ]);
-  const sourceBefore = await sha256(sourceDb);
+  const sourceFileBefore = await sha256(sourceDb);
+  const sourceDatabaseBefore = await databaseSha256(sourceDb);
 
   const receipt = await runPrivateProof("p2", false, {
     root,
@@ -127,8 +160,8 @@ test("P2 snapshots and restarts the fixed private corpus without changing its so
   );
   expect(retained.tier).toBe("P2");
   expect(retained.gitHead).toBe(gitHead);
-  expect(retained.sourceChecksumBefore).toBe(sourceBefore);
-  expect(retained.sourceChecksumAfter).toBe(sourceBefore);
+  expect(retained.sourceChecksumBefore).toBe(sourceDatabaseBefore);
+  expect(retained.sourceChecksumAfter).toBe(sourceDatabaseBefore);
   expect(retained.snapshotRestarted).toBe(true);
   expect(retained.recordCount).toBe(2);
   expect(retained.orderedIdDigest).toBe(
@@ -152,7 +185,7 @@ test("P2 snapshots and restarts the fixed private corpus without changing its so
     "SELECT COUNT(*) FROM raw_event;",
   ]);
   expect(count.trim()).toBe("2");
-  expect(await sha256(sourceDb)).toBe(sourceBefore);
+  expect(await sha256(sourceDb)).toBe(sourceFileBefore);
 });
 
 test("P4 retains only a sanitized database-backed reconnect receipt", async () => {
@@ -220,6 +253,71 @@ test("P4 retains only a sanitized database-backed reconnect receipt", async () =
   expect(published).not.toContain(sourceDb);
   expect(published).not.toContain(credentialDb);
   expect(published).not.toContain("private-account-id");
+});
+
+test("P4 rejects a WAL-backed logical source change", async () => {
+  const root = await createPrivateFixture();
+  const sourceDb = join(root, "source.db");
+  await execFileAsync("sqlite3", [
+    sourceDb,
+    "INSERT INTO raw_event VALUES ('before', '2026-07-28T10:00:00Z', '{}', 'private');",
+  ]);
+  const reader = spawn("sqlite3", [sourceDb], { stdio: ["pipe", "pipe", "inherit"] });
+  reader.stdin.write(
+    "PRAGMA journal_mode=WAL; BEGIN; SELECT COUNT(*) FROM raw_event; SELECT 'ready';\n",
+  );
+  await once(reader.stdout, "data");
+  const mainFileBefore = await sha256(sourceDb);
+  let opens = 0;
+  let error: unknown;
+  try {
+    await runPrivateProof("p4", true, {
+      root,
+      openLiveSession: async () => {
+        if (++opens === 1) {
+          await execFileAsync("sqlite3", [
+            sourceDb,
+            "INSERT INTO raw_event VALUES ('after', '2026-07-29T10:00:00Z', '{}', 'private');",
+          ]);
+          expect(await sha256(sourceDb)).toBe(mainFileBefore);
+        }
+        return { paired: false };
+      },
+    });
+  } catch (caught) {
+    error = caught;
+  } finally {
+    reader.stdin.end("ROLLBACK;\n.quit\n");
+    await once(reader, "close");
+  }
+
+  expect(String(error)).toContain("source checksum");
+});
+
+test("P4 cancellation during preparation never opens WhatsApp", async () => {
+  const root = await createPrivateFixture();
+  const baseline = process.listenerCount("SIGTERM");
+  let opens = 0;
+  const proof = runPrivateProof("p4", true, {
+    root,
+    openLiveSession: async () => {
+      opens++;
+      return { paired: false };
+    },
+  });
+  while (process.listenerCount("SIGTERM") === baseline) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  process.emit("SIGTERM");
+
+  let error: unknown;
+  try {
+    await proof;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(String(error)).toContain("cancelled");
+  expect(opens).toBe(0);
 });
 
 test("SIGINT and SIGTERM cancel P4 and release the fixed lock", async () => {

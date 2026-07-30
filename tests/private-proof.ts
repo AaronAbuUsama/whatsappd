@@ -67,6 +67,19 @@ async function sqlite(file: string, statement: string, readonly = false): Promis
   return stdout;
 }
 
+async function databaseHash(file: string): Promise<string> {
+  return hash(await sqlite(file, ".dump", true));
+}
+
+async function assertCleanExecutedTree(root: string): Promise<void> {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).proof-receipts/**"],
+    { cwd: root },
+  );
+  if (stdout !== "") throw new Error("private proof requires a clean tracked worktree");
+}
+
 async function readConfig(root: string): Promise<PrivateConfig> {
   const config = JSON.parse(
     await readFile(join(root, ".proof-private", "config.json"), "utf8"),
@@ -145,7 +158,7 @@ async function prepareProof(
   const snapshotDb = join(runDir, "corpus.db");
   const config = await readConfig(root);
   await rm(join(root, ".proof-receipts", `issue16-${tier.toLowerCase()}.json`), { force: true });
-  const sourceChecksumBefore = await fileHash(config.sourceDb);
+  const sourceChecksumBefore = await databaseHash(config.sourceDb);
   await rm(runDir, { recursive: true, force: true });
   await mkdir(runDir, { recursive: true });
   await sqlite(config.sourceDb, `.backup "${snapshotDb.replaceAll('"', '\\"')}"`, true);
@@ -153,7 +166,7 @@ async function prepareProof(
   const beforeRestart = await oracle(snapshotDb);
   const quickCheck = (await sqlite(snapshotDb, "PRAGMA quick_check;", true)).trim();
   const afterRestart = await oracle(snapshotDb);
-  const sourceChecksumAfter = await fileHash(config.sourceDb);
+  const sourceChecksumAfter = await databaseHash(config.sourceDb);
   const snapshotRestarted =
     quickCheck === "ok" && JSON.stringify(beforeRestart) === JSON.stringify(afterRestart);
   if (!snapshotRestarted || sourceChecksumAfter !== sourceChecksumBefore) {
@@ -178,6 +191,7 @@ export async function runPrivateProof(
   confirmed: boolean,
   dependencies: ProofDependencies,
 ): Promise<ProofReceipt> {
+  await assertCleanExecutedTree(dependencies.root);
   if (tier === "p2") {
     const { receipt } = await prepareProof(dependencies.root, "P2");
     await mkdir(join(dependencies.root, ".proof-receipts"), { recursive: true });
@@ -207,17 +221,19 @@ export async function runPrivateProof(
   // ponytail: crash-stale locks are manual cleanup; add reclamation only if operators need it.
   try {
     const { config, receipt } = await prepareProof(dependencies.root, "P4");
+    cancellation.signal.throwIfAborted();
     await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
       account: config.account,
       signal: cancellation.signal,
     });
+    cancellation.signal.throwIfAborted();
     const reconnect = await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
       account: config.account,
       signal: cancellation.signal,
     });
-    receipt.sourceChecksumAfter = await fileHash(config.sourceDb);
+    receipt.sourceChecksumAfter = await databaseHash(config.sourceDb);
     if (reconnect.paired || receipt.sourceChecksumAfter !== receipt.sourceChecksumBefore) {
       throw new Error("P4 reconnect or source checksum proof failed");
     }
@@ -256,6 +272,7 @@ async function openLiveWhatsApp(input: {
   account: string;
   signal: AbortSignal;
 }): Promise<LiveSessionResult> {
+  input.signal.throwIfAborted();
   const [{ createSession }, { qrAuth }, { libsqlStore }, pinoModule, qrcodeModule] =
     await Promise.all([
       import("../src/session.ts"),
@@ -264,6 +281,7 @@ async function openLiveWhatsApp(input: {
       import("pino"),
       import("qrcode-terminal"),
     ]);
+  input.signal.throwIfAborted();
   const session = createSession({
     store: libsqlStore({ url: `file:${input.credentialDb}`, account: input.account }),
     auth: qrAuth(),
@@ -294,6 +312,7 @@ async function openLiveWhatsApp(input: {
   };
   input.signal.addEventListener("abort", stop, { once: true });
   try {
+    input.signal.throwIfAborted();
     await session.start();
     input.signal.throwIfAborted();
     if (!online) throw new Error("live WhatsApp proof ended before reaching online");
