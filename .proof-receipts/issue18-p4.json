@@ -1,0 +1,85 @@
+{
+  "nonce": "e23df292-7777-46e9-b63d-618afac24b14",
+  "gitHead": "b06fa2f415af66069d3cba355c2ac01cb84b809e",
+  "tier": "P4",
+  "observationDbSha256": "0d9921e90d7eedb1c6e24127ea1aed019b07d624c81cd3e939a60fa9653d0633",
+  "recordCount": 2,
+  "batchCount": 2,
+  "requestCount": 5,
+  "distinctMessageIds": 2,
+  "orderedIdDigest": "3ae35c67efba4e091b9f254454dbff0de50ec8f1ea8a0d8ac5c8e97e0615456a",
+  "timestampBounds": {
+    "min": "2026-07-30T21:46:43.000Z",
+    "max": "2026-07-30T21:48:54.000Z"
+  },
+  "requests": [
+    {
+      "requestId": "3EB0210B4E0F304D4A2403",
+      "chatHash": "86641fa8c61d",
+      "anchorMsgHash": "537253b6ae3f90bd",
+      "anchorTimestamp": 1785448003000,
+      "count": 50,
+      "submittedAt": 1785448014682,
+      "correlatedBatches": 0,
+      "correlatedMessages": 0
+    },
+    {
+      "requestId": "3EB0D0E48778327AA3D7EC",
+      "chatHash": "4002298d68cb",
+      "anchorMsgHash": "0ba79ad0e9cc27e5",
+      "anchorTimestamp": 1785448134000,
+      "count": 10,
+      "submittedAt": 1785448140079,
+      "correlatedBatches": 0,
+      "correlatedMessages": 0
+    },
+    {
+      "requestId": "3EB0FB69455111F18ED2F8",
+      "chatHash": "86641fa8c61d",
+      "anchorMsgHash": "537253b6ae3f90bd",
+      "anchorTimestamp": 1785448003000,
+      "count": 50,
+      "submittedAt": 1785448376962,
+      "correlatedBatches": 0,
+      "correlatedMessages": 0
+    },
+    {
+      "requestId": "3EB08590F5B7D21EB4E095",
+      "chatHash": "4002298d68cb",
+      "anchorMsgHash": "0ba79ad0e9cc27e5",
+      "anchorTimestamp": 1785448134000,
+      "count": 25,
+      "submittedAt": 1785449054476,
+      "correlatedBatches": 0,
+      "correlatedMessages": 0
+    },
+    {
+      "requestId": "3EB018F0A60DEC83EBB54E",
+      "chatHash": "4002298d68cb",
+      "anchorMsgHash": "0ba79ad0e9cc27e5",
+      "anchorTimestamp": 1785448134000,
+      "count": 25,
+      "submittedAt": 1785449217597,
+      "correlatedBatches": 0,
+      "correlatedMessages": 0
+    }
+  ],
+  "operatorNotes": [
+    {
+      "at": 1785448353905,
+      "text": "owner policy: sends restricted to TST group, loopback self-chat, +447836603208 only; prior probes to the lid DM were out of policy"
+    },
+    {
+      "at": 1785449053441,
+      "text": "phone-offline scenario start: owner enabled airplane mode; WhatsApp desktop remains linked"
+    },
+    {
+      "at": 1785449216544,
+      "text": "phone-offline retry: airplane mode on AND wifi off confirmed by owner"
+    },
+    {
+      "at": 1785449504016,
+      "text": "phone back online: late peer_msg ack at 22:11:13Z, still no history response"
+    }
+  ]
+}
