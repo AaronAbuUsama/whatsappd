@@ -1,85 +1,47 @@
 {
-  "nonce": "1cd798e8-ffee-4c99-9552-99ab9596260b",
-  "gitHead": "b06fa2f415af66069d3cba355c2ac01cb84b809e",
+  "nonce": "eed156bf-4e57-417e-bbd2-6633c0d59c80",
+  "gitHead": "ea536484f61d21fb3baad53b5f36158666e3827a",
   "tier": "P2",
-  "observationDbSha256": "0d9921e90d7eedb1c6e24127ea1aed019b07d624c81cd3e939a60fa9653d0633",
-  "recordCount": 2,
-  "batchCount": 2,
-  "requestCount": 5,
-  "distinctMessageIds": 2,
-  "orderedIdDigest": "3ae35c67efba4e091b9f254454dbff0de50ec8f1ea8a0d8ac5c8e97e0615456a",
+  "observationDbSha256": "d97fbf70e9697052205453d37d2608be935541ca0201db5578f9773190656cf0",
+  "recordCount": 1,
+  "batchCount": 1,
+  "requestCount": 2,
+  "distinctMessageIds": 1,
+  "orderedIdDigest": "2c222062d058d159b94faeae98789968640d257a8fb30a46e04dd54b46b85c8d",
   "timestampBounds": {
-    "min": "2026-07-30T21:46:43.000Z",
-    "max": "2026-07-30T21:48:54.000Z"
+    "min": "2026-07-30T22:25:24.000Z",
+    "max": "2026-07-30T22:25:24.000Z"
   },
+  "snapshotRestarted": true,
+  "deliveryAckSource": "peer_msg receipt stanzas in the same run's transport debug log",
   "requests": [
     {
-      "requestId": "3EB0210B4E0F304D4A2403",
-      "chatHash": "86641fa8c61d",
-      "anchorMsgHash": "537253b6ae3f90bd",
-      "anchorTimestamp": 1785448003000,
+      "requestId": "3EB00D5D044C9D946A3369",
+      "chatHash": "4002298d68cb",
+      "anchorMsgHash": "670edc79fa111021",
+      "anchorTimestamp": 1785450324000,
       "count": 50,
-      "submittedAt": 1785448014682,
+      "submittedAt": 1785450330642,
+      "deliveryAcksAt": ["2026-07-30T22:25:32.000Z"],
       "correlatedBatches": 0,
       "correlatedMessages": 0
     },
     {
-      "requestId": "3EB0D0E48778327AA3D7EC",
+      "requestId": "3EB0ED5F3B6E3A90413768",
       "chatHash": "4002298d68cb",
-      "anchorMsgHash": "0ba79ad0e9cc27e5",
-      "anchorTimestamp": 1785448134000,
-      "count": 10,
-      "submittedAt": 1785448140079,
-      "correlatedBatches": 0,
-      "correlatedMessages": 0
-    },
-    {
-      "requestId": "3EB0FB69455111F18ED2F8",
-      "chatHash": "86641fa8c61d",
-      "anchorMsgHash": "537253b6ae3f90bd",
-      "anchorTimestamp": 1785448003000,
-      "count": 50,
-      "submittedAt": 1785448376962,
-      "correlatedBatches": 0,
-      "correlatedMessages": 0
-    },
-    {
-      "requestId": "3EB08590F5B7D21EB4E095",
-      "chatHash": "4002298d68cb",
-      "anchorMsgHash": "0ba79ad0e9cc27e5",
-      "anchorTimestamp": 1785448134000,
+      "anchorMsgHash": "670edc79fa111021",
+      "anchorTimestamp": 1785450324000,
       "count": 25,
-      "submittedAt": 1785449054476,
-      "correlatedBatches": 0,
-      "correlatedMessages": 0
-    },
-    {
-      "requestId": "3EB018F0A60DEC83EBB54E",
-      "chatHash": "4002298d68cb",
-      "anchorMsgHash": "0ba79ad0e9cc27e5",
-      "anchorTimestamp": 1785448134000,
-      "count": 25,
-      "submittedAt": 1785449217597,
+      "submittedAt": 1785450334678,
+      "deliveryAcksAt": ["2026-07-30T22:25:36.000Z"],
       "correlatedBatches": 0,
       "correlatedMessages": 0
     }
   ],
   "operatorNotes": [
     {
-      "at": 1785448353905,
-      "text": "owner policy: sends restricted to TST group, loopback self-chat, +447836603208 only; prior probes to the lid DM were out of policy"
-    },
-    {
-      "at": 1785449053441,
-      "text": "phone-offline scenario start: owner enabled airplane mode; WhatsApp desktop remains linked"
-    },
-    {
-      "at": 1785449216544,
-      "text": "phone-offline retry: airplane mode on AND wifi off confirmed by owner"
-    },
-    {
-      "at": 1785449504016,
-      "text": "phone back online: late peer_msg ack at 22:11:13Z, still no history response"
+      "at": 1785450365043,
+      "text": "confirmation run at post-review head: 2 requests (counts 50, 25) on the loopback self-chat, repeated on one anchor; both delivered (peer_msg acks), no response; allowlist refusal verified live. Full 5-request matrix incl. the phone-offline row was recorded earlier today and is preserved in git history at head b06fa2f."
     }
   ]
 }
