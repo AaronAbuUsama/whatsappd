@@ -54,8 +54,11 @@ flow through the same subscription pipeline as every other non-live message.
 
 ### Correlation
 
-`context.requestSessionId` on an on-demand batch matches the `requestId` from
-the submission receipt. This is the only correlation signal.
+`context.requestSessionId` on an on-demand batch is the only correlation
+signal. It carries the phone's `peerDataRequestSessionId` from the history
+notification; whether that echoes the submission `requestId` is the intended
+protocol design but — because no response has ever been observed live (see
+below) — remains an unverified assumption, not a proven contract.
 
 ## What is NOT promised (explicitly unsupported claims)
 
@@ -72,17 +75,46 @@ UI language may therefore say "no older saved messages" and "request sent";
 it may not say "all history loaded", "no more WhatsApp messages", or report a
 delivered count tied to the request (ADR-0010 consequence).
 
-## Proof matrix (P4, live linked phone)
+## The observed reality (P4, live linked phone, 2026-07-30)
 
-Recorded observations — sanitized to hashed identities, counts, and
-timestamps — live in the issue #18 PR receipts. Scenarios:
+The central live finding: **the phone acknowledges receipt of every on-demand
+request and answers none of them.** The full chain was observed on a real
+account (primary: iPhone) with Baileys 7.0.0-rc14, the newest release at the
+time (published 2026-07-29):
 
-| Scenario                          | Observed           |
-| --------------------------------- | ------------------ |
-| Request/result correlation        | _pending live run_ |
-| Protocol request limit (count=50) | _pending live run_ |
-| Boundary inclusivity              | _pending live run_ |
-| Empty result                      | _pending live run_ |
-| Multiple chunks                   | _pending live run_ |
-| Repeated requests                 | _pending live run_ |
-| Phone offline                     | _pending live run_ |
+| Step           | Signal                                                 | Observed                       |
+| -------------- | ------------------------------------------------------ | ------------------------------ |
+| Submission     | `requestHistory` resolves with the request message id  | ✅ every attempt               |
+| Server relay   | ack for the outgoing peer message                      | ✅ every attempt               |
+| Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ every attempt               |
+| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **never** (0 of 4 requests) |
+
+Conditions varied without effect: phone idle vs. WhatsApp foregrounded during
+an active conversation, personal DM vs. self-chat, `count` 50 vs. 10, anchors
+minutes old. This matches the unresolved upstream report
+[WhiskeySockets/Baileys#2452](https://github.com/WhiskeySockets/Baileys/issues/2452)
+(request succeeds, no response; closed stale). The `fetchMessageHistory` code
+path in Baileys master was last touched 2026-05; no fix exists to adopt. iOS
+primaries are the platform most frequently reported as silent.
+
+Because the failing decision runs inside the closed-source phone app after
+confirmed delivery, no client-side change is known to unblock it. Candidate
+follow-up spikes (own research node, not this proof): the companion's
+registered device-props/capabilities, the untried `FULL_HISTORY_SYNC_ON_DEMAND`
+request type, and a request-metadata diff against an official client.
+
+### Proof matrix
+
+| Scenario                          | Observed                                                                                                                                                                                                        |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Request/result correlation        | Receipt id is real (outgoing request message id); zero responses arrived, so id-echo in `peerDataRequestSessionId` remains **unverified live** — it is the documented correlation design, not a proven behavior |
+| Protocol request limit (count=50) | Submission accepts 50 and 10 alike; no response either way — no delivered-count evidence exists                                                                                                                 |
+| Boundary inclusivity              | Unobservable without a response; explicitly unproven                                                                                                                                                            |
+| Empty result                      | Indistinguishable from an unanswered request — this is the strongest argument for never claiming exhaustion                                                                                                     |
+| Multiple chunks                   | Unobservable without a response                                                                                                                                                                                 |
+| Repeated requests                 | Re-submission is accepted and re-delivered (fresh receipt each time); no response to any                                                                                                                        |
+| Phone offline                     | Submission still succeeds; the `peer_msg` delivery ack is the only signal distinguishing delivered from undelivered                                                                                             |
+
+Sanitized observations (hashed identities, counts, digests) are committed as
+`.proof-receipts/issue18-p4.json` / `issue18-p2.json`; the raw observation
+stores stay private.
