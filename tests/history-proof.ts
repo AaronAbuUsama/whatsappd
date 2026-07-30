@@ -390,7 +390,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             showOracle();
             break;
           case "note":
-            insertNote.run(Date.now(), args.join(" "));
+            // Notes end up in committed receipts: strip anything shaped like a
+            // native address (E.164 / long digit runs) before it is stored.
+            insertNote.run(Date.now(), args.join(" ").replace(/\+?\d{7,15}/g, "<redacted>"));
             console.log("noted");
             break;
           case "quit":
@@ -413,6 +415,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   console.log(`lease acquired: ${lease}\nconnecting account "${config.account}"…`);
   rl.prompt();
-  await session.start();
-  releaseLease();
+  try {
+    await session.start();
+  } finally {
+    releaseLease(); // held only while connected — including when start() rejects
+  }
 }

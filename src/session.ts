@@ -133,15 +133,19 @@ export interface WhatsAppSession {
    * This is an explicit, asynchronous protocol request (ADR-0010): resolution
    * means the request was *submitted*, not that the phone received it or that
    * any history exists. Returned messages, if any, arrive later as
-   * `conversationSync` batches whose `context.source` is `"on_demand"`;
-   * `context.requestSessionId` correlates a batch back to the receipt's
-   * `requestId`. No completion, count, or exhaustion signal is promised.
+   * `conversationSync` batches whose `context.source` is `"on_demand"` with
+   * `context.requestSessionId` set. The protocol *intends* that id to echo the
+   * receipt's `requestId`, but the phone may never answer at all and the echo
+   * is not verified live (see `docs/history-semantics.md`) — treat correlation
+   * as best-effort. No completion, count, or exhaustion signal is promised.
    *
    * @param anchor - The oldest known message to page back from: its ref plus
    * its timestamp in epoch milliseconds.
    * @param opts - Optional request size; `count` defaults to 50, the protocol
-   * request maximum — not a guarantee that more messages exist.
-   * @returns A receipt whose `requestId` matches later on-demand batches.
+   * request maximum (ADR-0010) — values outside 1..50 are rejected. Not a
+   * guarantee that more messages exist.
+   * @returns A submission receipt; `requestId` is the outgoing request
+   * message id.
    */
   requestHistory(
     anchor: { readonly ref: MessageRef; readonly timestamp: number },
@@ -509,7 +513,11 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     async requestHistory(anchor, opts) {
       if (status.phase !== "online" || !conn)
         throw new Error(`not online (phase: ${status.phase})`);
-      const requestId = await conn.requestHistory(opts?.count ?? 50, anchor.ref, anchor.timestamp);
+      const count = opts?.count ?? 50;
+      // ADR-0010: 50 is the validated protocol request maximum, not a paging size.
+      if (!Number.isInteger(count) || count < 1 || count > 50)
+        throw new RangeError(`count must be an integer in 1..50, got ${count}`);
+      const requestId = await conn.requestHistory(count, anchor.ref, anchor.timestamp);
       return { requestId };
     },
     identity: () => conn?.identity(),

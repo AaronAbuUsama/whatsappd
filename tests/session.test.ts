@@ -205,6 +205,67 @@ test("requestHistory submits the anchored request and returns the correlation re
   await session.stop();
 });
 
+test("requestHistory rejects counts outside the protocol maximum", async () => {
+  // ADR-0010: 50 is the validated Baileys request maximum. The guard runs
+  // before the phase guard would matter — use an online session.
+  const store = memoryStore();
+  await store.write({
+    creds: JSON.stringify({
+      registered: true,
+      me: { id: "15551234567:1@s.whatsapp.net" },
+      accountSyncCounter: 1,
+    }),
+  });
+  let online!: () => void;
+  const whenOnline = new Promise<void>((r) => (online = r));
+  let emitClose!: () => void;
+  const closed = new Promise<void>((r) => (emitClose = r));
+  const submitted: number[] = [];
+  const fakeConn = {
+    events: (async function* () {
+      yield { t: "open" } as const;
+      await closed;
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    requestHistory: async (count: number) => {
+      submitted.push(count);
+      return "REQ-N";
+    },
+    end: () => {
+      emitClose();
+    },
+  };
+  const session = createSession({
+    store,
+    auth: qrAuth(),
+    syncGraceMs: 1,
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      if (status.phase === "online") online();
+    },
+  });
+  void session.start();
+  await whenOnline;
+
+  const anchor = {
+    ref: { id: "OLDEST1", chatId: "person@s.whatsapp.net", fromMe: false },
+    timestamp: 1_700_000_000_000,
+  };
+  for (const count of [0, -1, 51, 2.5]) {
+    await assert.rejects(session.requestHistory(anchor, { count }), RangeError);
+  }
+  expect((await session.requestHistory(anchor, { count: 1 })).requestId).toBe("REQ-N");
+  expect((await session.requestHistory(anchor, { count: 50 })).requestId).toBe("REQ-N");
+  expect(submitted).toEqual([1, 50]);
+
+  await session.stop();
+});
+
 test("requestHistory before online throws (guarded by phase)", async () => {
   const s = make();
   let threw = false;

@@ -94,8 +94,17 @@ an active conversation, personal DM vs. self-chat, `count` 50/25/10, anchors
 minutes old. This matches the unresolved upstream report
 [WhiskeySockets/Baileys#2452](https://github.com/WhiskeySockets/Baileys/issues/2452)
 (request succeeds, no response; closed stale). The `fetchMessageHistory` code
-path in Baileys master was last touched 2026-05; no fix exists to adopt. iOS
-primaries are the platform most frequently reported as silent.
+path in Baileys master was last touched 2026-05; no fix exists to adopt.
+
+The #2452 thread splits by primary-phone platform: one reporter reproduces
+the silence cleanly on rc-13, while another reports it **working on rc-13
+with an Android primary** — including third-party confirmation that
+`peerDataRequestSessionId` in the response equals the id returned by
+`fetchMessageHistory`, and that responses arrive chunked. That report also
+notes official WhatsApp Web itself caps deep history ("check your phone to
+see older messages"), so even a working on-demand path does not promise
+unbounded backfill. The iOS-vs-Android split is the leading hypothesis for
+the observed silence (tracked with an experiment matrix in issue #50).
 
 Because the failing decision runs inside the closed-source phone app after
 confirmed delivery, no client-side change is known to unblock it. Candidate
