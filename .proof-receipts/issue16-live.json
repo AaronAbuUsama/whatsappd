@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "runId": "ed0e1324-febf-4ed7-a557-17a0c0236384",
-  "generatedAt": "2026-07-30T06:08:12.966Z",
+  "runId": "36893e39-c77e-4821-a6c8-5450bc6e05de",
+  "generatedAt": "2026-07-30T06:19:26.462Z",
   "source": {
     "sha256Before": "b4a9bb47f4b01085bcebac364b9e64cfe7a98703b955e616a4d0e1dca56cc0d3",
     "sha256After": "b4a9bb47f4b01085bcebac364b9e64cfe7a98703b955e616a4d0e1dca56cc0d3",
@@ -10,7 +10,7 @@
   "credentials": {
     "sha256Before": "961a27d6848bd424d33564ae07fd00f63ce5dd5265c5a99a8f4a3f7d6df500c5",
     "sha256AfterSnapshot": "961a27d6848bd424d33564ae07fd00f63ce5dd5265c5a99a8f4a3f7d6df500c5",
-    "sha256AfterRun": "961a27d6848bd424d33564ae07fd00f63ce5dd5265c5a99a8f4a3f7d6df500c5",
+    "sha256AfterRun": "2a90ca85a2d8c2f2df20be9311cb14cc83856b7a586fd615a45eaed96c3acd18",
     "unchangedBySnapshot": true,
     "copied": false
   },
@@ -10862,6 +10862,6 @@
   "live": {
     "requested": true,
     "reconnected": true,
-    "conversationSyncBatches": 0
+    "conversationSyncBatches": 2
   }
 }

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { link, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -116,6 +116,66 @@ test("hard-linked credential names share one live-account lock", async () => {
       {
         sourceDb,
         credentialDb: credentialAlias,
+        account: "proof",
+        runRoot: join(root, "run-2"),
+        receiptPath: join(root, "receipt-2.json"),
+        live: true,
+      },
+      { openLiveSession },
+    );
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error instanceof LiveAccountClaimedError).toBe(true);
+  expect(openCount).toBe(1);
+  finish();
+  await first;
+});
+
+test("credential creation does not change the live-account lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+  const sourceDb = join(root, "source.db");
+  const credentialDb = join(root, "credentials.db");
+  await execFileAsync("sqlite3", [
+    sourceDb,
+    "CREATE TABLE records (id TEXT PRIMARY KEY, created TEXT);",
+  ]);
+
+  let openCount = 0;
+  let markOpened!: () => void;
+  const opened = new Promise<void>((resolve) => (markOpened = resolve));
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => (finish = resolve));
+  const openLiveSession: OpenLiveSession = async () => {
+    openCount++;
+    if (openCount === 1) {
+      await execFileAsync("sqlite3", [credentialDb, "VACUUM;"]);
+      markOpened();
+      await held;
+    }
+    return { reconnected: true, conversationSyncBatches: 0 };
+  };
+
+  const first = runProofHarness(
+    {
+      sourceDb,
+      credentialDb,
+      account: "proof",
+      runRoot: join(root, "run-1"),
+      receiptPath: join(root, "receipt-1.json"),
+      live: true,
+    },
+    { openLiveSession },
+  );
+  await opened;
+
+  let error: unknown;
+  try {
+    await runProofHarness(
+      {
+        sourceDb,
+        credentialDb,
         account: "proof",
         runRoot: join(root, "run-2"),
         receiptPath: join(root, "receipt-2.json"),
@@ -393,12 +453,7 @@ test("concurrent stale-lock reclaimers admit exactly one live session", async ()
   const credentialDb = join(root, "credentials.db");
   await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
   await execFileAsync("sqlite3", [credentialDb, "VACUUM;"]);
-  const canonicalCredentialDb = await realpath(credentialDb);
-  const credentialStats = await stat(canonicalCredentialDb);
-  const id = createHash("sha256")
-    .update(`inode:${credentialStats.dev}:${credentialStats.ino}\0proof`)
-    .digest("hex")
-    .slice(0, 32);
+  const id = createHash("sha256").update("whatsappd-proof-live-account").digest("hex").slice(0, 32);
   await execFileAsync("sqlite3", [
     join(tmpdir(), "whatsappd-live-account-locks.db"),
     `PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS live_account_locks (id TEXT PRIMARY KEY, owner TEXT NOT NULL, pid INTEGER NOT NULL); INSERT INTO live_account_locks VALUES ('${id}', 'stale', 2147483647) ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, pid = excluded.pid;`,

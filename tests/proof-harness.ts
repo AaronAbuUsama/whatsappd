@@ -106,16 +106,6 @@ async function sameFile(left: string, right: string): Promise<boolean> {
   }
 }
 
-async function fileIdentity(file: string): Promise<string> {
-  try {
-    const stats = await stat(file);
-    return `inode:${stats.dev}:${stats.ino}`;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return `path:${file}`;
-    throw error;
-  }
-}
-
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -273,16 +263,9 @@ async function snapshotDatabase(sourceDb: string, snapshotDb: string): Promise<v
 }
 
 async function acquireLiveAccountLock(
-  credentialDb: string,
-  account: string,
   onStaleLockObserved?: () => Promise<void>,
 ): Promise<() => Promise<void>> {
-  const canonicalCredentialDb = await canonicalPath(credentialDb);
-  const credentialIdentity = await fileIdentity(canonicalCredentialDb);
-  const id = createHash("sha256")
-    .update(`${credentialIdentity}\0${account}`)
-    .digest("hex")
-    .slice(0, 32);
+  const id = createHash("sha256").update("whatsappd-proof-live-account").digest("hex").slice(0, 32);
   const lockDb = join(tmpdir(), "whatsappd-live-account-locks.db");
   const owner = randomUUID();
   const execute = (statement: string, json = false): Promise<string> =>
@@ -334,7 +317,7 @@ export async function runProofHarness(
     throw new Error("source and credential databases must be different files");
   }
   const release = options.live
-    ? await acquireLiveAccountLock(credentialDb, options.account, dependencies.onStaleLockObserved)
+    ? await acquireLiveAccountLock(dependencies.onStaleLockObserved)
     : async () => {};
   const cancellation = new AbortController();
   const cancel = (reason: unknown): void => {
