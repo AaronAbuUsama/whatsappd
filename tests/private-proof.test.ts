@@ -107,6 +107,43 @@ test("P4 rejects a dirty executed tree before opening WhatsApp", async () => {
   expect(opens).toBe(0);
 });
 
+test("P4 revalidates the executed tree across preparation and both live opens", async () => {
+  for (const [phase, expectedOpens] of [
+    ["prepare", 0],
+    ["first-open", 1],
+    ["reconnect", 2],
+  ] as const) {
+    const root = await createPrivateFixture();
+    const baseline = process.listenerCount("SIGTERM");
+    let opens = 0;
+    const proof = runPrivateProof("p4", true, {
+      root,
+      openLiveSession: async () => {
+        opens++;
+        if ((phase === "first-open" && opens === 1) || (phase === "reconnect" && opens === 2)) {
+          await writeFile(join(root, "tracked"), `changed during ${phase}\n`);
+        }
+        return { paired: false };
+      },
+    });
+    if (phase === "prepare") {
+      while (process.listenerCount("SIGTERM") === baseline) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      await writeFile(join(root, "tracked"), "changed during prepare\n");
+    }
+
+    let error: unknown;
+    try {
+      await proof;
+    } catch (caught) {
+      error = caught;
+    }
+    expect(String(error)).toContain("clean tracked worktree");
+    expect(opens).toBe(expectedOpens);
+  }
+});
+
 test("P2 snapshots and restarts the fixed private corpus without changing its source", async () => {
   const root = await createPrivateFixture();
   const privateDir = join(root, ".proof-private");

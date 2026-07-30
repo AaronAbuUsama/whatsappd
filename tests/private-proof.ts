@@ -4,6 +4,11 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import pino from "pino";
+import qrcode from "qrcode-terminal";
+import { qrAuth } from "../src/ports.ts";
+import { createSession } from "../src/session.ts";
+import { libsqlStore } from "../src/stores/libsql.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -224,12 +229,16 @@ export async function runPrivateProof(
   try {
     const { config, receipt } = await prepareProof(dependencies.root, "P4");
     cancellation.signal.throwIfAborted();
+    await assertCleanExecutedTree(dependencies.root);
+    cancellation.signal.throwIfAborted();
     await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
       account: config.account,
       pairingAllowed: true,
       signal: cancellation.signal,
     });
+    cancellation.signal.throwIfAborted();
+    await assertCleanExecutedTree(dependencies.root);
     cancellation.signal.throwIfAborted();
     const reconnect = await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
@@ -243,6 +252,8 @@ export async function runPrivateProof(
     if (reconnect.paired || receipt.sourceChecksumAfter !== receipt.sourceChecksumBefore) {
       throw new Error("P4 reconnect or source checksum proof failed");
     }
+    cancellation.signal.throwIfAborted();
+    await assertCleanExecutedTree(dependencies.root);
     cancellation.signal.throwIfAborted();
     receipt.reconnected = true;
     const receiptPath = join(dependencies.root, ".proof-receipts", "issue16-p4.json");
@@ -289,19 +300,10 @@ async function openLiveWhatsApp(input: {
   signal: AbortSignal;
 }): Promise<LiveSessionResult> {
   input.signal.throwIfAborted();
-  const [{ createSession }, { qrAuth }, { libsqlStore }, pinoModule, qrcodeModule] =
-    await Promise.all([
-      import("../src/session.ts"),
-      import("../src/ports.ts"),
-      import("../src/stores/libsql.ts"),
-      import("pino"),
-      import("qrcode-terminal"),
-    ]);
-  input.signal.throwIfAborted();
   const session = createSession({
     store: libsqlStore({ url: `file:${input.credentialDb}`, account: input.account }),
     auth: qrAuth(),
-    logger: pinoModule.default({ level: process.env.LOG_LEVEL ?? "silent" }),
+    logger: pino({ level: process.env.LOG_LEVEL ?? "silent" }),
   });
   let paired = false;
   let online = false;
@@ -315,7 +317,7 @@ async function openLiveWhatsApp(input: {
         }
         if (event.pairing.step === "challenge_live" && event.pairing.qr) {
           console.error("Human action required: scan this QR in WhatsApp > Linked devices.");
-          qrcodeModule.default.generate(event.pairing.qr, { small: true });
+          qrcode.generate(event.pairing.qr, { small: true });
         }
       }
       if (event.phase === "online") {
