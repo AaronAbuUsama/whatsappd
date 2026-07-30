@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -14,6 +14,7 @@ export interface LiveSessionResult {
 export type OpenLiveSession = (input: {
   credentialDb: string;
   account: string;
+  pairingAllowed: boolean;
   signal: AbortSignal;
 }) => Promise<LiveSessionResult>;
 
@@ -154,10 +155,12 @@ async function prepareProof(
   tier: "P2" | "P4",
 ): Promise<{ config: PrivateConfig; receipt: ProofReceipt }> {
   const privateDir = join(root, ".proof-private");
+  const receiptDir = join(root, ".proof-receipts");
   const runDir = join(privateDir, "run");
   const snapshotDb = join(runDir, "corpus.db");
   const config = await readConfig(root);
-  await rm(join(root, ".proof-receipts", `issue16-${tier.toLowerCase()}.json`), { force: true });
+  await mkdir(receiptDir, { recursive: true });
+  await rm(join(receiptDir, `issue16-${tier.toLowerCase()}.json`), { force: true });
   const sourceChecksumBefore = await databaseHash(config.sourceDb);
   await rm(runDir, { recursive: true, force: true });
   await mkdir(runDir, { recursive: true });
@@ -194,7 +197,6 @@ export async function runPrivateProof(
   await assertCleanExecutedTree(dependencies.root);
   if (tier === "p2") {
     const { receipt } = await prepareProof(dependencies.root, "P2");
-    await mkdir(join(dependencies.root, ".proof-receipts"), { recursive: true });
     await writeFile(
       join(dependencies.root, ".proof-receipts", "issue16-p2.json"),
       `${JSON.stringify(receipt, null, 2)}\n`,
@@ -225,24 +227,37 @@ export async function runPrivateProof(
     await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
       account: config.account,
+      pairingAllowed: true,
       signal: cancellation.signal,
     });
     cancellation.signal.throwIfAborted();
     const reconnect = await dependencies.openLiveSession({
       credentialDb: config.credentialDb,
       account: config.account,
+      pairingAllowed: false,
       signal: cancellation.signal,
     });
+    cancellation.signal.throwIfAborted();
     receipt.sourceChecksumAfter = await databaseHash(config.sourceDb);
+    cancellation.signal.throwIfAborted();
     if (reconnect.paired || receipt.sourceChecksumAfter !== receipt.sourceChecksumBefore) {
       throw new Error("P4 reconnect or source checksum proof failed");
     }
+    cancellation.signal.throwIfAborted();
     receipt.reconnected = true;
-    await mkdir(join(dependencies.root, ".proof-receipts"), { recursive: true });
-    await writeFile(
-      join(dependencies.root, ".proof-receipts", "issue16-p4.json"),
-      `${JSON.stringify(receipt, null, 2)}\n`,
-    );
+    const receiptPath = join(dependencies.root, ".proof-receipts", "issue16-p4.json");
+    const pendingReceipt = join(privateDir, "p4-receipt.pending.json");
+    try {
+      await writeFile(pendingReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
+      cancellation.signal.throwIfAborted();
+      await rename(pendingReceipt, receiptPath);
+      cancellation.signal.throwIfAborted();
+    } catch (error) {
+      if (cancellation.signal.aborted) await rm(receiptPath, { force: true });
+      throw error;
+    } finally {
+      await rm(pendingReceipt, { force: true });
+    }
     return receipt;
   } finally {
     process.removeListener("SIGINT", cancel);
@@ -270,6 +285,7 @@ export function runPrivateProofCommand(
 async function openLiveWhatsApp(input: {
   credentialDb: string;
   account: string;
+  pairingAllowed: boolean;
   signal: AbortSignal;
 }): Promise<LiveSessionResult> {
   input.signal.throwIfAborted();
@@ -293,6 +309,10 @@ async function openLiveWhatsApp(input: {
     connection(event) {
       if (event.phase === "pairing") {
         paired = true;
+        if (!input.pairingAllowed) {
+          void session.stop();
+          throw new Error("P4 reconnect requested pairing");
+        }
         if (event.pairing.step === "challenge_live" && event.pairing.qr) {
           console.error("Human action required: scan this QR in WhatsApp > Linked devices.");
           qrcodeModule.default.generate(event.pairing.qr, { small: true });

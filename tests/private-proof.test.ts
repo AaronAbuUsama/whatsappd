@@ -224,10 +224,12 @@ test("P4 retains only a sanitized database-backed reconnect receipt", async () =
   expect(openedWith[0]).toMatchObject({
     credentialDb,
     account: "private-account-id",
+    pairingAllowed: true,
   });
   expect(openedWith[1]).toMatchObject({
     credentialDb,
     account: "private-account-id",
+    pairingAllowed: false,
   });
   expect(receipt).toEqual(retained);
   expect(Object.keys(retained).sort()).toEqual(
@@ -320,16 +322,69 @@ test("P4 cancellation during preparation never opens WhatsApp", async () => {
   expect(opens).toBe(0);
 });
 
+test("P4 cancellation after first open skips reconnect and publication", async () => {
+  const root = await createPrivateFixture();
+  let opens = 0;
+  let error: unknown;
+  try {
+    await runPrivateProof("p4", true, {
+      root,
+      openLiveSession: async () => {
+        if (++opens === 1) queueMicrotask(() => process.emit("SIGTERM"));
+        return { paired: false };
+      },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(String(error)).toContain("cancelled");
+  expect(opens).toBe(1);
+});
+
+test("P4 cancellation after reconnect cannot publish success", async () => {
+  const root = await createPrivateFixture();
+  let opens = 0;
+  const proof = runPrivateProof("p4", true, {
+    root,
+    openLiveSession: async () => {
+      if (++opens === 2) setImmediate(() => process.emit("SIGTERM"));
+      return { paired: false };
+    },
+  });
+
+  let error: unknown;
+  try {
+    await proof;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(String(error)).toContain("cancelled");
+  expect(opens).toBe(2);
+  let retained = true;
+  try {
+    await readFile(join(root, ".proof-receipts", "issue16-p4.json"));
+  } catch {
+    retained = false;
+  }
+  expect(retained).toBe(false);
+});
+
 test("SIGINT and SIGTERM cancel P4 and release the fixed lock", async () => {
   const root = await createPrivateFixture();
-  for (const signalName of ["SIGTERM", "SIGINT"] as const) {
+  for (const [signalName, targetOpen] of [
+    ["SIGTERM", 1],
+    ["SIGINT", 2],
+  ] as const) {
     let opened!: () => void;
     const didOpen = new Promise<void>((resolve) => (opened = resolve));
     let release!: () => void;
     const fallback = new Promise<void>((resolve) => (release = resolve));
+    let opens = 0;
     const proof = runPrivateProof("p4", true, {
       root,
       openLiveSession: async ({ signal }) => {
+        if (++opens < targetOpen) return { paired: false };
         opened();
         await Promise.race([
           new Promise<void>((_resolve, reject) => {
