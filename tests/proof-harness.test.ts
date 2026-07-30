@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { link, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -394,8 +394,9 @@ test("concurrent stale-lock reclaimers admit exactly one live session", async ()
   await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
   await execFileAsync("sqlite3", [credentialDb, "VACUUM;"]);
   const canonicalCredentialDb = await realpath(credentialDb);
+  const credentialStats = await stat(canonicalCredentialDb);
   const id = createHash("sha256")
-    .update(`${canonicalCredentialDb}\0proof`)
+    .update(`inode:${credentialStats.dev}:${credentialStats.ino}\0proof`)
     .digest("hex")
     .slice(0, 32);
   await execFileAsync("sqlite3", [
