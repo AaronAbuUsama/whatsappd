@@ -466,10 +466,23 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       stopped = true;
       clearVerdict();
       clearSync();
-      await conn?.end(); // close → classified intentional → machine → disconnected
-      // Wait for the supervisor to finish tearing down (incl. any socket opened
-      // after this call) so stop() never returns while a live socket lingers.
-      await supervisor;
+      let teardownError: unknown;
+      try {
+        await conn?.end(); // close → classified intentional → machine → disconnected
+      } catch (error) {
+        teardownError = error;
+      }
+      // Always wait for the supervisor to finish tearing down (incl. any socket
+      // opened after this call) so stop() never returns while a live socket
+      // lingers — even when end() rejected above. The supervisor's error wins:
+      // it carries the session's real terminal failure (a subscriber's own
+      // error over a duplicate teardown rejection).
+      try {
+        await supervisor;
+      } catch (error) {
+        teardownError = error;
+      }
+      if (teardownError) throw teardownError;
     },
   };
 }

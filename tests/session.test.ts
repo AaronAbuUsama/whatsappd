@@ -373,6 +373,47 @@ test("a throwing subscriber wins over a rejecting teardown", async () => {
   expect(session.status.phase).toBe("disconnected");
 });
 
+test("stop() still awaits supervisor teardown when conn.end() rejects", async () => {
+  // A failed credential drain makes conn.end() reject inside stop(). stop()
+  // must still wait for the supervisor to wind down — never return (or throw)
+  // while the session is live — and settle the machine at disconnected.
+  const failure = new Error("credential persistence failed");
+  let emitClose!: () => void;
+  const closed = new Promise<void>((resolve) => (emitClose = resolve));
+  let markConsuming!: () => void;
+  const consuming = new Promise<void>((resolve) => (markConsuming = resolve));
+  let supervisorSettled = false;
+  const fakeConn = {
+    events: (async function* () {
+      markConsuming();
+      await closed;
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    end: async () => {
+      emitClose();
+      throw failure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  const started = session.start().then(
+    () => (supervisorSettled = true),
+    () => (supervisorSettled = true),
+  );
+  await consuming; // the session is live and pumping events before we stop it
+  await assert.rejects(session.stop(), failure);
+  expect(supervisorSettled).toBe(true);
+  expect(session.status.phase).toBe("disconnected");
+  await started;
+});
+
 test("returning sessions reach online without conversation-sync batches", async () => {
   const store = memoryStore();
   await store.write({
