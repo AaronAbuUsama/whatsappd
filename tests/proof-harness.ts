@@ -49,7 +49,7 @@ export interface ProofReceipt {
     sha256Before: string | null;
     sha256AfterSnapshot: string | null;
     sha256AfterRun: string | null;
-    unchanged: boolean;
+    unchangedBySnapshot: boolean;
     copied: false;
   };
   snapshot: {
@@ -105,6 +105,7 @@ async function databaseBundleSha256(file: string): Promise<string | null> {
   for (const suffix of ["", "-wal"]) {
     try {
       const bytes = await readFile(`${file}${suffix}`);
+      if (suffix === "-wal" && bytes.length <= 32) continue;
       hash.update(suffix);
       hash.update(bytes);
       found = true;
@@ -251,14 +252,33 @@ async function acquireLiveAccountLock(
     .digest("hex")
     .slice(0, 32);
   const lockDir = join(tmpdir(), `whatsappd-live-account-${id}.lock`);
+  const ownerFile = join(lockDir, "owner");
 
-  try {
+  const claim = async (): Promise<void> => {
     await mkdir(lockDir);
+    await writeFile(ownerFile, String(process.pid), { flag: "wx" });
+  };
+  try {
+    await claim();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new LiveAccountClaimedError();
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const owner = Number.parseInt(await readFile(ownerFile, "utf8").catch(() => ""), 10);
+    const hasLiveOwner = Number.isSafeInteger(owner) && owner > 0;
+    try {
+      if (hasLiveOwner) process.kill(owner, 0);
+      if (hasLiveOwner) throw new LiveAccountClaimedError();
+    } catch (ownerError) {
+      if ((ownerError as NodeJS.ErrnoException).code !== "ESRCH") throw ownerError;
     }
-    throw error;
+    await rm(lockDir, { recursive: true });
+    try {
+      await claim();
+    } catch (retryError) {
+      if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new LiveAccountClaimedError();
+      }
+      throw retryError;
+    }
   }
 
   return () => rm(lockDir, { recursive: true });
@@ -271,6 +291,9 @@ export async function runProofHarness(
   await mkdir(dirname(resolve(options.credentialDb)), { recursive: true });
   const sourceDb = await canonicalPath(options.sourceDb);
   const credentialDb = await canonicalPath(options.credentialDb);
+  if (sourceDb === credentialDb) {
+    throw new Error("source and credential databases must be different files");
+  }
   const release = options.live
     ? await acquireLiveAccountLock(credentialDb, options.account)
     : async () => {};
@@ -305,11 +328,11 @@ export async function runProofHarness(
       "CREATE TABLE __whatsappd_proof_isolation (value INTEGER); INSERT INTO __whatsappd_proof_isolation VALUES (1); DROP TABLE __whatsappd_proof_isolation;",
     );
     const oracle = await buildOracle(snapshotDb);
-    const sourceAfter = await databaseBundleSha256(sourceDb);
+    const sourceAfterSnapshot = await databaseBundleSha256(sourceDb);
     const credentialsAfterSnapshot = await databaseBundleSha256(credentialDb);
     const restartVerified = oracleBeforeRestart.manifestSha256 === oracle.manifestSha256;
     const isolationVerified =
-      sourceAfter === sourceBefore && credentialsAfterSnapshot === credentialsBefore;
+      sourceAfterSnapshot === sourceBefore && credentialsAfterSnapshot === credentialsBefore;
     if (!restartVerified || !isolationVerified) {
       throw new Error("snapshot restart or isolation verification failed");
     }
@@ -322,20 +345,22 @@ export async function runProofHarness(
           signal: cancellation.signal,
         })
       : undefined;
+    const sourceAfterRun = await databaseBundleSha256(sourceDb);
+    const credentialsAfterRun = await databaseBundleSha256(credentialDb);
     const receipt: ProofReceipt = {
       version: 1,
       runId: randomUUID(),
       generatedAt: new Date().toISOString(),
       source: {
         sha256Before: sourceBefore,
-        sha256After: sourceAfter!,
-        unchanged: sourceBefore === sourceAfter,
+        sha256After: sourceAfterRun!,
+        unchanged: sourceBefore === sourceAfterRun,
       },
       credentials: {
         sha256Before: credentialsBefore,
         sha256AfterSnapshot: credentialsAfterSnapshot,
-        sha256AfterRun: await databaseBundleSha256(credentialDb),
-        unchanged: credentialsBefore === credentialsAfterSnapshot,
+        sha256AfterRun: credentialsAfterRun,
+        unchangedBySnapshot: credentialsBefore === credentialsAfterSnapshot,
         copied: false,
       },
       snapshot: {
@@ -388,12 +413,7 @@ async function openLiveWhatsApp(input: {
     });
     let paired = false;
     let conversationSyncBatches = 0;
-    let resolve!: (result: { paired: boolean; conversationSyncBatches: number }) => void;
-    const done = new Promise<{ paired: boolean; conversationSyncBatches: number }>(
-      (doneResolve) => {
-        resolve = doneResolve;
-      },
-    );
+    let result: { paired: boolean; conversationSyncBatches: number } | undefined;
     const unsubscribe = session.subscribe({
       conversationSync() {
         conversationSyncBatches++;
@@ -409,7 +429,7 @@ async function openLiveWhatsApp(input: {
           }
         }
         if (event.phase === "online") {
-          resolve({ paired, conversationSyncBatches });
+          result = { paired, conversationSyncBatches };
           void session.stop();
         }
         if (event.phase === "logged_out" || event.phase === "suspended") {
@@ -424,7 +444,9 @@ async function openLiveWhatsApp(input: {
 
     try {
       await session.start();
-      return await done;
+      input.signal.throwIfAborted();
+      if (!result) throw new Error("live WhatsApp proof ended before reconnect");
+      return result;
     } catch (error) {
       if (input.signal.aborted) throw input.signal.reason;
       throw error;

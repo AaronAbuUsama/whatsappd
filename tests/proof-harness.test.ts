@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -100,6 +100,7 @@ test("a snapshot-only run leaves disposable P2 evidence and a sanitized receipt"
   ]);
   const sourceBefore = await sha256(sourceDb);
   const credentialsBefore = await sha256(credentialDb);
+  await writeFile(`${sourceDb}-wal`, "");
 
   const receipt = await runProofHarness(
     {
@@ -121,7 +122,8 @@ test("a snapshot-only run leaves disposable P2 evidence and a sanitized receipt"
 
   expect(receipt).toEqual(retainedReceipt);
   expect(receipt.source.unchanged).toBe(true);
-  expect(receipt.credentials.unchanged).toBe(true);
+  expect(receipt.source.sha256Before).toBe(sourceBefore);
+  expect(receipt.credentials.unchangedBySnapshot).toBe(true);
   expect(receipt.snapshot.restartVerified).toBe(true);
   expect(receipt.snapshot.isolationVerified).toBe(true);
   expect(receipt.oracle.tables[0]?.count).toBe(1);
@@ -136,6 +138,52 @@ test("a snapshot-only run leaves disposable P2 evidence and a sanitized receipt"
   await rm(runRoot, { recursive: true });
   expect(await sha256(sourceDb)).toBe(sourceBefore);
   expect(await sha256(credentialDb)).toBe(credentialsBefore);
+});
+
+test("source and credential databases must not alias", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+  const database = join(root, "shared.db");
+  await execFileAsync("sqlite3", [database, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
+
+  let error: unknown;
+  try {
+    await runProofHarness({
+      sourceDb: database,
+      credentialDb: database,
+      account: "proof",
+      runRoot: join(root, "run"),
+      receiptPath: join(root, "receipt.json"),
+      live: false,
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  expect(String(error)).toContain("must be different files");
+});
+
+test("a live run reports source mutation after the snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+  const sourceDb = join(root, "source.db");
+  const credentialDb = join(root, "credentials.db");
+  await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
+
+  const receipt = await runProofHarness(
+    {
+      sourceDb,
+      credentialDb,
+      account: "proof",
+      runRoot: join(root, "run"),
+      receiptPath: join(root, "receipt.json"),
+      live: true,
+    },
+    {
+      openLiveSession: async () => {
+        await execFileAsync("sqlite3", [sourceDb, "INSERT INTO records VALUES ('changed');"]);
+        return { reconnected: true, conversationSyncBatches: 0 };
+      },
+    },
+  );
+  expect(receipt.source.unchanged).toBe(false);
 });
 
 test("the proof-harness command is hermetic unless live mode is explicitly confirmed", async () => {
@@ -238,6 +286,36 @@ test("cancelling a live proof releases the machine-wide account lock", async () 
     },
   );
   expect(resumed.live).toEqual({
+    requested: true,
+    reconnected: true,
+    conversationSyncBatches: 0,
+  });
+});
+
+test("a dead live-account owner is reclaimed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+  const sourceDb = join(root, "source.db");
+  const credentialDb = join(root, "credentials.db");
+  await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
+  const id = createHash("sha256").update(`${credentialDb}\0proof`).digest("hex").slice(0, 32);
+  const lockDir = join(tmpdir(), `whatsappd-live-account-${id}.lock`);
+  await mkdir(lockDir);
+  await writeFile(join(lockDir, "owner"), "2147483647");
+
+  const receipt = await runProofHarness(
+    {
+      sourceDb,
+      credentialDb,
+      account: "proof",
+      runRoot: join(root, "run"),
+      receiptPath: join(root, "receipt.json"),
+      live: true,
+    },
+    {
+      openLiveSession: async () => ({ reconnected: true, conversationSyncBatches: 0 }),
+    },
+  );
+  expect(receipt.live).toEqual({
     requested: true,
     reconnected: true,
     conversationSyncBatches: 0,
