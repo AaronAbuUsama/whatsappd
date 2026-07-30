@@ -45,7 +45,7 @@ test("a second live proof fails before opening WhatsApp", async () => {
       receiptPath: join(root, "receipt-1.json"),
       live: true,
     },
-    { openLiveSession },
+    { openLiveSession, liveAccountLockDb: join(root, "locks.db") },
   );
   await opened;
 
@@ -60,7 +60,7 @@ test("a second live proof fails before opening WhatsApp", async () => {
         receiptPath: join(root, "receipt-2.json"),
         live: true,
       },
-      { openLiveSession },
+      { openLiveSession, liveAccountLockDb: join(root, "locks.db") },
     );
   } catch (caught) {
     error = caught;
@@ -106,7 +106,7 @@ test("hard-linked credential names share one live-account lock", async () => {
       receiptPath: join(root, "receipt-1.json"),
       live: true,
     },
-    { openLiveSession },
+    { openLiveSession, liveAccountLockDb: join(root, "locks.db") },
   );
   await opened;
 
@@ -121,7 +121,7 @@ test("hard-linked credential names share one live-account lock", async () => {
         receiptPath: join(root, "receipt-2.json"),
         live: true,
       },
-      { openLiveSession },
+      { openLiveSession, liveAccountLockDb: join(root, "locks.db") },
     );
   } catch (caught) {
     error = caught;
@@ -166,7 +166,7 @@ test("credential creation does not change the live-account lock", async () => {
       receiptPath: join(root, "receipt-1.json"),
       live: true,
     },
-    { openLiveSession },
+    { openLiveSession, liveAccountLockDb: join(root, "locks.db") },
   );
   await opened;
 
@@ -181,7 +181,7 @@ test("credential creation does not change the live-account lock", async () => {
         receiptPath: join(root, "receipt-2.json"),
         live: true,
       },
-      { openLiveSession },
+      { openLiveSession, liveAccountLockDb: join(root, "locks.db") },
     );
   } catch (caught) {
     error = caught;
@@ -302,6 +302,7 @@ test("hard-linked source and credential databases must not alias", async () => {
         live: true,
       },
       {
+        liveAccountLockDb: join(root, "locks.db"),
         openLiveSession: async () => {
           openCount++;
           return { reconnected: true, conversationSyncBatches: 0 };
@@ -314,6 +315,156 @@ test("hard-linked source and credential databases must not alias", async () => {
 
   expect(String(error)).toContain("must be different files");
   expect(openCount).toBe(0);
+});
+
+test("receipt output cannot alias any protected proof path", async () => {
+  for (const target of [
+    "source",
+    "credentials",
+    "run-root",
+    "data",
+    "media",
+    "snapshot",
+    "inside-run-root",
+  ]) {
+    const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+    const sourceDb = join(root, "source.db");
+    const credentialDb = join(root, "credentials.db");
+    const runRoot = join(root, "run");
+    await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
+    const receiptPath = {
+      source: sourceDb,
+      credentials: credentialDb,
+      "run-root": runRoot,
+      data: join(runRoot, "data"),
+      media: join(runRoot, "media"),
+      snapshot: join(runRoot, "data", "corpus.db"),
+      "inside-run-root": join(runRoot, "retained-receipt.json"),
+    }[target]!;
+    let openCount = 0;
+    let error: unknown;
+
+    try {
+      await runProofHarness(
+        {
+          sourceDb,
+          credentialDb,
+          account: "proof",
+          runRoot,
+          receiptPath,
+          live: true,
+        },
+        {
+          liveAccountLockDb: join(root, "locks.db"),
+          openLiveSession: async () => {
+            openCount++;
+            return { reconnected: true, conversationSyncBatches: 0 };
+          },
+        },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(String(error)).toContain("receipt path must be separate");
+    expect(openCount).toBe(0);
+  }
+});
+
+test("an existing receipt fails before live side effects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+  const sourceDb = join(root, "source.db");
+  const credentialDb = join(root, "credentials.db");
+  const receiptPath = join(root, "receipt.json");
+  await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
+  await writeFile(receiptPath, "existing receipt");
+  let openCount = 0;
+  let error: unknown;
+
+  try {
+    await runProofHarness(
+      {
+        sourceDb,
+        credentialDb,
+        account: "proof",
+        runRoot: join(root, "run"),
+        receiptPath,
+        live: true,
+      },
+      {
+        liveAccountLockDb: join(root, "locks.db"),
+        openLiveSession: async () => {
+          openCount++;
+          return { reconnected: true, conversationSyncBatches: 0 };
+        },
+      },
+    );
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(String(error)).toContain("EEXIST");
+  expect(openCount).toBe(0);
+  expect(await readFile(receiptPath, "utf8")).toBe("existing receipt");
+});
+
+test("a failed live run removes its receipt reservation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+  const sourceDb = join(root, "source.db");
+  const credentialDb = join(root, "credentials.db");
+  const receiptPath = join(root, "receipt.json");
+  const lockDb = join(root, "locks.db");
+  await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
+
+  let error: unknown;
+  try {
+    await runProofHarness(
+      {
+        sourceDb,
+        credentialDb,
+        account: "proof",
+        runRoot: join(root, "failed-run"),
+        receiptPath,
+        live: true,
+      },
+      {
+        liveAccountLockDb: lockDb,
+        openLiveSession: async () => {
+          throw new Error("injected live failure");
+        },
+      },
+    );
+  } catch (caught) {
+    error = caught;
+  }
+  expect(String(error)).toContain("injected live failure");
+  let receiptMissing = false;
+  try {
+    await readFile(receiptPath);
+  } catch (readError) {
+    receiptMissing = (readError as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  expect(receiptMissing).toBe(true);
+
+  const retry = await runProofHarness(
+    {
+      sourceDb,
+      credentialDb,
+      account: "proof",
+      runRoot: join(root, "retry-run"),
+      receiptPath,
+      live: true,
+    },
+    {
+      liveAccountLockDb: lockDb,
+      openLiveSession: async () => ({ reconnected: true, conversationSyncBatches: 0 }),
+    },
+  );
+  expect(retry.live).toEqual({
+    requested: true,
+    reconnected: true,
+    conversationSyncBatches: 0,
+  });
 });
 
 test("a live run reports source mutation after the snapshot", async () => {
@@ -332,6 +483,7 @@ test("a live run reports source mutation after the snapshot", async () => {
       live: true,
     },
     {
+      liveAccountLockDb: join(root, "locks.db"),
       openLiveSession: async () => {
         await execFileAsync("sqlite3", [sourceDb, "INSERT INTO records VALUES ('changed');"]);
         return { reconnected: true, conversationSyncBatches: 0 };
@@ -409,6 +561,7 @@ test("cancelling a live proof releases the machine-wide account lock", async () 
         signal: abort.signal,
       } as never,
       {
+        liveAccountLockDb: join(root, "locks.db"),
         openLiveSession: async (input) => {
           opened();
           const signal = (input as typeof input & { signal: AbortSignal }).signal;
@@ -437,6 +590,7 @@ test("cancelling a live proof releases the machine-wide account lock", async () 
       live: true,
     },
     {
+      liveAccountLockDb: join(root, "locks.db"),
       openLiveSession: async () => ({ reconnected: true, conversationSyncBatches: 0 }),
     },
   );
@@ -453,9 +607,10 @@ test("concurrent stale-lock reclaimers admit exactly one live session", async ()
   const credentialDb = join(root, "credentials.db");
   await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
   await execFileAsync("sqlite3", [credentialDb, "VACUUM;"]);
+  const lockDb = join(root, "locks.db");
   const id = createHash("sha256").update("whatsappd-proof-live-account").digest("hex").slice(0, 32);
   await execFileAsync("sqlite3", [
-    join(tmpdir(), "whatsappd-live-account-locks.db"),
+    lockDb,
     `PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS live_account_locks (id TEXT PRIMARY KEY, owner TEXT NOT NULL, pid INTEGER NOT NULL); INSERT INTO live_account_locks VALUES ('${id}', 'stale', 2147483647) ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, pid = excluded.pid;`,
   ]);
 
@@ -488,7 +643,7 @@ test("concurrent stale-lock reclaimers admit exactly one live session", async ()
         receiptPath: join(root, `receipt-${name}.json`),
         live: true,
       },
-      { openLiveSession, onStaleLockObserved },
+      { openLiveSession, onStaleLockObserved, liveAccountLockDb: lockDb },
     ),
   );
   const settled = Promise.allSettled(attempts);

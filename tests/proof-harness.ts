@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -78,6 +78,7 @@ export type OpenLiveSession = (input: {
 interface ProofHarnessDependencies {
   openLiveSession?: OpenLiveSession;
   onStaleLockObserved?: () => Promise<void>;
+  liveAccountLockDb?: string;
 }
 
 export class LiveAccountClaimedError extends Error {
@@ -91,8 +92,11 @@ async function canonicalPath(file: string): Promise<string> {
   const absolute = resolve(file);
   try {
     return await realpath(absolute);
-  } catch {
-    return join(await realpath(dirname(absolute)), basename(absolute));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parent = dirname(absolute);
+    if (parent === absolute) return absolute;
+    return join(await canonicalPath(parent), basename(absolute));
   }
 }
 
@@ -104,6 +108,11 @@ async function sameFile(left: string, right: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+}
+
+function isWithin(parent: string, candidate: string): boolean {
+  const path = relative(parent, candidate);
+  return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
 function sha256(value: string | Uint8Array): string {
@@ -263,10 +272,10 @@ async function snapshotDatabase(sourceDb: string, snapshotDb: string): Promise<v
 }
 
 async function acquireLiveAccountLock(
+  lockDb: string,
   onStaleLockObserved?: () => Promise<void>,
 ): Promise<() => Promise<void>> {
   const id = createHash("sha256").update("whatsappd-proof-live-account").digest("hex").slice(0, 32);
-  const lockDb = join(tmpdir(), "whatsappd-live-account-locks.db");
   const owner = randomUUID();
   const execute = (statement: string, json = false): Promise<string> =>
     sqlite(lockDb, statement, { json, timeout: 5_000 });
@@ -310,15 +319,39 @@ export async function runProofHarness(
   options: ProofHarnessOptions,
   dependencies: ProofHarnessDependencies = {},
 ): Promise<ProofReceipt> {
-  await mkdir(dirname(resolve(options.credentialDb)), { recursive: true });
   const sourceDb = await canonicalPath(options.sourceDb);
   const credentialDb = await canonicalPath(options.credentialDb);
   if (sourceDb === credentialDb || (await sameFile(sourceDb, credentialDb))) {
     throw new Error("source and credential databases must be different files");
   }
-  const release = options.live
-    ? await acquireLiveAccountLock(dependencies.onStaleLockObserved)
-    : async () => {};
+  const runRoot = await canonicalPath(options.runRoot);
+  const receiptPath = await canonicalPath(options.receiptPath);
+  const dataDir = join(runRoot, "data");
+  const mediaDir = join(runRoot, "media");
+  const snapshotDb = join(dataDir, "corpus.db");
+  const protectedPaths = [
+    { name: "source database", path: sourceDb },
+    { name: "credential database", path: credentialDb },
+    { name: "run root", path: runRoot },
+    { name: "data store", path: dataDir },
+    { name: "media store", path: mediaDir },
+    { name: "snapshot database", path: snapshotDb },
+  ];
+  for (const protectedPath of protectedPaths) {
+    if (receiptPath === protectedPath.path || (await sameFile(receiptPath, protectedPath.path))) {
+      throw new Error(`receipt path must be separate from ${protectedPath.name}`);
+    }
+  }
+  if (isWithin(runRoot, receiptPath)) {
+    throw new Error("receipt path must be separate from run root");
+  }
+
+  await mkdir(dirname(credentialDb), { recursive: true });
+  await mkdir(dirname(receiptPath), { recursive: true });
+  await writeFile(receiptPath, "", { flag: "wx" });
+  const receiptTemp = join(dirname(receiptPath), `.${basename(receiptPath)}.${randomUUID()}.tmp`);
+  let published = false;
+  let release = async (): Promise<void> => {};
   const cancellation = new AbortController();
   const cancel = (reason: unknown): void => {
     if (!cancellation.signal.aborted) cancellation.abort(reason);
@@ -331,17 +364,20 @@ export async function runProofHarness(
     else options.signal?.addEventListener("abort", onExternalAbort, { once: true });
   }
   try {
+    if (options.live) {
+      release = await acquireLiveAccountLock(
+        dependencies.liveAccountLockDb ?? join(tmpdir(), "whatsappd-live-account-locks.db"),
+        dependencies.onStaleLockObserved,
+      );
+    }
     const sourceBefore = await databaseBundleSha256(sourceDb);
     if (sourceBefore === null) throw new Error("source database does not exist");
     const credentialsBefore = await databaseBundleSha256(credentialDb);
 
-    await mkdir(dirname(resolve(options.runRoot)), { recursive: true });
-    await mkdir(resolve(options.runRoot));
-    const dataDir = join(resolve(options.runRoot), "data");
-    const mediaDir = join(resolve(options.runRoot), "media");
+    await mkdir(dirname(runRoot), { recursive: true });
+    await mkdir(runRoot);
     await mkdir(dataDir);
     await mkdir(mediaDir);
-    const snapshotDb = join(dataDir, "corpus.db");
     await snapshotDatabase(sourceDb, snapshotDb);
 
     const oracleBeforeRestart = await buildOracle(snapshotDb, options.account);
@@ -391,22 +427,28 @@ export async function runProofHarness(
         isolationVerified,
       },
       stores: {
-        dataStoreId: sha256(`whatsappd-proof-data\0${options.runRoot}`),
-        mediaStoreId: sha256(`whatsappd-proof-media\0${options.runRoot}`),
+        dataStoreId: sha256(`whatsappd-proof-data\0${runRoot}`),
+        mediaStoreId: sha256(`whatsappd-proof-media\0${runRoot}`),
         disposable: true,
       },
       oracle,
       live: liveResult ? { requested: true, ...liveResult } : { requested: false },
     };
-    await mkdir(dirname(resolve(options.receiptPath)), { recursive: true });
-    await writeFile(resolve(options.receiptPath), `${JSON.stringify(receipt, null, 2)}\n`, {
+    await writeFile(receiptTemp, `${JSON.stringify(receipt, null, 2)}\n`, {
       flag: "wx",
     });
+    await rename(receiptTemp, receiptPath);
+    published = true;
     return receipt;
   } finally {
     process.removeListener("SIGINT", onInterrupt);
     options.signal?.removeEventListener("abort", onExternalAbort);
-    await release();
+    try {
+      await release();
+    } finally {
+      await rm(receiptTemp, { force: true });
+      if (!published) await rm(receiptPath, { force: true });
+    }
   }
 }
 
