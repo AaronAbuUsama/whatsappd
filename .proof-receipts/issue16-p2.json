@@ -1,0 +1,16 @@
+{
+  "nonce": "c29b0d40-b18d-43b5-a98d-4d2d55022c90",
+  "gitHead": "0c9def415c593d28229564c4409ea4c3b99f9366",
+  "tier": "P2",
+  "sourceChecksumBefore": "61cacadff5cc1ec7a8311af9cf66e53f25cb47e8d456af1a9d11d86787cec074",
+  "sourceChecksumAfter": "61cacadff5cc1ec7a8311af9cf66e53f25cb47e8d456af1a9d11d86787cec074",
+  "snapshotChecksum": "2a9e3e58bbd7b4b5ae774ce9f675181b1cdd14d99363cd8ed56b887d3dc5ef0f",
+  "recordCount": 10796,
+  "orderedIdDigest": "2ff1f24cee6a6b53947cdbf5985c0816acf4a7b89370662b2ea36d482f0a4697",
+  "timestampBounds": {
+    "min": null,
+    "max": "2026-07-29 15:33:15.000Z"
+  },
+  "revisionBounds": null,
+  "snapshotRestarted": true
+}

@@ -154,10 +154,16 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
   let releaseSocket!: (conn: unknown) => void;
   const socket = new Promise((r) => (releaseSocket = r));
   let ended = false;
+  let endStarted!: () => void;
+  const didStartEnd = new Promise<void>((resolve) => (endStarted = resolve));
+  let releaseEnd!: () => void;
+  const endBarrier = new Promise<void>((resolve) => (releaseEnd = resolve));
 
   const fakeConn = {
-    end: () => {
+    end: async () => {
       ended = true;
+      endStarted();
+      await endBarrier;
     },
     events: (async function* () {})(), // never reached once the guard fires
   };
@@ -177,6 +183,13 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
 
   const stopped = s.stop(); // stop mid-startup
   releaseSocket(fakeConn); // ...and only now does openSocket resolve
+  await didStartEnd;
+  const stoppedBeforeEnd = await Promise.race([
+    stopped.then(() => true),
+    new Promise<false>((resolve) => setImmediate(() => resolve(false))),
+  ]);
+  expect(stoppedBeforeEnd).toBe(false);
+  releaseEnd();
 
   let timer: ReturnType<typeof setTimeout>;
   const outcome = await Promise.race([
@@ -194,6 +207,10 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
 test("pairing-code session reaches online when the provider rejects requests before QR readiness", async () => {
   const store = memoryStore();
   let socketReady = false;
+  let firstEndStarted!: () => void;
+  const didStartFirstEnd = new Promise<void>((resolve) => (firstEndStarted = resolve));
+  let releaseFirstEnd!: () => void;
+  const firstEndBarrier = new Promise<void>((resolve) => (releaseFirstEnd = resolve));
   const proof = {
     openedSockets: 0,
     requestedCodes: 0,
@@ -230,7 +247,10 @@ test("pairing-code session reaches online when the provider rejects requests bef
       }
       return "ABCD-1234";
     },
-    end: () => {},
+    end: async () => {
+      firstEndStarted();
+      await firstEndBarrier;
+    },
   };
   const returningConn = {
     events: (async function* () {
@@ -266,7 +286,15 @@ test("pairing-code session reaches online when the provider rejects requests bef
     },
   });
 
-  await s.start();
+  const started = s.start();
+  const firstEndObserved = await Promise.race([
+    didStartFirstEnd.then(() => true),
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+  ]);
+  expect(firstEndObserved).toBe(true);
+  expect(proof.openedSockets).toBe(1);
+  releaseFirstEnd();
+  await started;
 
   expect(proof).toEqual({
     openedSockets: 2,
@@ -277,6 +305,200 @@ test("pairing-code session reaches online when the provider rejects requests bef
     online: true,
     backedOff: false,
   });
+});
+
+test("credential teardown failure ends a scheduled retry before propagating", async () => {
+  const failure = new Error("credential persistence failed");
+  const phases: string[] = [];
+  const fakeConn = {
+    events: (async function* () {
+      yield {
+        t: "close",
+        fault: { reason: "connection_lost", retryable: true, disposition: "retryable" },
+      } as const;
+    })(),
+    end: async () => {
+      throw failure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      phases.push(status.phase);
+    },
+  });
+
+  await assert.rejects(session.start(), failure);
+  expect(session.status.phase).toBe("disconnected");
+  expect(phases.slice(-2)).toEqual(["backing_off", "disconnected"]);
+});
+
+test("a throwing subscriber wins over a rejecting teardown", async () => {
+  // Both fail at once: the handler rejects the pipeline AND conn.end() rejects
+  // during teardown. The session must still settle disconnected, and start()
+  // must surface the handler's error — never mask it with the teardown error.
+  const handlerFailure = new Error("acceptance failed");
+  const teardownFailure = new Error("credential persistence failed");
+  const fakeConn = {
+    events: (async function* () {
+      yield {
+        t: "message",
+        msg: textMessage({
+          id: "m1",
+          chatId: "person@s.whatsapp.net",
+          text: "Hello",
+        }),
+      } as const;
+    })(),
+    end: async () => {
+      throw teardownFailure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    message: () => {
+      throw handlerFailure;
+    },
+  });
+
+  await assert.rejects(session.start(), handlerFailure);
+  expect(session.status.phase).toBe("disconnected");
+});
+
+test("stop() still awaits supervisor teardown when conn.end() rejects", async () => {
+  // A failed credential drain makes conn.end() reject inside stop(). stop()
+  // must still wait for the supervisor to wind down — never return (or throw)
+  // while the session is live — and settle the machine at disconnected.
+  const failure = new Error("credential persistence failed");
+  let emitClose!: () => void;
+  const closed = new Promise<void>((resolve) => (emitClose = resolve));
+  let markConsuming!: () => void;
+  const consuming = new Promise<void>((resolve) => (markConsuming = resolve));
+  let supervisorSettled = false;
+  const fakeConn = {
+    events: (async function* () {
+      markConsuming();
+      await closed;
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    end: async () => {
+      emitClose();
+      throw failure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  const started = session.start().then(
+    () => (supervisorSettled = true),
+    () => (supervisorSettled = true),
+  );
+  await consuming; // the session is live and pumping events before we stop it
+  await assert.rejects(session.stop(), failure);
+  expect(supervisorSettled).toBe(true);
+  expect(session.status.phase).toBe("disconnected");
+  await started;
+});
+
+test("a teardown failure outranks an ordinary run error", async () => {
+  // The run body fails (transport) AND conn.end() rejects. A `finally` cannot
+  // override the in-flight exception, so without explicit precedence the
+  // transport error escapes and the credential failure is silently lost.
+  const runFailure = new Error("transport read failed");
+  const teardownFailure = new Error("credential persistence failed");
+  const fakeConn = {
+    events: (async function* () {
+      throw runFailure;
+    })(),
+    end: async () => {
+      throw teardownFailure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  await assert.rejects(session.start(), teardownFailure);
+});
+
+test("a handler rejecting the disconnected notification outranks the teardown error", async () => {
+  // Clean run, then conn.end() rejects — and the connection handler rejects the
+  // resulting `disconnected` notification too. Per ADR-0013 that rejection must
+  // fail the pipeline, and the subscriber's error outranks the teardown error.
+  const teardownFailure = new Error("credential persistence failed");
+  const handlerFailure = new Error("disconnected persistence failed");
+  const fakeConn = {
+    events: (async function* () {})(), // a clean run: the stream simply ends
+    end: async () => {
+      throw teardownFailure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      if (status.phase === "disconnected") throw handlerFailure;
+    },
+  });
+
+  await assert.rejects(session.start(), handlerFailure);
+});
+
+test("a falsy teardown rejection still fails start() and stop()", async () => {
+  // A store may reject with a falsy reason. Truthiness checks would swallow it
+  // and let both start() and stop() resolve despite failed persistence, so the
+  // rejection must propagate with its value intact.
+  let settled: string | undefined;
+  const fakeConn = {
+    events: (async function* () {
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    end: async () => {
+      throw undefined; // eslint-disable-line no-throw-literal -- the falsy case under test
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  const started = session.start().then(
+    () => (settled = "resolved"),
+    (error: unknown) => (settled = error === undefined ? "rejected-undefined" : "rejected-other"),
+  );
+  await started;
+  expect(settled).toBe("rejected-undefined");
+
+  let stopSettled: string | undefined;
+  await session.stop().then(
+    () => (stopSettled = "resolved"),
+    (error: unknown) =>
+      (stopSettled = error === undefined ? "rejected-undefined" : "rejected-other"),
+  );
+  expect(stopSettled).toBe("rejected-undefined");
 });
 
 test("returning sessions reach online without conversation-sync batches", async () => {

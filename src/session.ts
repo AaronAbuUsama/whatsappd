@@ -348,6 +348,15 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       reportFailure = resolve;
     });
     signalPipelineFailure = reportFailure;
+    // Occurrence is tracked apart from the reason: end() may reject with a
+    // falsy value, and truthiness would silently swallow the failure.
+    let teardownFailed = false;
+    let teardownError: unknown;
+    // The run body's own failure is captured rather than left in flight: a
+    // `finally` cannot override an exception that is already propagating, so a
+    // teardown failure recorded there would never reach the precedence check.
+    let bodyFailed = false;
+    let bodyError: unknown;
 
     try {
       const auth = await loadAuth(store);
@@ -364,7 +373,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       // the freshly opened socket would leak: the loop below would block on its
       // events after the session was already stopped. Tear it down and bail.
       if (stopped) {
-        conn.end();
+        await conn.end();
         return;
       }
 
@@ -379,9 +388,32 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         await enqueue(() => handle(next.result.value));
       }
       await eventPipeline;
+    } catch (error) {
+      bodyFailed = true;
+      bodyError = error;
     } finally {
       signalPipelineFailure = () => {};
+      try {
+        await conn?.end();
+      } catch (error) {
+        stopped = true;
+        teardownFailed = true;
+        teardownError = error;
+        // The stop transition still notifies subscribers, and a handler that
+        // rejects it owns the failure: per ADR-0013 an awaited rejection fails
+        // the pipeline, and a subscriber's own error outranks the teardown one.
+        await apply({ t: "stop" }).catch((dispatchError: unknown) => {
+          if (dispatchError instanceof SubscriptionHandlerError)
+            teardownError = dispatchError.cause;
+        });
+      }
     }
+    // Precedence: a subscriber's own error, then a teardown failure, then an
+    // ordinary run error. A failed credential write must never be masked by the
+    // transport error that happened to surface first.
+    if (bodyFailed && bodyError instanceof SubscriptionHandlerError) throw bodyError;
+    if (teardownFailed) throw teardownError;
+    if (bodyFailed) throw bodyError;
   }
 
   async function supervise(): Promise<void> {
@@ -390,9 +422,9 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       await runOnce().catch(async (err) => {
         if (err instanceof SubscriptionHandlerError) {
           stopped = true;
-          conn?.end();
           throw err.cause;
         }
+        if (stopped) throw err;
         logger.error({ err }, "session run errored");
         // Treat an open/run failure as a retryable transport close.
         await apply({
@@ -457,10 +489,28 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       stopped = true;
       clearVerdict();
       clearSync();
-      conn?.end(); // close → classified intentional → machine → disconnected
-      // Wait for the supervisor to finish tearing down (incl. any socket opened
-      // after this call) so stop() never returns while a live socket lingers.
-      await supervisor;
+      // As in runOnce(): a falsy rejection reason is still a failure, so track
+      // occurrence separately from the captured value.
+      let teardownFailed = false;
+      let teardownError: unknown;
+      try {
+        await conn?.end(); // close → classified intentional → machine → disconnected
+      } catch (error) {
+        teardownFailed = true;
+        teardownError = error;
+      }
+      // Always wait for the supervisor to finish tearing down (incl. any socket
+      // opened after this call) so stop() never returns while a live socket
+      // lingers — even when end() rejected above. The supervisor's error wins:
+      // it carries the session's real terminal failure (a subscriber's own
+      // error over a duplicate teardown rejection).
+      try {
+        await supervisor;
+      } catch (error) {
+        teardownFailed = true;
+        teardownError = error;
+      }
+      if (teardownFailed) throw teardownError;
     },
   };
 }
