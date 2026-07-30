@@ -105,11 +105,26 @@ test("P2 snapshots and restarts the fixed private corpus without changing its so
     },
   });
   const retained = JSON.parse(
-    await readFile(join(privateDir, "p2-receipt.json"), "utf8"),
+    await readFile(join(root, ".proof-receipts", "issue16-p2.json"), "utf8"),
   ) as typeof receipt;
   const published = JSON.stringify(retained);
 
   expect(receipt).toEqual(retained);
+  expect(Object.keys(retained).sort()).toEqual(
+    [
+      "gitHead",
+      "nonce",
+      "orderedIdDigest",
+      "recordCount",
+      "revisionBounds",
+      "snapshotChecksum",
+      "snapshotRestarted",
+      "sourceChecksumAfter",
+      "sourceChecksumBefore",
+      "tier",
+      "timestampBounds",
+    ].sort(),
+  );
   expect(retained.tier).toBe("P2");
   expect(retained.gitHead).toBe(gitHead);
   expect(retained.sourceChecksumBefore).toBe(sourceBefore);
@@ -142,7 +157,6 @@ test("P2 snapshots and restarts the fixed private corpus without changing its so
 
 test("P4 retains only a sanitized database-backed reconnect receipt", async () => {
   const root = await createPrivateFixture();
-  const privateDir = join(root, ".proof-private");
   const sourceDb = join(root, "source.db");
   const credentialDb = join(root, "credentials.db");
   const privateCredential = "private-device-credential";
@@ -169,7 +183,7 @@ test("P4 retains only a sanitized database-backed reconnect receipt", async () =
     sourceChecksumAfter: string;
   };
   const retained = JSON.parse(
-    await readFile(join(privateDir, "p4-receipt.json"), "utf8"),
+    await readFile(join(root, ".proof-receipts", "issue16-p4.json"), "utf8"),
   ) as typeof receipt;
   const published = JSON.stringify(retained);
 
@@ -183,6 +197,22 @@ test("P4 retains only a sanitized database-backed reconnect receipt", async () =
     account: "private-account-id",
   });
   expect(receipt).toEqual(retained);
+  expect(Object.keys(retained).sort()).toEqual(
+    [
+      "gitHead",
+      "nonce",
+      "orderedIdDigest",
+      "reconnected",
+      "recordCount",
+      "revisionBounds",
+      "snapshotChecksum",
+      "snapshotRestarted",
+      "sourceChecksumAfter",
+      "sourceChecksumBefore",
+      "tier",
+      "timestampBounds",
+    ].sort(),
+  );
   expect(receipt.tier).toBe("P4");
   expect(receipt.reconnected).toBe(true);
   expect(receipt.sourceChecksumAfter).toBe(receipt.sourceChecksumBefore);

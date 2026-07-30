@@ -144,7 +144,7 @@ async function prepareProof(
   const runDir = join(privateDir, "run");
   const snapshotDb = join(runDir, "corpus.db");
   const config = await readConfig(root);
-  await rm(join(privateDir, `${tier.toLowerCase()}-receipt.json`), { force: true });
+  await rm(join(root, ".proof-receipts", `issue16-${tier.toLowerCase()}.json`), { force: true });
   const sourceChecksumBefore = await fileHash(config.sourceDb);
   await rm(runDir, { recursive: true, force: true });
   await mkdir(runDir, { recursive: true });
@@ -180,8 +180,9 @@ export async function runPrivateProof(
 ): Promise<ProofReceipt> {
   if (tier === "p2") {
     const { receipt } = await prepareProof(dependencies.root, "P2");
+    await mkdir(join(dependencies.root, ".proof-receipts"), { recursive: true });
     await writeFile(
-      join(dependencies.root, ".proof-private", "p2-receipt.json"),
+      join(dependencies.root, ".proof-receipts", "issue16-p2.json"),
       `${JSON.stringify(receipt, null, 2)}\n`,
     );
     return receipt;
@@ -221,7 +222,11 @@ export async function runPrivateProof(
       throw new Error("P4 reconnect or source checksum proof failed");
     }
     receipt.reconnected = true;
-    await writeFile(join(privateDir, "p4-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);
+    await mkdir(join(dependencies.root, ".proof-receipts"), { recursive: true });
+    await writeFile(
+      join(dependencies.root, ".proof-receipts", "issue16-p4.json"),
+      `${JSON.stringify(receipt, null, 2)}\n`,
+    );
     return receipt;
   } finally {
     process.removeListener("SIGINT", cancel);
