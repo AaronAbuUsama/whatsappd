@@ -368,6 +368,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             );
             break;
           }
+          case "send": {
+            // Anchor bootstrap: a returning device receives no history redelivery,
+            // so an empty run has no requestable anchors until traffic exists.
+            const target = args[0]?.includes("@") ? args[0] : sortedChats()[Number(args[0])]?.[0];
+            if (!target) throw new Error(`no chat for ${args[0]} — pass an index or a full jid`);
+            const text = args.slice(1).join(" ") || `issue18 anchor ${Date.now()}`;
+            const ref = await session.send(target, { text });
+            console.log(`📤 sent ${ref.id} to ${target}`);
+            break;
+          }
           case "status":
             showStatus();
             break;
@@ -384,7 +394,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           case "":
             break;
           default:
-            console.log("commands: chats | req <idx> [n] | status | oracle | note <text> | quit");
+            console.log(
+              "commands: chats | req <idx> [n] | send <idx|jid> [text] | status | oracle | note <text> | quit",
+            );
         }
       } catch (err) {
         console.error(`✖ ${(err as Error).message}`);
