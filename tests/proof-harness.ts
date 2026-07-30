@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,6 +96,16 @@ async function canonicalPath(file: string): Promise<string> {
   }
 }
 
+async function sameFile(left: string, right: string): Promise<boolean> {
+  try {
+    const [leftStats, rightStats] = await Promise.all([stat(left), stat(right)]);
+    return leftStats.dev === rightStats.dev && leftStats.ino === rightStats.ino;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -154,7 +164,7 @@ function safeStableId(value: unknown): value is string {
   );
 }
 
-async function buildOracle(snapshotDb: string): Promise<ProofReceipt["oracle"]> {
+async function buildOracle(snapshotDb: string, account: string): Promise<ProofReceipt["oracle"]> {
   const tableRows = parseRows(
     await sqlite(
       snapshotDb,
@@ -179,8 +189,12 @@ async function buildOracle(snapshotDb: string): Promise<ProofReceipt["oracle"]> 
     const revisionColumns = columns.filter((column) =>
       /^(revision|from_revision|to_revision|fromrevision|torevision)$/i.test(column),
     );
+    const accountColumn = columns.find((column) => /^account(?:_?id)?$/i.test(column));
+    const accountScope = accountColumn
+      ? ` WHERE ${identifier(accountColumn)} = ${sqlString(account)}`
+      : "";
     const countRow = parseRows(
-      await sqlite(snapshotDb, `SELECT COUNT(*) AS count FROM ${identifier(name)}`, {
+      await sqlite(snapshotDb, `SELECT COUNT(*) AS count FROM ${identifier(name)}${accountScope}`, {
         readonly: true,
         json: true,
       }),
@@ -189,7 +203,7 @@ async function buildOracle(snapshotDb: string): Promise<ProofReceipt["oracle"]> 
       ? parseRows(
           await sqlite(
             snapshotDb,
-            `SELECT ${identifier(idColumn)} AS id FROM ${identifier(name)} ORDER BY ${identifier(idColumn)}`,
+            `SELECT ${identifier(idColumn)} AS id FROM ${identifier(name)}${accountScope} ORDER BY ${identifier(idColumn)}`,
             { readonly: true, json: true },
           ),
         )
@@ -202,7 +216,7 @@ async function buildOracle(snapshotDb: string): Promise<ProofReceipt["oracle"]> 
         const range = parseRows(
           await sqlite(
             snapshotDb,
-            `SELECT MIN(${identifier(column)}) AS min, MAX(${identifier(column)}) AS max FROM ${identifier(name)}`,
+            `SELECT MIN(${identifier(column)}) AS min, MAX(${identifier(column)}) AS max FROM ${identifier(name)}${accountScope}`,
             { readonly: true, json: true },
           ),
         )[0];
@@ -218,7 +232,7 @@ async function buildOracle(snapshotDb: string): Promise<ProofReceipt["oracle"]> 
         const range = parseRows(
           await sqlite(
             snapshotDb,
-            `SELECT MIN(${identifier(column)}) AS min, MAX(${identifier(column)}) AS max FROM ${identifier(name)}`,
+            `SELECT MIN(${identifier(column)}) AS min, MAX(${identifier(column)}) AS max FROM ${identifier(name)}${accountScope}`,
             { readonly: true, json: true },
           ),
         )[0];
@@ -305,7 +319,7 @@ export async function runProofHarness(
   await mkdir(dirname(resolve(options.credentialDb)), { recursive: true });
   const sourceDb = await canonicalPath(options.sourceDb);
   const credentialDb = await canonicalPath(options.credentialDb);
-  if (sourceDb === credentialDb) {
+  if (sourceDb === credentialDb || (await sameFile(sourceDb, credentialDb))) {
     throw new Error("source and credential databases must be different files");
   }
   const release = options.live
@@ -336,12 +350,12 @@ export async function runProofHarness(
     const snapshotDb = join(dataDir, "corpus.db");
     await snapshotDatabase(sourceDb, snapshotDb);
 
-    const oracleBeforeRestart = await buildOracle(snapshotDb);
+    const oracleBeforeRestart = await buildOracle(snapshotDb, options.account);
     await sqlite(
       snapshotDb,
       "CREATE TABLE __whatsappd_proof_isolation (value INTEGER); INSERT INTO __whatsappd_proof_isolation VALUES (1); DROP TABLE __whatsappd_proof_isolation;",
     );
-    const oracle = await buildOracle(snapshotDb);
+    const oracle = await buildOracle(snapshotDb, options.account);
     const sourceAfterSnapshot = await databaseBundleSha256(sourceDb);
     const credentialsAfterSnapshot = await databaseBundleSha256(credentialDb);
     const restartVerified = oracleBeforeRestart.manifestSha256 === oracle.manifestSha256;

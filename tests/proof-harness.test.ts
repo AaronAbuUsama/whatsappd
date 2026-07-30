@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -88,9 +88,10 @@ test("a snapshot-only run leaves disposable P2 evidence and a sanitized receipt"
     [
       "PRAGMA journal_mode = WAL;",
       "CREATE TABLE raw_event (",
-      "id TEXT PRIMARY KEY, created TEXT, updated TEXT, revision INTEGER, payload TEXT, jid TEXT",
+      "id TEXT PRIMARY KEY, account TEXT, created TEXT, updated TEXT, revision INTEGER, payload TEXT, jid TEXT",
       ");",
-      `INSERT INTO raw_event VALUES ('pbRecord0000001', '2026-07-28T10:00:00Z', '2026-07-28T10:01:00Z', 7, '${privateBody}', '${privateJid}');`,
+      `INSERT INTO raw_event VALUES ('pbRecord0000001', 'proof', '2026-07-28T10:00:00Z', '2026-07-28T10:01:00Z', 7, '${privateBody}', '${privateJid}');`,
+      `INSERT INTO raw_event VALUES ('pbRecord0000002', 'another-account', '2026-07-29T10:00:00Z', '2026-07-29T10:01:00Z', 8, 'other private body', '15557654321@s.whatsapp.net');`,
       "PRAGMA journal_mode = DELETE;",
     ].join(" "),
   ]);
@@ -159,6 +160,40 @@ test("source and credential databases must not alias", async () => {
     error = caught;
   }
   expect(String(error)).toContain("must be different files");
+});
+
+test("hard-linked source and credential databases must not alias", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whatsappd-proof-"));
+  const sourceDb = join(root, "source.db");
+  const credentialDb = join(root, "credentials.db");
+  await execFileAsync("sqlite3", [sourceDb, "CREATE TABLE records (id TEXT PRIMARY KEY);"]);
+  await link(sourceDb, credentialDb);
+
+  let openCount = 0;
+  let error: unknown;
+  try {
+    await runProofHarness(
+      {
+        sourceDb,
+        credentialDb,
+        account: "proof",
+        runRoot: join(root, "run"),
+        receiptPath: join(root, "receipt.json"),
+        live: true,
+      },
+      {
+        openLiveSession: async () => {
+          openCount++;
+          return { reconnected: true, conversationSyncBatches: 0 };
+        },
+      },
+    );
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(String(error)).toContain("must be different files");
+  expect(openCount).toBe(0);
 });
 
 test("a live run reports source mutation after the snapshot", async () => {
