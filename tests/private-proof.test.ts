@@ -1,6 +1,7 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { watch } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -359,6 +360,36 @@ test("P4 rejects a WAL-backed logical source change", async () => {
     await once(reader, "close");
   }
 
+  expect(String(error)).toContain("source checksum");
+});
+
+test("P4 revalidates the source while publishing its receipt", async () => {
+  const root = await createPrivateFixture();
+  const privateDir = join(root, ".proof-private");
+  const sourceDb = join(root, "source.db");
+  let mutated = false;
+  const watcher = watch(privateDir, (_event, filename) => {
+    if (filename === "p4-receipt.pending.json" && !mutated) {
+      mutated = true;
+      execFileSync("sqlite3", [
+        sourceDb,
+        "INSERT INTO raw_event VALUES ('late', '2026-07-30T10:00:00Z', '{}', 'private');",
+      ]);
+    }
+  });
+
+  let error: unknown;
+  try {
+    await runPrivateProof("p4", true, {
+      root,
+      openLiveSession: async () => ({ paired: false }),
+    });
+  } catch (caught) {
+    error = caught;
+  } finally {
+    watcher.close();
+  }
+  expect(mutated).toBe(true);
   expect(String(error)).toContain("source checksum");
 });
 

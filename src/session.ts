@@ -348,6 +348,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       reportFailure = resolve;
     });
     signalPipelineFailure = reportFailure;
+    let teardownError: unknown;
 
     try {
       const auth = await loadAuth(store);
@@ -381,7 +382,14 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       await eventPipeline;
     } finally {
       signalPipelineFailure = () => {};
+      try {
+        await conn?.end();
+      } catch (error) {
+        stopped = true;
+        teardownError = error;
+      }
     }
+    if (teardownError) throw teardownError;
   }
 
   async function supervise(): Promise<void> {
@@ -393,6 +401,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
           await conn?.end();
           throw err.cause;
         }
+        if (stopped) throw err;
         logger.error({ err }, "session run errored");
         // Treat an open/run failure as a retryable transport close.
         await apply({

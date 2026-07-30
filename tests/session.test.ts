@@ -207,6 +207,10 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
 test("pairing-code session reaches online when the provider rejects requests before QR readiness", async () => {
   const store = memoryStore();
   let socketReady = false;
+  let firstEndStarted!: () => void;
+  const didStartFirstEnd = new Promise<void>((resolve) => (firstEndStarted = resolve));
+  let releaseFirstEnd!: () => void;
+  const firstEndBarrier = new Promise<void>((resolve) => (releaseFirstEnd = resolve));
   const proof = {
     openedSockets: 0,
     requestedCodes: 0,
@@ -243,7 +247,10 @@ test("pairing-code session reaches online when the provider rejects requests bef
       }
       return "ABCD-1234";
     },
-    end: () => {},
+    end: async () => {
+      firstEndStarted();
+      await firstEndBarrier;
+    },
   };
   const returningConn = {
     events: (async function* () {
@@ -279,7 +286,15 @@ test("pairing-code session reaches online when the provider rejects requests bef
     },
   });
 
-  await s.start();
+  const started = s.start();
+  const firstEndObserved = await Promise.race([
+    didStartFirstEnd.then(() => true),
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+  ]);
+  expect(firstEndObserved).toBe(true);
+  expect(proof.openedSockets).toBe(1);
+  releaseFirstEnd();
+  await started;
 
   expect(proof).toEqual({
     openedSockets: 2,

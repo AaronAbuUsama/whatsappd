@@ -328,6 +328,18 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
       credentialWriteError ??= error;
     });
   });
+  let ending: Promise<void> | undefined;
+  const end = (): Promise<void> =>
+    (ending ??= (async () => {
+      intentional = true;
+      void sock.end(undefined);
+      let pending: Promise<void>;
+      do {
+        pending = credentialWrites;
+        await pending;
+      } while (pending !== credentialWrites);
+      if (credentialWriteError) throw credentialWriteError;
+    })());
 
   // Media bytes are pulled on demand via this factory — never buffered here.
   const makeDownload = mediaDownloader(sock, logger);
@@ -444,11 +456,6 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
       const phoneE164 = /^\d+$/.test(digits) ? `+${digits}` : undefined;
       return { jid: u.id, pushName: u.name ?? undefined, phoneE164 };
     },
-    end: async () => {
-      intentional = true;
-      void sock.end(undefined);
-      await credentialWrites;
-      if (credentialWriteError) throw credentialWriteError;
-    },
+    end,
   };
 }

@@ -205,6 +205,52 @@ async function prepareProof(
   return { config, receipt };
 }
 
+async function validateProofState(
+  root: string,
+  proofHead: string,
+  sourceDb: string,
+  sourceChecksum: string,
+): Promise<void> {
+  await assertCleanExecutedTree(root, proofHead);
+  if ((await databaseHash(sourceDb)) !== sourceChecksum) {
+    throw new Error("private proof source checksum changed before publication");
+  }
+  await assertCleanExecutedTree(root, proofHead);
+}
+
+async function publishReceipt(
+  root: string,
+  receipt: ProofReceipt,
+  validate: () => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const name = `issue16-${receipt.tier.toLowerCase()}.json`;
+  const receiptPath = join(root, ".proof-receipts", name);
+  const pendingReceipt = join(
+    root,
+    ".proof-private",
+    `${receipt.tier.toLowerCase()}-receipt.pending.json`,
+  );
+  const checkpoint = (): void => signal?.throwIfAborted();
+  const revalidate = async (): Promise<void> => {
+    checkpoint();
+    await validate();
+    checkpoint();
+  };
+  try {
+    await writeFile(pendingReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
+    await revalidate();
+    await rename(pendingReceipt, receiptPath);
+    await revalidate();
+    await rm(pendingReceipt, { force: true });
+    await revalidate();
+  } catch (error) {
+    await rm(pendingReceipt, { force: true });
+    await rm(receiptPath, { force: true });
+    throw error;
+  }
+}
+
 export async function runPrivateProof(
   tier: "p2" | "p4",
   confirmed: boolean,
@@ -212,11 +258,14 @@ export async function runPrivateProof(
 ): Promise<ProofReceipt> {
   const proofHead = await assertCleanExecutedTree(dependencies.root);
   if (tier === "p2") {
-    const { receipt } = await prepareProof(dependencies.root, "P2", proofHead);
-    await assertCleanExecutedTree(dependencies.root, proofHead);
-    await writeFile(
-      join(dependencies.root, ".proof-receipts", "issue16-p2.json"),
-      `${JSON.stringify(receipt, null, 2)}\n`,
+    const { config, receipt } = await prepareProof(dependencies.root, "P2", proofHead);
+    await publishReceipt(dependencies.root, receipt, () =>
+      validateProofState(
+        dependencies.root,
+        proofHead,
+        config.sourceDb,
+        receipt.sourceChecksumBefore,
+      ),
     );
     return receipt;
   }
@@ -268,19 +317,18 @@ export async function runPrivateProof(
     await assertCleanExecutedTree(dependencies.root, proofHead);
     cancellation.signal.throwIfAborted();
     receipt.reconnected = true;
-    const receiptPath = join(dependencies.root, ".proof-receipts", "issue16-p4.json");
-    const pendingReceipt = join(privateDir, "p4-receipt.pending.json");
-    try {
-      await writeFile(pendingReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
-      cancellation.signal.throwIfAborted();
-      await rename(pendingReceipt, receiptPath);
-      cancellation.signal.throwIfAborted();
-    } catch (error) {
-      if (cancellation.signal.aborted) await rm(receiptPath, { force: true });
-      throw error;
-    } finally {
-      await rm(pendingReceipt, { force: true });
-    }
+    await publishReceipt(
+      dependencies.root,
+      receipt,
+      () =>
+        validateProofState(
+          dependencies.root,
+          proofHead,
+          config.sourceDb,
+          receipt.sourceChecksumBefore,
+        ),
+      cancellation.signal,
+    );
     return receipt;
   } finally {
     process.removeListener("SIGINT", cancel);
