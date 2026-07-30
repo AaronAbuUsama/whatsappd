@@ -307,6 +307,36 @@ test("pairing-code session reaches online when the provider rejects requests bef
   });
 });
 
+test("credential teardown failure ends a scheduled retry before propagating", async () => {
+  const failure = new Error("credential persistence failed");
+  const phases: string[] = [];
+  const fakeConn = {
+    events: (async function* () {
+      yield {
+        t: "close",
+        fault: { reason: "connection_lost", retryable: true, disposition: "retryable" },
+      } as const;
+    })(),
+    end: async () => {
+      throw failure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      phases.push(status.phase);
+    },
+  });
+
+  await assert.rejects(session.start(), failure);
+  expect(session.status.phase).toBe("disconnected");
+  expect(phases.slice(-2)).toEqual(["backing_off", "disconnected"]);
+});
+
 test("returning sessions reach online without conversation-sync batches", async () => {
   const store = memoryStore();
   await store.write({

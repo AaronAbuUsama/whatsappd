@@ -389,7 +389,10 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         teardownError = error;
       }
     }
-    if (teardownError) throw teardownError;
+    if (teardownError) {
+      await apply({ t: "stop" });
+      throw teardownError;
+    }
   }
 
   async function supervise(): Promise<void> {
