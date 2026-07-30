@@ -127,17 +127,32 @@ export interface WhatsAppSession {
   profilePictureUrl(jid: string, type?: "image" | "preview"): Promise<string | undefined>;
   /**
    * Ask the linked phone for older messages in one chat, going back from the
-   * given anchor message.
+   * given anchor message. **Fire-and-hope: the phone may never answer.**
    *
    * @remarks
-   * This is an explicit, asynchronous protocol request (ADR-0010): resolution
-   * means the request was *submitted*, not that the phone received it or that
-   * any history exists. Returned messages, if any, arrive later as
-   * `conversationSync` batches whose `context.source` is `"on_demand"` with
-   * `context.requestSessionId` set. The protocol *intends* that id to echo the
-   * receipt's `requestId`, but the phone may never answer at all and the echo
-   * is not verified live (see `docs/history-semantics.md`) — treat correlation
-   * as best-effort. No completion, count, or exhaustion signal is promised.
+   * This is an explicit, asynchronous protocol request (ADR-0010). Resolution
+   * means exactly one thing: the request was accepted by the server for relay.
+   * It does not mean the phone received it (that happens later, if at all, and
+   * is not surfaced here), and it does not mean any history exists or will
+   * arrive.
+   *
+   * What live proof established (see `docs/history-semantics.md`):
+   *
+   * - iPhone primaries were observed acknowledging delivery of every request
+   *   and answering **none** — a request that produces nothing is the normal
+   *   case there, not an error. Android primaries have been reported to
+   *   answer (upstream Baileys#2452).
+   * - If an answer comes, messages arrive later as `conversationSync` batches
+   *   with `context.source === "on_demand"` and `context.requestSessionId`
+   *   intended to echo this receipt's `requestId` — treat that match as
+   *   best-effort correlation, not a guarantee.
+   * - There is NO completion, exhaustion, or delivered-count signal, and none
+   *   can be synthesized: silence and "no older messages" are
+   *   indistinguishable. UI built on this may say "request sent" or "no older
+   *   saved messages"; it must never claim "all history loaded".
+   *
+   * Do not await "the result" — there is no result to await. Subscribe to
+   * `conversationSync` and treat anything that arrives as a windfall.
    *
    * @param anchor - The oldest known message to page back from: its ref plus
    * its timestamp in epoch milliseconds.
