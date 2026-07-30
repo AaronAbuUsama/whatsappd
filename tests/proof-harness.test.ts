@@ -91,6 +91,7 @@ test("a snapshot-only run leaves disposable P2 evidence and a sanitized receipt"
       "id TEXT PRIMARY KEY, created TEXT, updated TEXT, revision INTEGER, payload TEXT, jid TEXT",
       ");",
       `INSERT INTO raw_event VALUES ('pbRecord0000001', '2026-07-28T10:00:00Z', '2026-07-28T10:01:00Z', 7, '${privateBody}', '${privateJid}');`,
+      "PRAGMA journal_mode = DELETE;",
     ].join(" "),
   ]);
   await execFileAsync("sqlite3", [
