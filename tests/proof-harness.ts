@@ -106,6 +106,16 @@ async function sameFile(left: string, right: string): Promise<boolean> {
   }
 }
 
+async function fileIdentity(file: string): Promise<string> {
+  try {
+    const stats = await stat(file);
+    return `inode:${stats.dev}:${stats.ino}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return `path:${file}`;
+    throw error;
+  }
+}
+
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -268,8 +278,9 @@ async function acquireLiveAccountLock(
   onStaleLockObserved?: () => Promise<void>,
 ): Promise<() => Promise<void>> {
   const canonicalCredentialDb = await canonicalPath(credentialDb);
+  const credentialIdentity = await fileIdentity(canonicalCredentialDb);
   const id = createHash("sha256")
-    .update(`${canonicalCredentialDb}\0${account}`)
+    .update(`${credentialIdentity}\0${account}`)
     .digest("hex")
     .slice(0, 32);
   const lockDb = join(tmpdir(), "whatsappd-live-account-locks.db");
