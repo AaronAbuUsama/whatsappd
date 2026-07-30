@@ -414,6 +414,29 @@ test("stop() still awaits supervisor teardown when conn.end() rejects", async ()
   await started;
 });
 
+test("a teardown failure outranks an ordinary run error", async () => {
+  // The run body fails (transport) AND conn.end() rejects. A `finally` cannot
+  // override the in-flight exception, so without explicit precedence the
+  // transport error escapes and the credential failure is silently lost.
+  const runFailure = new Error("transport read failed");
+  const teardownFailure = new Error("credential persistence failed");
+  const fakeConn = {
+    events: (async function* () {
+      throw runFailure;
+    })(),
+    end: async () => {
+      throw teardownFailure;
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  await assert.rejects(session.start(), teardownFailure);
+});
+
 test("a handler rejecting the disconnected notification outranks the teardown error", async () => {
   // Clean run, then conn.end() rejects — and the connection handler rejects the
   // resulting `disconnected` notification too. Per ADR-0013 that rejection must

@@ -352,6 +352,11 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     // falsy value, and truthiness would silently swallow the failure.
     let teardownFailed = false;
     let teardownError: unknown;
+    // The run body's own failure is captured rather than left in flight: a
+    // `finally` cannot override an exception that is already propagating, so a
+    // teardown failure recorded there would never reach the precedence check.
+    let bodyFailed = false;
+    let bodyError: unknown;
 
     try {
       const auth = await loadAuth(store);
@@ -383,6 +388,9 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         await enqueue(() => handle(next.result.value));
       }
       await eventPipeline;
+    } catch (error) {
+      bodyFailed = true;
+      bodyError = error;
     } finally {
       signalPipelineFailure = () => {};
       try {
@@ -400,7 +408,12 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         });
       }
     }
+    // Precedence: a subscriber's own error, then a teardown failure, then an
+    // ordinary run error. A failed credential write must never be masked by the
+    // transport error that happened to surface first.
+    if (bodyFailed && bodyError instanceof SubscriptionHandlerError) throw bodyError;
     if (teardownFailed) throw teardownError;
+    if (bodyFailed) throw bodyError;
   }
 
   async function supervise(): Promise<void> {
