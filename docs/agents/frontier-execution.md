@@ -57,8 +57,9 @@ The hard ceiling is seven complete review passes:
 - unresolved actionable findings after pass 7 block the lane and prohibit
   merge.
 
-The implementing agent may not delegate review, claim another issue, or create
-additional workers.
+The required GitHub Codex bot review is not a delegated task. The implementing
+agent may not create reviewer tasks or additional workers, and may not claim
+another issue.
 
 ## Merge gate
 
