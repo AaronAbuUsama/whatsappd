@@ -37,7 +37,9 @@ verdict.
 
 The implementing agent:
 
-- asks the GitHub Codex review bot to review the current immutable PR head;
+- asks the GitHub Codex review bot to review the current immutable PR head
+  against the complete issue, architecture invariants, proof contract, full
+  diff, tests, and affected callers;
 - waits for the bot's complete verdict on the PR;
 - returns every actionable finding to its own implementation loop;
 - fixes findings, pushes the new head, and triggers the bot again;
