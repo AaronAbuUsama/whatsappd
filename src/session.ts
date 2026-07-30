@@ -348,6 +348,9 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       reportFailure = resolve;
     });
     signalPipelineFailure = reportFailure;
+    // Occurrence is tracked apart from the reason: end() may reject with a
+    // falsy value, and truthiness would silently swallow the failure.
+    let teardownFailed = false;
     let teardownError: unknown;
 
     try {
@@ -386,11 +389,12 @@ export function createSession(config: SessionConfig): WhatsAppSession {
         await conn?.end();
       } catch (error) {
         stopped = true;
+        teardownFailed = true;
         teardownError = error;
         await apply({ t: "stop" }).catch(() => {});
       }
     }
-    if (teardownError) throw teardownError;
+    if (teardownFailed) throw teardownError;
   }
 
   async function supervise(): Promise<void> {
@@ -466,10 +470,14 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       stopped = true;
       clearVerdict();
       clearSync();
+      // As in runOnce(): a falsy rejection reason is still a failure, so track
+      // occurrence separately from the captured value.
+      let teardownFailed = false;
       let teardownError: unknown;
       try {
         await conn?.end(); // close → classified intentional → machine → disconnected
       } catch (error) {
+        teardownFailed = true;
         teardownError = error;
       }
       // Always wait for the supervisor to finish tearing down (incl. any socket
@@ -480,9 +488,10 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       try {
         await supervisor;
       } catch (error) {
+        teardownFailed = true;
         teardownError = error;
       }
-      if (teardownError) throw teardownError;
+      if (teardownFailed) throw teardownError;
     },
   };
 }

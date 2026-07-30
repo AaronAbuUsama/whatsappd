@@ -414,6 +414,44 @@ test("stop() still awaits supervisor teardown when conn.end() rejects", async ()
   await started;
 });
 
+test("a falsy teardown rejection still fails start() and stop()", async () => {
+  // A store may reject with a falsy reason. Truthiness checks would swallow it
+  // and let both start() and stop() resolve despite failed persistence, so the
+  // rejection must propagate with its value intact.
+  let settled: string | undefined;
+  const fakeConn = {
+    events: (async function* () {
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    end: async () => {
+      throw undefined; // eslint-disable-line no-throw-literal -- the falsy case under test
+    },
+  };
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  const started = session.start().then(
+    () => (settled = "resolved"),
+    (error: unknown) => (settled = error === undefined ? "rejected-undefined" : "rejected-other"),
+  );
+  await started;
+  expect(settled).toBe("rejected-undefined");
+
+  let stopSettled: string | undefined;
+  await session.stop().then(
+    () => (stopSettled = "resolved"),
+    (error: unknown) =>
+      (stopSettled = error === undefined ? "rejected-undefined" : "rejected-other"),
+  );
+  expect(stopSettled).toBe("rejected-undefined");
+});
+
 test("returning sessions reach online without conversation-sync batches", async () => {
   const store = memoryStore();
   await store.write({
