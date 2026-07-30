@@ -87,10 +87,10 @@ time (published 2026-07-29):
 | Submission     | `requestHistory` resolves with the request message id  | ✅ every attempt               |
 | Server relay   | ack for the outgoing peer message                      | ✅ every attempt               |
 | Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ every attempt               |
-| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **never** (0 of 4 requests) |
+| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **never** (0 of 5 requests) |
 
 Conditions varied without effect: phone idle vs. WhatsApp foregrounded during
-an active conversation, personal DM vs. self-chat, `count` 50 vs. 10, anchors
+an active conversation, personal DM vs. self-chat, `count` 50/25/10, anchors
 minutes old. This matches the unresolved upstream report
 [WhiskeySockets/Baileys#2452](https://github.com/WhiskeySockets/Baileys/issues/2452)
 (request succeeds, no response; closed stale). The `fetchMessageHistory` code
@@ -105,15 +105,15 @@ request type, and a request-metadata diff against an official client.
 
 ### Proof matrix
 
-| Scenario                          | Observed                                                                                                                                                                                                        |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Request/result correlation        | Receipt id is real (outgoing request message id); zero responses arrived, so id-echo in `peerDataRequestSessionId` remains **unverified live** — it is the documented correlation design, not a proven behavior |
-| Protocol request limit (count=50) | Submission accepts 50 and 10 alike; no response either way — no delivered-count evidence exists                                                                                                                 |
-| Boundary inclusivity              | Unobservable without a response; explicitly unproven                                                                                                                                                            |
-| Empty result                      | Indistinguishable from an unanswered request — this is the strongest argument for never claiming exhaustion                                                                                                     |
-| Multiple chunks                   | Unobservable without a response                                                                                                                                                                                 |
-| Repeated requests                 | Re-submission is accepted and re-delivered (fresh receipt each time); no response to any                                                                                                                        |
-| Phone offline                     | Submission still succeeds; the `peer_msg` delivery ack is the only signal distinguishing delivered from undelivered                                                                                             |
+| Scenario                          | Observed                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Request/result correlation        | Receipt id is real (outgoing request message id); zero responses arrived, so id-echo in `peerDataRequestSessionId` remains **unverified live** — it is the documented correlation design, not a proven behavior                                                                                                                                                                   |
+| Protocol request limit (count=50) | Submission accepts 50 and 10 alike; no response either way — no delivered-count evidence exists                                                                                                                                                                                                                                                                                   |
+| Boundary inclusivity              | Unobservable without a response; explicitly unproven                                                                                                                                                                                                                                                                                                                              |
+| Empty result                      | Indistinguishable from an unanswered request — this is the strongest argument for never claiming exhaustion                                                                                                                                                                                                                                                                       |
+| Multiple chunks                   | Unobservable without a response                                                                                                                                                                                                                                                                                                                                                   |
+| Repeated requests                 | Re-submission is accepted and re-delivered (fresh receipt each time); no response to any                                                                                                                                                                                                                                                                                          |
+| Phone offline                     | Directly observed (airplane mode + Wi-Fi off): submission resolves identically to the online case with no delivery ack; the queued request's `peer_msg` ack arrived 4m16s later when the phone reconnected (22:06:57 → 22:11:13Z). The submission receipt therefore proves nothing about the phone; only the delivery ack does — and even confirmed delivery produced no response |
 
 Sanitized observations (hashed identities, counts, digests) are committed as
 `.proof-receipts/issue18-p4.json` / `issue18-p2.json`; the raw observation
