@@ -6,3 +6,4 @@ dist
 !.vscode/settings.json
 !.vscode/extensions.json
 .wa-auth/
+.proof-private/
