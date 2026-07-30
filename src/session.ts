@@ -126,6 +126,28 @@ export interface WhatsAppSession {
    */
   profilePictureUrl(jid: string, type?: "image" | "preview"): Promise<string | undefined>;
   /**
+   * Ask the linked phone for older messages in one chat, going back from the
+   * given anchor message.
+   *
+   * @remarks
+   * This is an explicit, asynchronous protocol request (ADR-0010): resolution
+   * means the request was *submitted*, not that the phone received it or that
+   * any history exists. Returned messages, if any, arrive later as
+   * `conversationSync` batches whose `context.source` is `"on_demand"`;
+   * `context.requestSessionId` correlates a batch back to the receipt's
+   * `requestId`. No completion, count, or exhaustion signal is promised.
+   *
+   * @param anchor - The oldest known message to page back from: its ref plus
+   * its timestamp in epoch milliseconds.
+   * @param opts - Optional request size; `count` defaults to 50, the protocol
+   * request maximum — not a guarantee that more messages exist.
+   * @returns A receipt whose `requestId` matches later on-demand batches.
+   */
+  requestHistory(
+    anchor: { readonly ref: MessageRef; readonly timestamp: number },
+    opts?: { readonly count?: number },
+  ): Promise<{ requestId: string }>;
+  /**
    * The connected account's own identity.
    *
    * @returns The identity once the socket is open, or `undefined` before then.
@@ -483,6 +505,12 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       if (status.phase !== "online" || !conn)
         throw new Error(`not online (phase: ${status.phase})`);
       return conn.profilePictureUrl(jid, type);
+    },
+    async requestHistory(anchor, opts) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      const requestId = await conn.requestHistory(opts?.count ?? 50, anchor.ref, anchor.timestamp);
+      return { requestId };
     },
     identity: () => conn?.identity(),
     async stop() {

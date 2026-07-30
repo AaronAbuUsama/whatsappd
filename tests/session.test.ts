@@ -145,6 +145,80 @@ test("timer transitions wait for message delivery and fail the session pipeline"
   expect(ended).toBe(true);
 });
 
+test("requestHistory submits the anchored request and returns the correlation receipt", async () => {
+  // ADR-0010: the on-demand backfill command is a per-chat protocol request
+  // anchored at the oldest known message. Submission must yield a receipt whose
+  // id a consumer can match against `conversationSync` batches carrying
+  // `context.requestSessionId` — without one, returned history is uncorrelatable.
+  const store = memoryStore();
+  await store.write({
+    creds: JSON.stringify({
+      registered: true,
+      me: { id: "15551234567:1@s.whatsapp.net" },
+      accountSyncCounter: 1,
+    }),
+  });
+  const requests: Array<{ count: number; ref: unknown; timestamp: number }> = [];
+  let online!: () => void;
+  const whenOnline = new Promise<void>((r) => (online = r));
+  let emitClose!: () => void;
+  const closed = new Promise<void>((r) => (emitClose = r));
+  const fakeConn = {
+    events: (async function* () {
+      yield { t: "open" } as const;
+      await closed;
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    requestHistory: async (count: number, ref: unknown, timestamp: number) => {
+      requests.push({ count, ref, timestamp });
+      return "REQ-1";
+    },
+    end: () => {
+      emitClose();
+    },
+  };
+  const session = createSession({
+    store,
+    auth: qrAuth(),
+    syncGraceMs: 1,
+    openSocket: async () => fakeConn,
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      if (status.phase === "online") online();
+    },
+  });
+  void session.start();
+  await whenOnline;
+
+  const anchor = {
+    ref: { id: "OLDEST1", chatId: "person@s.whatsapp.net", fromMe: false },
+    timestamp: 1_700_000_000_000,
+  };
+  const receipt = await session.requestHistory(anchor, { count: 25 });
+  expect(receipt).toEqual({ requestId: "REQ-1" });
+  expect(requests).toEqual([{ count: 25, ref: anchor.ref, timestamp: anchor.timestamp }]);
+
+  await session.stop();
+});
+
+test("requestHistory before online throws (guarded by phase)", async () => {
+  const s = make();
+  let threw = false;
+  try {
+    await s.requestHistory({
+      ref: { id: "OLDEST1", chatId: "c@s.whatsapp.net", fromMe: false },
+      timestamp: 1,
+    });
+  } catch {
+    threw = true;
+  }
+  expect(threw).toBe(true);
+});
+
 test("stop() during socket startup tears down the late-opened socket and awaits teardown", async () => {
   // stop() can land while openSocket() is still in flight — conn is undefined,
   // so stop()'s `conn?.end()` is a no-op. The supervisor must tear down the
