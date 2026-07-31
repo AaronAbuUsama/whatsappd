@@ -323,8 +323,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         )
         .all(id) as unknown as BoundaryRow[];
       const baseline = seenAtSubmit.get(id);
+      // Distinct identities on both sides: chunked redelivery of one message
+      // is one newly accepted identity, not several.
+      const distinct = new Set(msgs.map((m) => m.msgHash));
       const fresh = baseline
-        ? `${msgs.filter((m) => !baseline.has(m.msgHash)).length}/${msgs.length}`
+        ? `${[...distinct].filter((h) => !baseline.has(h)).length}/${distinct.size} distinct`
         : "unknown (no submission snapshot)";
       const verdict = boundaryVerdict(
         r.anchor_timestamp as number,
@@ -404,16 +407,23 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // a receipt can never transcribe a still-connected run's outcomes as
     // absent. An unconfirmed flush leaves the run UNfinalized — better an
     // unreceiptable run than a receipt over a possibly incomplete log.
-    if (flushConfirmed && !observationsIncomplete) {
+    // A failed stop means the socket may outlive this point and produce
+    // stanzas after the marker — same disqualifier as an unconfirmed flush.
+    const unfinalizable = !flushConfirmed
+      ? "transport flush unconfirmed"
+      : observationsIncomplete
+        ? "observation store incomplete"
+        : stopFailed
+          ? "socket teardown unconfirmed"
+          : undefined;
+    if (unfinalizable == null) {
       try {
         db.prepare("UPDATE run SET finalized_at = ?").run(Date.now());
       } catch (err) {
         console.error("run finalization failed:", err);
       }
     } else {
-      console.error(
-        `⚠ ${flushConfirmed ? "observation store incomplete" : "transport flush unconfirmed"} — run left unfinalized and therefore unreceiptable`,
-      );
+      console.error(`⚠ ${unfinalizable} — run left unfinalized and therefore unreceiptable`);
     }
     // The matrix is written even when teardown failed — observations are the
     // point of the run and must survive a bad stop.
