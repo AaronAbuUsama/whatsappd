@@ -19,14 +19,36 @@ export interface MessageContext {
 }
 
 /**
- * How the sender identity was resolved. `from` on the message is the resolved
- * id; `alt` carries the alternate form so a host can map between the two
- * identity schemes (LID and phone number).
+ * An actual WhatsApp address (ADR-0001).
+ *
+ * @remarks
+ * `id` is the native address of the party WhatsApp named, and `mode` says which
+ * identity scheme it belongs to; `alt` carries the known equivalent native form
+ * (LID ↔ phone-number JID) when WhatsApp supplies one, so a host can join the
+ * two schemes. This is an address, not a person: no identity is merged,
+ * invented, or resolved beyond the forms WhatsApp itself delivered.
  */
-export interface Addressing {
+export interface WhatsAppAddress {
+  readonly id: string;
   readonly mode: "lid" | "pn";
-  /** The alternate identity, when available. */
+  /** The known equivalent native form, when available. */
   readonly alt?: string;
+}
+
+/**
+ * Name an address by the native form WhatsApp delivered.
+ *
+ * @remarks
+ * The suffix decides the scheme, so `mode` can never contradict `id` — the
+ * proto's own `addressingMode` describes the *chat*, and trusting it would let
+ * a phone-number address be labelled `lid` and corrupt any downstream join.
+ *
+ * @param id - The native address, e.g. `15551234567@s.whatsapp.net` or `55555@lid`.
+ * @param alt - The known equivalent native form, when WhatsApp supplied one.
+ * @returns The address, carrying `alt` only when it is present.
+ */
+export function addressOf(id: string, alt?: string): WhatsAppAddress {
+  return { id, mode: id.endsWith("@lid") ? "lid" : "pn", ...(alt && { alt }) };
 }
 
 /** Unwrapped wrapper flags — kept even though we detect on the inner content. */
@@ -39,8 +61,23 @@ export interface MessageFlags {
 interface Base {
   readonly id: string;
   readonly chatId: string;
-  /** resolved sender identity (see `addressing` for the alternate form) */
-  readonly from: string;
+  /**
+   * The actual author of the message. Own-sent messages name the linked
+   * account, never the peer or the group chat.
+   */
+  readonly sender: WhatsAppAddress;
+  /**
+   * The participant WhatsApp delivered on this message's protocol key, when it
+   * set one.
+   *
+   * @remarks
+   * A routing detail, **not** an author — read {@link Base.sender} for that.
+   * React, edit, and delete target a message by handing its exact key back to
+   * WhatsApp, so the delivered participant is kept verbatim: `sender` is the
+   * account's one stable address, which is deliberately not restated per chat
+   * and so may differ from the form the key carried.
+   */
+  readonly keyParticipant?: string;
   /** sender's WhatsApp display name (proto pushName), when present. */
   readonly pushName?: string;
   readonly fromMe: boolean;
@@ -49,7 +86,6 @@ interface Base {
   readonly live: boolean;
   readonly isGroup: boolean;
   readonly context?: MessageContext;
-  readonly addressing?: Addressing;
   readonly flags?: MessageFlags;
 }
 

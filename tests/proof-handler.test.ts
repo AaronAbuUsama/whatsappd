@@ -6,7 +6,7 @@ const message = (text: string, live = true): InboundMessage =>
   ({
     id: text,
     chatId: "1555@s.whatsapp.net",
-    from: "1555@s.whatsapp.net",
+    sender: { id: "1555@s.whatsapp.net", mode: "pn" },
     fromMe: true,
     timestamp: 1,
     live,

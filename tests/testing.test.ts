@@ -243,7 +243,7 @@ test("group replies quote the actual participant", async () => {
     message: textMessage({
       id: "m1",
       chatId: "room@g.us",
-      from: "person@s.whatsapp.net",
+      sender: "person@s.whatsapp.net",
       text: "Hello",
     }),
   });

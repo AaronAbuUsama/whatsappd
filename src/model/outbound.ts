@@ -42,12 +42,22 @@ export interface SendOptions {
   readonly mentions?: readonly string[];
 }
 
-/** Build a `MessageRef` from a received message, for react/edit/delete/quote. */
+/**
+ * Build a `MessageRef` from a received message, for react/edit/delete/quote.
+ *
+ * @remarks
+ * The group participant is the one WhatsApp delivered on the key, not the
+ * author's address: react/edit/delete target a message by handing this key
+ * straight back, so a reconstructed participant would aim at a key that never
+ * existed. They coincide for incoming messages; for own messages `sender` is
+ * the account's stable address while the key may carry another native form.
+ */
 export function refOf(m: InboundMessage): MessageRef {
+  const participant = m.keyParticipant ?? m.sender.id;
   return {
     id: m.id,
     chatId: m.chatId,
     fromMe: m.fromMe,
-    ...(m.isGroup && { participant: m.from }),
+    ...(m.isGroup && participant && { participant }),
   };
 }

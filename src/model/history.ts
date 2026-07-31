@@ -70,11 +70,16 @@ export interface ConversationSyncContext {
  * non-live messages (`live: false`) that flow through the same awaited
  * subscription as everything else. Inspect {@link ConversationSyncContext} to
  * learn why the batch arrived; never infer completeness from its size.
+ *
+ * @remarks
+ * A batch carries no `self` contact. WhatsApp never populated one, and per
+ * ADR-0001 a sync batch is not an identity source: the linked account's own
+ * address comes from the connected session identity, and every message already
+ * names its author in {@link InboundMessage.sender}.
  */
 export interface ConversationSyncBatch {
   readonly context: ConversationSyncContext;
   readonly chats: readonly HistoryChat[];
   readonly contacts: readonly HistoryContact[];
-  readonly self?: HistoryContact;
   readonly messages: readonly InboundMessage[];
 }

@@ -14,13 +14,14 @@ import {
   type WAMessage,
   type WAMessageContent,
 } from "baileys";
-import type {
-  Addressing,
-  InboundMessage,
-  MediaHandle,
-  MediaMeta,
-  MessageContext,
-  MessageFlags,
+import {
+  addressOf,
+  type InboundMessage,
+  type MediaHandle,
+  type MediaMeta,
+  type MessageContext,
+  type MessageFlags,
+  type WhatsAppAddress,
 } from "../model/message.ts";
 import { noDownloader, type DownloadThunk } from "./download.ts";
 
@@ -160,19 +161,38 @@ function media(m: {
   };
 }
 
-/** Resolve the sender's addressing mode and alternate identity. */
-function addressing(raw: WAMessage): Addressing | undefined {
+/**
+ * Resolve the actual author of a message (ADR-0001).
+ *
+ * @remarks
+ * Own-sent messages name the linked account, always by the same address — the
+ * account's own, never a per-chat restatement of it, so one account is never
+ * two identities. WhatsApp leaves `key.participant` empty on own DMs, so the
+ * peer fallback below would otherwise attribute them to the conversation
+ * counterpart: the misattribution this function exists to prevent. Incoming
+ * messages keep the real participant, falling back to the chat id for 1:1
+ * chats, where `participant` is legitimately absent because the chat *is* the
+ * sender.
+ *
+ * @param raw - The raw proto message.
+ * @param self - The linked account's own address, already normalized (no device suffix).
+ * @returns The author's address, carrying its equivalent native form when known.
+ */
+function senderOf(raw: WAMessage, self: WhatsAppAddress): WhatsAppAddress {
   const key = raw.key;
-  const mode =
-    key.addressingMode === "lid" ? "lid" : key.addressingMode === "pn" ? "pn" : undefined;
-  const alt = key.participantAlt || key.remoteJidAlt || undefined;
-  if (!mode && !alt) return undefined;
-  return { mode: mode ?? "pn", ...(alt && { alt }) };
+  if (key.fromMe) return self;
+  // `||` not `??`: LID 1:1 DMs deliver participant as "" (empty), not undefined,
+  // and the sender there IS the chat peer — fall back to chatId. (live-observed)
+  return addressOf(
+    key.participant || key.remoteJid || "",
+    key.participantAlt || key.remoteJidAlt || undefined,
+  );
 }
 
 export function toInbound(
   raw: WAMessage,
   live: boolean,
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): InboundMessage | undefined {
   /** Attach the on-demand byte fetcher to the media metadata. */
@@ -189,16 +209,14 @@ export function toInbound(
   const base = {
     id,
     chatId,
-    // `||` not `??`: LID 1:1 DMs deliver participant as "" (empty), not undefined,
-    // and the sender there IS the chat peer — fall back to chatId. (live-observed)
-    from: raw.key.participant || chatId,
+    sender: senderOf(raw, self),
+    ...(raw.key.participant && { keyParticipant: raw.key.participant }),
     ...(raw.pushName && { pushName: raw.pushName }),
     fromMe: raw.key.fromMe ?? false,
     timestamp: toMillis(raw.messageTimestamp),
     live,
     isGroup: isJidGroup(chatId) ?? false,
     ...(context(content) && { context: context(content) }),
-    ...(addressing(raw) && { addressing: addressing(raw) }),
     ...(Object.keys(flags).length > 0 && { flags }),
   };
 

@@ -8,6 +8,7 @@
 import makeWASocket, {
   Browsers,
   fetchLatestBaileysVersion,
+  jidNormalizedUser,
   makeCacheableSignalKeyStore,
   proto,
   type BaileysEventMap,
@@ -18,12 +19,14 @@ import makeWASocket, {
 import type { Logger } from "pino";
 import { classifyDisconnect, type WhatsAppFault } from "../errors.ts";
 import type { AuthStrategy } from "../ports.ts";
-import type {
-  GroupMetadata,
-  GroupUpdate,
-  ConversationSyncBatch,
-  InboundMessage,
-  WaIdentity,
+import {
+  addressOf,
+  type GroupMetadata,
+  type GroupUpdate,
+  type ConversationSyncBatch,
+  type InboundMessage,
+  type WaIdentity,
+  type WhatsAppAddress,
 } from "../model/index.ts";
 import type { Update } from "../model/update.ts";
 import type { MessageRef, Outbound, SendOptions } from "../model/outbound.ts";
@@ -101,26 +104,54 @@ type MessagesUpsertPayload = BaileysEventMap["messages.upsert"];
 type MessagingHistoryPayload = BaileysEventMap["messaging-history.set"];
 type MessagingHistoryStatusPayload = BaileysEventMap["messaging-history.status"];
 
+/**
+ * The linked account's own address, in the forms WhatsApp knows it by.
+ *
+ * @remarks
+ * `sock.user` is the registered credential identity, so it exists from the
+ * moment credentials do — strictly before any message event can arrive. The
+ * device suffix (`:12`) is stripped because participants are never named with
+ * one, and the LID form rides along as the equivalent native address so a host
+ * can join the two schemes.
+ *
+ * Throws rather than returning a placeholder if the identity is somehow absent:
+ * a message that cannot name its author must not be converted at all, since an
+ * empty or borrowed sender is the corruption ADR-0001 exists to prevent, and
+ * this repo fails the pipeline instead of logging and skipping (ADR-0013).
+ *
+ * @param sock - The socket, for its registered `user`.
+ * @returns The account's address, with its `lid` form as `alt`.
+ * @throws TypeError - When the socket has no registered account identity.
+ */
+export function selfAddress(sock: Pick<WASocket, "user">): WhatsAppAddress {
+  const u = sock.user;
+  if (!u?.id) throw new TypeError("no account identity: cannot name the author of a message");
+  return addressOf(jidNormalizedUser(u.id), u.lid ? jidNormalizedUser(u.lid) : undefined);
+}
+
 export function toMessagesUpsertEvents(
   payload: MessagesUpsertPayload,
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): RawEvent[] {
   if (payload.type !== "notify") {
     const sync = toConversationSyncBatch(
       { chats: [], contacts: [], messages: payload.messages },
+      self,
       makeDownload,
     );
     return sync.messages.length > 0 ? [{ t: "conversation_sync", sync }] : [];
   }
 
   return payload.messages.flatMap((raw) => {
-    const msg = toInbound(raw, true, makeDownload);
+    const msg = toInbound(raw, true, self, makeDownload);
     return msg ? [{ t: "message", msg } satisfies RawEvent] : [];
   });
 }
 
 export function toMessagingHistoryEvents(
   payload: MessagingHistoryPayload,
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): RawEvent[] {
   const events: RawEvent[] = [];
@@ -128,7 +159,7 @@ export function toMessagingHistoryEvents(
   if (!complete && typeof payload.progress === "number" && Number.isFinite(payload.progress)) {
     events.push({ t: "conversation_sync_progress", progress: payload.progress });
   }
-  const sync = toConversationSyncBatch(payload, makeDownload);
+  const sync = toConversationSyncBatch(payload, self, makeDownload);
   if (sync.chats.length > 0 || sync.contacts.length > 0 || sync.messages.length > 0) {
     events.push({ t: "conversation_sync", sync });
   }
@@ -361,16 +392,21 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
   const recent = new Map<string, WAMessage>();
   const resolveQuoted = (ref: MessageRef): WAMessage | undefined => recent.get(ref.id);
 
+  // `selfAddress(sock)` is resolved per event, not hoisted beside `makeDownload`:
+  // a fresh pairing has no `sock.user` at wiring time, and hoisting would throw
+  // before the account it names exists.
   sock.ev.on("messages.upsert", (payload) => {
     rememberRecent(recent, payload.messages);
-    for (const event of toMessagesUpsertEvents(payload, makeDownload)) queue.push(event);
+    for (const event of toMessagesUpsertEvents(payload, selfAddress(sock), makeDownload)) {
+      queue.push(event);
+    }
   });
 
   // Update events: receipts, reactions, edits, revokes. Each mapper returns
   // undefined for shapes we don't model — we only enqueue hits.
   sock.ev.on("messages.update", (updates) => {
     for (const u of updates) {
-      const update = mapMessageUpdate(u, makeDownload);
+      const update = mapMessageUpdate(u, selfAddress(sock), makeDownload);
       if (update) queue.push({ t: "update", update });
     }
   });
@@ -411,7 +447,9 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
   sock.ev.on("messaging-history.set", (payload) => {
     logger.info(historySetTelemetry(payload), "messaging history set");
     rememberRecent(recent, payload.messages);
-    for (const event of toMessagingHistoryEvents(payload, makeDownload)) queue.push(event);
+    for (const event of toMessagingHistoryEvents(payload, selfAddress(sock), makeDownload)) {
+      queue.push(event);
+    }
   });
 
   sock.ev.on("messaging-history.status", (payload) => {

@@ -1,4 +1,4 @@
-import type { InboundMessage } from "./model/message.ts";
+import { addressOf, type InboundMessage } from "./model/message.ts";
 import type { MessageRef, Outbound, SendOptions } from "./model/outbound.ts";
 import type { WhatsAppSession } from "./session.ts";
 import { createSubscriptionDispatcher, type WhatsAppEvent } from "./subscription.ts";
@@ -7,7 +7,8 @@ export interface TextMessageInput {
   readonly id: string;
   readonly chatId: string;
   readonly text: string;
-  readonly from?: string;
+  /** The author's native address. Defaults to the chat, which is only ever true of an incoming 1:1. */
+  readonly sender?: string;
   readonly fromMe?: boolean;
   readonly timestamp?: number;
   readonly live?: boolean;
@@ -16,14 +17,20 @@ export interface TextMessageInput {
 
 export function textMessage(input: TextMessageInput): InboundMessage {
   const isGroup = input.isGroup ?? input.chatId.endsWith("@g.us");
-  if (isGroup && (!input.from || input.from === input.chatId)) {
+  const fromMe = input.fromMe ?? false;
+  if (isGroup && (!input.sender || input.sender === input.chatId)) {
     throw new TypeError("group messages require an actual sender");
+  }
+  // The chat default would name the peer as the author of your own message —
+  // the misattribution ADR-0001 exists to prevent, so it is not constructible.
+  if (fromMe && !input.sender) {
+    throw new TypeError("own messages require the linked account as sender");
   }
   return {
     id: input.id,
     chatId: input.chatId,
-    from: input.from ?? input.chatId,
-    fromMe: input.fromMe ?? false,
+    sender: addressOf(input.sender ?? input.chatId),
+    fromMe,
     timestamp: input.timestamp ?? 0,
     live: input.live ?? true,
     isGroup,

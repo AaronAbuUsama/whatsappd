@@ -3,6 +3,7 @@ import { generateWAMessage, type AnyMessageContent } from "baileys";
 import { toContent, refToKey, keyToRef, toOptions } from "../src/baileys/outbound.ts";
 import { toInbound } from "../src/baileys/inbound.ts";
 import { refOf, type MessageRef, type Outbound } from "../src/model/outbound.ts";
+import { SELF } from "./fixtures.ts";
 
 const REF: MessageRef = { id: "MSG1", chatId: "111@s.whatsapp.net", fromMe: false };
 
@@ -111,8 +112,31 @@ test("refOf lifts an inbound message into a ref", () => {
       messageTimestamp: 1,
     } as never,
     true,
+    SELF,
   )!;
   expect(refOf(inbound)).toEqual({ id: "ID9", chatId: "c@s.whatsapp.net", fromMe: false });
+});
+
+test("refOf keeps the delivered group participant, not the author's address", () => {
+  // react/edit/delete hand this key straight back to WhatsApp, so an own group
+  // message delivered under the account's LID must not be re-aimed at its PN.
+  const inbound = toInbound(
+    {
+      key: {
+        remoteJid: "123-456@g.us",
+        id: "ID10",
+        fromMe: true,
+        participant: "9001@lid",
+        addressingMode: "lid",
+      },
+      message: { conversation: "mine" },
+      messageTimestamp: 1,
+    } as never,
+    true,
+    SELF,
+  )!;
+  expect(inbound.sender.id).toBe(SELF.id); // author: the one stable account address
+  expect(refOf(inbound).participant).toBe("9001@lid"); // key: exactly as delivered
 });
 
 // ── round-trip through Baileys' OWN generator (the strong test) ───────────────
@@ -125,7 +149,7 @@ async function roundTrip(out: Outbound) {
       throw new Error("no media upload in round-trip");
     },
   });
-  return toInbound(raw, true)!;
+  return toInbound(raw, true, SELF)!;
 }
 
 test("round-trip: text survives Outbound → Baileys → Inbound", async () => {

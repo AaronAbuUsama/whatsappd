@@ -1,50 +1,66 @@
 import { expect, test } from "./_expect.ts";
 import { proto } from "baileys";
 import { mapMessageUpdate, mapReaction, mapReceiptUpdate } from "../src/baileys/updates.ts";
+import { SELF } from "./fixtures.ts";
 
 const KEY = { remoteJid: "111@s.whatsapp.net", id: "MSG1", fromMe: true };
 
 // ── messages.update: receipt / edit / revoke discrimination ──────────────────
 
 test("status update → receipt (delivered)", () => {
-  const u = mapMessageUpdate({
-    key: KEY,
-    update: { status: proto.WebMessageInfo.Status.DELIVERY_ACK },
-  });
+  const u = mapMessageUpdate(
+    {
+      key: KEY,
+      update: { status: proto.WebMessageInfo.Status.DELIVERY_ACK },
+    },
+    SELF,
+  );
   expect(u).toMatchObject({ kind: "receipt", status: "delivered", ref: { id: "MSG1" } });
 });
 
 test("status update → receipt (read)", () => {
-  const u = mapMessageUpdate({ key: KEY, update: { status: proto.WebMessageInfo.Status.READ } });
+  const u = mapMessageUpdate(
+    { key: KEY, update: { status: proto.WebMessageInfo.Status.READ } },
+    SELF,
+  );
   expect(u!.kind).toBe("receipt");
   expect((u as { status: string }).status).toBe("read");
 });
 
 test("status update → receipt (played)", () => {
-  const u = mapMessageUpdate({ key: KEY, update: { status: proto.WebMessageInfo.Status.PLAYED } });
+  const u = mapMessageUpdate(
+    { key: KEY, update: { status: proto.WebMessageInfo.Status.PLAYED } },
+    SELF,
+  );
   expect((u as { status: string }).status).toBe("played");
 });
 
 test("revoke stub → revoke update carrying who did it", () => {
-  const u = mapMessageUpdate({
-    key: KEY,
-    update: {
-      message: null,
-      messageStubType: proto.WebMessageInfo.StubType.REVOKE,
-      key: { remoteJid: "111@s.whatsapp.net", id: "REV", participant: "p@s.whatsapp.net" },
+  const u = mapMessageUpdate(
+    {
+      key: KEY,
+      update: {
+        message: null,
+        messageStubType: proto.WebMessageInfo.StubType.REVOKE,
+        key: { remoteJid: "111@s.whatsapp.net", id: "REV", participant: "p@s.whatsapp.net" },
+      },
     },
-  });
+    SELF,
+  );
   expect(u).toMatchObject({ kind: "revoke", ref: { id: "MSG1" }, by: "p@s.whatsapp.net" });
 });
 
 test("edit → edit update with re-mapped inbound content", () => {
-  const u = mapMessageUpdate({
-    key: { remoteJid: "111@s.whatsapp.net", id: "MSG1", fromMe: false },
-    update: {
-      message: { editedMessage: { message: { conversation: "fixed text" } } },
-      messageTimestamp: 1700,
+  const u = mapMessageUpdate(
+    {
+      key: { remoteJid: "111@s.whatsapp.net", id: "MSG1", fromMe: false },
+      update: {
+        message: { editedMessage: { message: { conversation: "fixed text" } } },
+        messageTimestamp: 1700,
+      },
     },
-  });
+    SELF,
+  );
   expect(u!.kind).toBe("edit");
   const e = u as { message: { kind: string; text: string }; ref: { id: string } };
   expect(e.ref.id).toBe("MSG1");
@@ -53,7 +69,7 @@ test("edit → edit update with re-mapped inbound content", () => {
 });
 
 test("unmodeled update (e.g. starred only) → undefined", () => {
-  expect(mapMessageUpdate({ key: KEY, update: { starred: true } })).toBe(undefined);
+  expect(mapMessageUpdate({ key: KEY, update: { starred: true } }, SELF)).toBe(undefined);
 });
 
 // ── message-receipt.update: per-participant (group) receipts ──────────────────

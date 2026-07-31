@@ -10,8 +10,21 @@
  *     media stays hand-built — see inbound.test.ts.)
  */
 import { generateWAMessage, type AnyMessageContent, type WAMessage } from "baileys";
+import type { WhatsAppAddress } from "../src/model/message.ts";
 
 const CHAT = "1234567890@s.whatsapp.net";
+
+/**
+ * The linked account, as the socket resolves it: device suffix already
+ * stripped, LID form kept as the equivalent native address. Matches the
+ * `userJid` {@link realMessage} generates with, so a round-tripped own message
+ * names the same account.
+ */
+export const SELF: WhatsAppAddress = {
+  id: "me@s.whatsapp.net",
+  mode: "pn",
+  alt: "9001@lid",
+};
 
 /** Build a minimal base message in the protocol library's own test idiom. */
 export function baseMessage(

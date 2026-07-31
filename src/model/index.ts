@@ -4,11 +4,12 @@ export { isTerminal, isOnline } from "./status.ts";
 export type {
   InboundMessage,
   MessageContext,
-  Addressing,
+  WhatsAppAddress,
   MessageFlags,
   MediaMeta,
   MediaHandle,
 } from "./message.ts";
+export { addressOf } from "./message.ts";
 export type { Outbound, BinaryInput, MessageRef, SendOptions } from "./outbound.ts";
 export { refOf } from "./outbound.ts";
 export type { Update, ReceiptStatus } from "./update.ts";

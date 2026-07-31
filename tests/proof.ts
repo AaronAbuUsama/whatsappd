@@ -82,7 +82,7 @@ session.subscribe({
     // The exact ping trigger cannot loop: the emitted response is "pong".
     if (!m.live) return;
     const desc = m.kind === "text" ? m.text : `[${m.kind}]`;
-    console.log(`📩 ${m.from}: ${desc}`);
+    console.log(`📩 ${m.sender.id}: ${desc}`);
     if (replied) console.log(`📤 replied "pong" to ${m.chatId}`);
     // Live media check: pull bytes on demand and save to disk.
     if (
