@@ -210,6 +210,7 @@ export function toInbound(
     id,
     chatId,
     sender: senderOf(raw, self),
+    ...(raw.key.participant && { keyParticipant: raw.key.participant }),
     ...(raw.pushName && { pushName: raw.pushName }),
     fromMe: raw.key.fromMe ?? false,
     timestamp: toMillis(raw.messageTimestamp),

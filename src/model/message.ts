@@ -66,6 +66,18 @@ interface Base {
    * account, never the peer or the group chat.
    */
   readonly sender: WhatsAppAddress;
+  /**
+   * The participant WhatsApp delivered on this message's protocol key, when it
+   * set one.
+   *
+   * @remarks
+   * A routing detail, **not** an author — read {@link Base.sender} for that.
+   * React, edit, and delete target a message by handing its exact key back to
+   * WhatsApp, so the delivered participant is kept verbatim: `sender` is the
+   * account's one stable address, which is deliberately not restated per chat
+   * and so may differ from the form the key carried.
+   */
+  readonly keyParticipant?: string;
   /** sender's WhatsApp display name (proto pushName), when present. */
   readonly pushName?: string;
   readonly fromMe: boolean;
