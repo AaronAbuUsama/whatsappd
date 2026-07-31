@@ -177,8 +177,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   // In-memory only (never persisted): real chat jids and oldest-known anchors.
   const chats = new Map<string, { count: number; oldest?: Anchor & { hash: string } }>();
-  const seenBeforeRequest = new Set<string>();
-  let anyRequestSubmitted = false;
+  // Wall-clock of first observation per message identity, so "newly stored"
+  // is judged against each request's own submission time — not a baseline
+  // frozen at the first request.
+  const firstSeen = new Map<string, number>();
 
   function track(m: InboundMessage): void {
     const entry = chats.get(m.chatId) ?? { count: 0 };
@@ -187,7 +189,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       entry.oldest = { ref: refOf(m), timestamp: m.timestamp, hash: hashMsg(m) };
     }
     chats.set(m.chatId, entry);
-    if (!anyRequestSubmitted) seenBeforeRequest.add(hashMsg(m));
+    const hash = hashMsg(m);
+    if (!firstSeen.has(hash)) firstSeen.set(hash, Date.now());
   }
 
   function recordBatch(batch: ConversationSyncBatch): void {
@@ -268,7 +271,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             WHERE b.request_session_id = ?`,
         )
         .all(id) as unknown as BoundaryRow[];
-      const fresh = msgs.filter((m) => !seenBeforeRequest.has(m.msgHash)).length;
+      const submittedAt = r.submitted_at as number;
+      const fresh = msgs.filter((m) => (firstSeen.get(m.msgHash) ?? Infinity) > submittedAt).length;
       const verdict = boundaryVerdict(
         r.anchor_timestamp as number,
         r.anchor_msg_hash as string,
@@ -352,7 +356,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             const [jid, c] = entry;
             if (!c.oldest) throw new Error(`no anchored message known for ${jid}`);
             const count = args[1] ? Number(args[1]) : 50;
-            anyRequestSubmitted = true;
             const { requestId } = await session.requestHistory(
               { ref: c.oldest.ref, timestamp: c.oldest.timestamp },
               { count },

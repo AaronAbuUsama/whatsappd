@@ -134,25 +134,21 @@ export interface WhatsAppSession {
    * means exactly one thing: the request was accepted by the server for relay.
    * It does not mean the phone received it (that happens later, if at all, and
    * is not surfaced here), and it does not mean any history exists or will
-   * arrive.
+   * arrive. Treat a request that produces nothing as an expected outcome, not
+   * an error.
    *
-   * What live proof established (see `docs/history-semantics.md`):
-   *
-   * - The tested iPhone primary acknowledged delivery of every request and
-   *   answered **none** — treat a request that produces nothing as an
-   *   expected outcome, not an error. Android primaries have been reported
-   *   to answer (upstream Baileys#2452); the platform split is unconfirmed.
-   * - If an answer comes, messages arrive later as `conversationSync` batches
-   *   with `context.source === "on_demand"` and `context.requestSessionId`
-   *   intended to echo this receipt's `requestId` — treat that match as
-   *   best-effort correlation, not a guarantee.
-   * - There is NO completion, exhaustion, or delivered-count signal, and none
-   *   can be synthesized: silence and "no older messages" are
-   *   indistinguishable. UI built on this may say "request sent" or "no older
-   *   saved messages"; it must never claim "all history loaded".
+   * If an answer comes, messages arrive later as `conversationSync` batches
+   * with `context.source === "on_demand"` and `context.requestSessionId`
+   * intended to echo this receipt's `requestId` — best-effort correlation,
+   * not a guarantee. There is NO completion, exhaustion, or delivered-count
+   * signal, and none can be synthesized: silence and "no older messages" are
+   * indistinguishable. UI built on this may say "request sent" or "no older
+   * saved messages"; it must never claim "all history loaded".
    *
    * Do not await "the result" — there is no result to await. Subscribe to
-   * `conversationSync` and treat anything that arrives as a windfall.
+   * `conversationSync` and treat anything that arrives as a windfall. For
+   * live-proof status, observed response rates, and device/platform caveats,
+   * see `docs/history-semantics.md` — the single home for those observations.
    *
    * @param anchor - The oldest known message to page back from: its ref plus
    * its timestamp in epoch milliseconds.

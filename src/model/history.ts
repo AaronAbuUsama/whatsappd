@@ -18,14 +18,15 @@ export interface HistoryContact {
  * Where a conversation-sync batch came from.
  *
  * - `initial_bootstrap` / `recent` / `full` — connection-driven protocol
- *   delivery. WhatsApp sends a linked device only a bounded slice (roughly the
- *   last ~3 months densely, plus fragments); no signal marks it complete.
- * - `on_demand` — an answer to {@link WhatsAppSession.requestHistory}. The
- *   phone may never send one at all: live proof against the tested iPhone
- *   primary saw every request acknowledged as delivered and none answered
- *   (`docs/history-semantics.md`).
+ *   delivery. WhatsApp sends a linked device only a bounded slice of history;
+ *   no signal marks it complete.
+ * - `on_demand` — an answer to `requestHistory`. The phone may never send
+ *   one at all; treat absence as an expected outcome.
  * - `unknown` — a batch the protocol did not label (e.g. offline catch-up
  *   appends).
+ *
+ * Measured slice depths, observed response rates, and device caveats live in
+ * `docs/history-semantics.md`.
  */
 export type ConversationSyncSource =
   | "initial_bootstrap"

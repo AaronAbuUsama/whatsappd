@@ -1,8 +1,12 @@
 # WhatsApp history semantics — what a linked device can honestly promise
 
 Status: proven on the live proof account, issue #18. Protocol-level facts are
-cited against Baileys 7.0.0-rc14 sources; behavioral claims come from the
-recorded proof matrix (`.proof-receipts/issue18-p4.json`).
+cited against Baileys 7.0.0-rc14 sources. This file is the single prose home
+for the live observations; every quantitative claim below names its backing
+receipt — `.proof-receipts/issue18-p4.run1-b06fa2f.json` (the 5-request
+matrix) or `.proof-receipts/issue18-p4.run2-ea53648.json` (the post-review
+confirmation run). Receipts are per-run and append-only; a receipt is
+evidence only for the git head it names (ADR-0017).
 
 ## What initial sync delivers (the linked-device cap)
 
@@ -82,12 +86,12 @@ request and answers none of them.** The full chain was observed on a real
 account (primary: iPhone) with Baileys 7.0.0-rc14, the newest release at the
 time (published 2026-07-29):
 
-| Step           | Signal                                                 | Observed                       |
-| -------------- | ------------------------------------------------------ | ------------------------------ |
-| Submission     | `requestHistory` resolves with the request message id  | ✅ every attempt               |
-| Server relay   | ack for the outgoing peer message                      | ✅ every attempt               |
-| Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ every attempt               |
-| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **never** (0 of 5 requests) |
+| Step           | Signal                                                 | Observed                                                                       |
+| -------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| Submission     | `requestHistory` resolves with the request message id  | ✅ all 7 attempts across both runs (incl. with the phone fully offline, run 1) |
+| Server relay   | ack for the outgoing peer message                      | ✅ all 7 attempts                                                              |
+| Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ every online attempt; run 2 embeds them per request (`deliveryAcksAt`)      |
+| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **never** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)                     |
 
 Conditions varied without effect: phone idle vs. WhatsApp foregrounded during
 an active conversation, personal DM vs. self-chat, `count` 50/25/10, anchors
@@ -125,5 +129,19 @@ request type, and a request-metadata diff against an official client.
 | Phone offline                     | Directly observed (airplane mode + Wi-Fi off): submission resolves identically to the online case with no delivery ack; the queued request's `peer_msg` ack arrived 4m16s later when the phone reconnected (22:06:57 → 22:11:13Z). The submission receipt therefore proves nothing about the phone; only the delivery ack does — and even confirmed delivery produced no response |
 
 Sanitized observations (hashed identities, counts, digests) are committed as
-`.proof-receipts/issue18-p4.json` / `issue18-p2.json`; the raw observation
-stores stay private.
+the per-run receipts named above; the raw observation stores stay private.
+The database-oracle cross-check (store SHA-256, counts, ordered-id digest,
+close/reopen integrity, per-request correlation counts) is embedded in each
+P4 receipt as supporting evidence per ADR-0017. **No P2 rung is claimed**:
+the observation store is a disposable capture tool, and product durability
+has no store to prove until issue #20 (see PR #51, "P2 disposition").
+
+Scenario provenance: the phone-offline row, count variation (50/25/10), and
+the DM/self-chat spread are run 1 (`run1-b06fa2f`); the embedded per-request
+delivery acks and the repeated-request-on-one-anchor row are run 2
+(`run2-ea53648`). Run 1 predates the ack-embedding receipt writer, so its
+delivery evidence is the operator-note timeline in the receipt plus the
+transport-log excerpt on PR #51; run 1's committed file is byte-identical to
+the historical receipt at commit `f9a77cc` except that operator notes passed
+through the writer's redaction (verifiable:
+`git show f9a77cc:.proof-receipts/issue18-p4.json`).

@@ -1,27 +1,33 @@
 /**
  * Issue #18 receipt writer — condense a history-proof observation store into
- * a committed, sanitized proof receipt.
+ * a committed, sanitized P4 proof receipt.
  *
- *   node --experimental-strip-types tests/history-proof-receipt.ts <tier> <observations.db> [run.log]
+ *   node --experimental-strip-types tests/history-proof-receipt.ts <observations.db> <run.log>
  *
- * tier is p2 or p4.
+ * The tier is not an input: this writer only ever emits P4 receipts, named
+ * `issue18-p4.run<N>-<gitHead7>.json`, one per live run, never overwriting —
+ * a rerun adds evidence instead of destroying the old (ADR-0017: a receipt is
+ * evidence only for the head it names).
  *
- * P4 additionally parses the same run's transport debug log (LOG_LEVEL=debug
- * output) for `peer_msg` delivery receipts matching each submitted request id,
- * so the receipt itself carries the delivered evidence its claim rests on.
+ * The run's transport debug log (LOG_LEVEL=debug output) is REQUIRED: the
+ * writer embeds each request's `peer_msg` delivery receipts parsed from it,
+ * so the receipt carries the delivered/undelivered evidence its claims rest
+ * on. An empty ack list for a request is itself evidence (e.g. the
+ * phone-offline scenario).
  *
- * P2 exercises the disposable snapshot's durability boundary: integrity check
- * plus identical oracle digests across a close/reopen of the store (the
- * issue16-p2 shape).
+ * The embedded oracle fields (store SHA-256, counts, ordered-id digest,
+ * timestamp bounds, close/reopen `snapshotRestarted`) are the Database Oracle
+ * cross-check that ADR-0017 and issue #18 call SUPPORTING evidence; they
+ * claim no proof rung of their own. P2 is a product-durability rung and is
+ * not claimable until a durable product store exists (issue #20).
  *
  * Every emitted field is sanitized: hashed identities, counts, timestamps,
  * digests — never message contents or native addresses (long digit runs in
- * free-form notes are redacted defensively). gitHead is read at write time;
- * per ADR-0017 a receipt is evidence only for the head it names.
+ * free-form notes are redacted defensively).
  */
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +35,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
 
-const [tier, dbFile, runLog] = process.argv.slice(2);
+const [dbFile, runLog] = process.argv.slice(2);
 
 const redact = (text: string): string => text.replace(/\+?\d{7,15}/g, "<redacted>");
 
@@ -90,8 +96,8 @@ export function deliveryAcksFor(log: string, requestId: string): string[] {
 
 // Only run when executed directly, so deliveryAcksFor stays unit-testable.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if ((tier !== "p2" && tier !== "p4") || !dbFile) {
-    console.error("usage: history-proof-receipt.ts <p2|p4> <observations.db> [run.log]");
+  if (!dbFile || !runLog) {
+    console.error("usage: history-proof-receipt.ts <observations.db> <run.log>");
     process.exit(1);
   }
   const db = new DatabaseSync(dbFile, { readOnly: true });
@@ -104,7 +110,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
        FROM batch b LEFT JOIN message m ON m.batch_seq = b.seq
       WHERE b.request_session_id = ?`,
   );
-  const log = runLog ? readFileSync(runLog, "utf8") : undefined;
+  const log = readFileSync(runLog, "utf8");
   const perRequest = requests.map((r) => {
     const correlated = correlatedStmt.get(String(r.request_id)) as {
       batches: number;
@@ -117,7 +123,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       anchorTimestamp: r.anchor_timestamp,
       count: r.count,
       submittedAt: r.submitted_at,
-      ...(log ? { deliveryAcksAt: deliveryAcksFor(log, String(r.request_id)) } : {}),
+      deliveryAcksAt: deliveryAcksFor(log, String(r.request_id)),
       correlatedBatches: correlated.batches,
       correlatedMessages: correlated.messages,
     };
@@ -130,8 +136,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   ).map((n) => ({ at: n.at, text: redact(n.text) }));
   db.close();
 
-  // P2 boundary: the disposable snapshot must survive a close/reopen with an
-  // intact integrity check and identical oracle digests.
+  // Oracle integrity: the capture store must survive a close/reopen with an
+  // intact integrity check and identical digests. Supporting evidence only —
+  // this is not, and must never be labeled, a product-durability (P2) proof.
   const reopened = new DatabaseSync(dbFile, { readOnly: true });
   const quickCheck = String(
     (reopened.prepare("PRAGMA quick_check;").get() as Record<string, unknown>)["quick_check"] ??
@@ -142,23 +149,24 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const snapshotRestarted = quickCheck === "ok" && JSON.stringify(before) === JSON.stringify(after);
   if (!snapshotRestarted) throw new Error("snapshot restart proof failed");
 
+  const gitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root }).toString().trim();
   const receipt = {
     nonce: randomUUID(),
-    gitHead: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root }).toString().trim(),
-    tier: tier.toUpperCase(),
+    gitHead,
+    tier: "P4",
     observationDbSha256: createHash("sha256").update(readFileSync(dbFile)).digest("hex"),
     ...before,
     snapshotRestarted,
-    ...(log
-      ? { deliveryAckSource: "peer_msg receipt stanzas in the same run's transport debug log" }
-      : {}),
+    deliveryAckSource: "peer_msg receipt stanzas in the same run's transport debug log",
     requests: perRequest,
     operatorNotes: notes,
   };
 
   const outDir = path.join(root, ".proof-receipts");
   mkdirSync(outDir, { recursive: true });
-  const out = path.join(outDir, `issue18-${tier}.json`);
+  const runNumber = 1 + readdirSync(outDir).filter((f) => f.startsWith("issue18-p4.run")).length;
+  const out = path.join(outDir, `issue18-p4.run${runNumber}-${gitHead.slice(0, 7)}.json`);
+  if (existsSync(out)) throw new Error(`refusing to overwrite existing receipt ${out}`);
   writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`);
   console.log(out);
   console.log(JSON.stringify(receipt, null, 2));
