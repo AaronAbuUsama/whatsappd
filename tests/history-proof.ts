@@ -223,20 +223,30 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   function recordBatch(batch: ConversationSyncBatch): void {
     const c = batch.context;
-    const seq = Number(
-      insertBatch.run(
-        c.source,
-        c.chunkOrder ?? null,
-        c.isLatest == null ? null : c.isLatest ? 1 : 0,
-        c.progress ?? null,
-        c.requestSessionId ?? null,
-        batch.messages.length,
-        Date.now(),
-      ).lastInsertRowid,
-    );
-    for (const m of batch.messages) {
-      insertMessage.run(seq, hashChat(m.chatId), hashMsg(m), m.timestamp, m.fromMe ? 1 : 0);
-      track(m);
+    let seq: number;
+    try {
+      seq = Number(
+        insertBatch.run(
+          c.source,
+          c.chunkOrder ?? null,
+          c.isLatest == null ? null : c.isLatest ? 1 : 0,
+          c.progress ?? null,
+          c.requestSessionId ?? null,
+          batch.messages.length,
+          Date.now(),
+        ).lastInsertRowid,
+      );
+      for (const m of batch.messages) {
+        insertMessage.run(seq, hashChat(m.chatId), hashMsg(m), m.timestamp, m.fromMe ? 1 : 0);
+        track(m);
+      }
+    } catch (err) {
+      // A delivered-but-unrecorded batch makes the store incomplete: the run
+      // must never finalize. Rethrow so the awaited subscription fails the
+      // pipeline (ADR-0013) rather than silently continuing with lost data.
+      observationsIncomplete = true;
+      console.error("⚠ batch insert failed — run is no longer receiptable:", err);
+      throw err;
     }
     const tag = c.requestSessionId ? ` req=${c.requestSessionId}` : "";
     console.log(
