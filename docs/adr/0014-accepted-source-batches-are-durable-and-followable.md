@@ -4,6 +4,10 @@ status: accepted
 
 # Accepted source batches are durable and followable
 
+> Amended by ADR-0018: a batch's cursor and the mirror revision are separate
+> numbers, and acceptance takes the writer's fencing token. Everything below
+> still holds.
+
 The data store durably appends each normalized, non-ephemeral source batch,
 projects that batch into the current mirror, and stamps its next account
 revision in one backend transaction. Only then may the runtime publish the

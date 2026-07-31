@@ -90,6 +90,14 @@ acceptance is failing and being retried in place; processing backpressures
 rather than logging and skipping the event.
 _Avoid_: Silent retry, crash loop
 
+**Runtime Closure**:
+The final frame of a client watch, published when the runtime has stopped
+consuming an account — deliberately, or on the failure that ended it. Without
+it a runtime that died is indistinguishable from a quiet account, and a watch
+waits for ever on an update that cannot come. It is not Degraded State: nothing
+is being retried, and nothing follows it.
+_Avoid_: Silent stream end, disconnect event, error callback
+
 **Connection Freshness**:
 An account’s live connection state paired with the current Account Lease and a
 short expiry. Clients treat an expired state or lease mismatch as unavailable;

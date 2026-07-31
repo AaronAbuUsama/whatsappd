@@ -60,7 +60,7 @@ export interface RecordedSessionCommands {
 export interface TestWhatsAppSessionDriver {
   readonly session: Pick<
     WhatsAppSession,
-    "subscribe" | "send" | "markRead" | "setTyping" | "requestHistory"
+    "subscribe" | "send" | "markRead" | "setTyping" | "requestHistory" | "start" | "stop"
   >;
   readonly commands: RecordedSessionCommands;
   emit(event: TestWhatsAppEvent): Promise<void>;
@@ -91,11 +91,29 @@ export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
   };
   const dispatcher = createSubscriptionDispatcher(send);
   let pipeline = Promise.resolve();
+  // The live session's `start()` resolves only when the session has ended, and
+  // rejects with the first handler failure its pipeline sees. Without the same
+  // channel here, a consumer that stops on a failed write — the whole point of
+  // an awaited subscription — is untestable: the driver would keep dispatching
+  // to a consumer the real session would already have taken down.
+  let endSession: () => void = () => {};
+  let failSession: (error: unknown) => void = () => {};
+  const life = new Promise<void>((resolve, reject) => {
+    endSession = resolve;
+    failSession = reject;
+  });
+  // A driver used without a supervising consumer must not crash the process on
+  // a handler failure the caller already received from `emit()`.
+  void life.catch(() => {});
 
   return {
     session: {
       subscribe: (handlers, options) => dispatcher.subscribe(handlers, options),
       send,
+      start: () => life,
+      async stop() {
+        endSession();
+      },
       async markRead(refs) {
         read.push({ refs });
       },
@@ -115,7 +133,11 @@ export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
     },
     commands: { sent, read, typing, historyRequests },
     emit(event) {
-      return (pipeline = pipeline.then(() => dispatcher.dispatch(event)));
+      const task = (pipeline = pipeline.then(() => dispatcher.dispatch(event)));
+      // Reported to the session's life as well as to the caller: a handler that
+      // rejects has ended the session, exactly as it would live.
+      void task.catch(failSession);
+      return task;
     },
   };
 }

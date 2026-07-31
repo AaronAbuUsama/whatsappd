@@ -11,7 +11,7 @@ unblocked ticket frontier may start.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0015`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0018`                                   |
 | Published build specification    | GitHub issue #15                                           |
 | Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
@@ -59,6 +59,7 @@ issues #16 through #41 are the approved dependency graph.
 | Conversation-sync deletion requires explicit, scope-bounded replacement metadata         | PR #12 review  |
 | Executing command claims expire to terminal `outcome_unknown`, never automatic retry     | PR #12 review  |
 | Actorless receipts use a non-null aggregate subject for idempotent projection            | PR #12 review  |
+| Acceptance has its own cursor and the writer's fencing token                             | 0018           |
 
 ## Semantics that must not be collapsed
 
@@ -141,20 +142,25 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Next step
 
-Issues #16 and #17 are closed (see the issue #15 re-plan receipt, 2026-07-30).
-Once the #16 salvage PR merges, the executable frontier is:
+Issues #16, #17, #18, and #10 are closed; #19 and #52 are closed `wontfix` by
+the product-first grill (issue #15 re-plan receipt, 2026-07-31). Issue #20
+delivers the first complete product path — runtime, backend capabilities,
+memory implementations, and the in-process client for one text message.
 
-1. GitHub issue #18 — live history semantics.
-2. GitHub issue #19 — pre-acceptance crash boundary.
+The executable graph is:
 
-#18 and #19 run in parallel; both feed #20. Issue #10 (sender-identity fix,
-ADR-0001) lands as a pre-#20 fix. Every other issue remains blocked by the
-edges recorded in its body. Do not start a descendant merely because the
-documentation PR is mechanically green.
+```text
+#20 ─┬─→ #21 media capture ─────────────────┐
+     └─→ #24 stored paging ─┬─→ #25 backfill┼─→ #39
+                            └─→ #38 libSQL ─┘
+```
+
+Every other issue remains blocked by the edges recorded in its body. Do not
+start a descendant merely because the documentation PR is mechanically green.
 
 ## Resuming in a new session
 
-Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0017,
+Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0018,
 specification issue #15, and the currently unblocked ticket bodies. Treat
 current source as evidence of the old package, not evidence that the target APIs
 already exist. Reopening an accepted decision requires an explicit superseding
