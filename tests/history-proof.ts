@@ -155,7 +155,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       git_head TEXT NOT NULL,
       dirty INTEGER NOT NULL,
       log_path TEXT NOT NULL,
-      started_at INTEGER NOT NULL
+      started_at INTEGER NOT NULL,
+      lease_token TEXT,
+      finalized_at INTEGER
     );
     CREATE TABLE batch(
       seq INTEGER PRIMARY KEY,
@@ -371,6 +373,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     } finally {
       releaseLease();
     }
+    // Finalization marker: the receipt writer refuses a run without one, so
+    // a receipt can never transcribe a still-connected run's outcomes as
+    // absent.
+    try {
+      db.prepare("UPDATE run SET finalized_at = ?").run(Date.now());
+    } catch (err) {
+      console.error("run finalization failed:", err);
+    }
     // The matrix is written even when teardown failed — observations are the
     // point of the run and must survive a bad stop.
     try {
@@ -539,6 +549,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       process.exit(2);
     }
     writeFileSync(heartbeatFile, leaseToken);
+    // Bind the observations to the runner that held the account (part of the
+    // capture-at-source provenance the receipt transcribes).
+    db.prepare("UPDATE run SET lease_token = ?").run(leaseToken);
   };
   acquireLease();
   const heartbeat = setInterval(() => {

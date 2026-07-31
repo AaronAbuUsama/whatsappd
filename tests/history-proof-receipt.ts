@@ -20,7 +20,7 @@
  * no rung of their own (P2 is product-durability work, issue #20).
  */
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -133,6 +133,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "run executed on a dirty tree — its head does not name the exercised code, so no receipt can honestly carry it (ADR-0017)",
     );
   }
+  if (run.finalized_at == null) {
+    throw new Error(
+      "run is not finalized — the harness may still be connected, and a receipt written now would record later-arriving outcomes as absent",
+    );
+  }
+  if (run.lease_token == null) {
+    throw new Error("run carries no lease token — observations are not bound to an account holder");
+  }
   const gitHead = String(run.git_head);
   const log = readFileSync(String(run.log_path), "utf8");
   if (!log.includes('"tag":"receipt"') && !log.includes('"tag": "receipt"')) {
@@ -202,6 +210,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     gitHead,
     tier: "P4",
     runId: run.run_id,
+    leaseToken: run.lease_token,
+    runFinalizedAt: new Date(Number(run.finalized_at)).toISOString(),
     observationDbSha256: createHash("sha256").update(readFileSync(dbFile)).digest("hex"),
     ...before,
     snapshotRestarted,
@@ -215,8 +225,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   mkdirSync(outDir, { recursive: true });
   const runNumber = 1 + readdirSync(outDir).filter((f) => f.startsWith("issue18-p4.run")).length;
   const out = path.join(outDir, `issue18-p4.run${runNumber}-${gitHead.slice(0, 7)}.json`);
-  if (existsSync(out)) throw new Error(`refusing to overwrite existing receipt ${out}`);
-  writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`);
+  try {
+    // "wx": exclusive create — two concurrent writers cannot silently
+    // truncate each other; append-only holds under races too.
+    writeFileSync(out, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`refusing to overwrite existing receipt ${out}`);
+    }
+    throw err;
+  }
   console.log(out);
   console.log(JSON.stringify(receipt, null, 2));
 }
