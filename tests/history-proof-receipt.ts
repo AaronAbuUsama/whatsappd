@@ -128,6 +128,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "run log contains no receipt stanzas (wrong file or LOG_LEVEL != debug) — refusing to assert delivery-ack evidence",
     );
   }
+  // Bind the log to THIS observation run: every submitted request id must
+  // appear in it (the runner logs each submission), otherwise the log belongs
+  // to a different run and empty ack lists would be forged non-delivery
+  // evidence.
+  for (const r of requests) {
+    if (!log.includes(String(r.request_id))) {
+      throw new Error(
+        `run log does not mention request ${String(r.request_id)} — it is not this run's log; refusing to assert delivery-ack evidence`,
+      );
+    }
+  }
   const perRequest = requests.map((r) => {
     const correlated = correlatedStmt.get(String(r.request_id)) as {
       batches: number;

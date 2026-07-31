@@ -15,8 +15,8 @@
   "requests": [
     {
       "requestId": "3EB0210B4E0F304D4A2403",
-      "chatHash": "86641fa8c61d",
-      "anchorMsgHash": "537253b6ae3f90bd",
+      "chatHash": "chat-1",
+      "anchorMsgHash": "msg-1",
       "anchorTimestamp": 1785448003000,
       "count": 50,
       "submittedAt": 1785448014682,
@@ -25,8 +25,8 @@
     },
     {
       "requestId": "3EB0D0E48778327AA3D7EC",
-      "chatHash": "4002298d68cb",
-      "anchorMsgHash": "0ba79ad0e9cc27e5",
+      "chatHash": "chat-2",
+      "anchorMsgHash": "msg-2",
       "anchorTimestamp": 1785448134000,
       "count": 10,
       "submittedAt": 1785448140079,
@@ -35,8 +35,8 @@
     },
     {
       "requestId": "3EB0FB69455111F18ED2F8",
-      "chatHash": "86641fa8c61d",
-      "anchorMsgHash": "537253b6ae3f90bd",
+      "chatHash": "chat-1",
+      "anchorMsgHash": "msg-1",
       "anchorTimestamp": 1785448003000,
       "count": 50,
       "submittedAt": 1785448376962,
@@ -45,8 +45,8 @@
     },
     {
       "requestId": "3EB08590F5B7D21EB4E095",
-      "chatHash": "4002298d68cb",
-      "anchorMsgHash": "0ba79ad0e9cc27e5",
+      "chatHash": "chat-2",
+      "anchorMsgHash": "msg-2",
       "anchorTimestamp": 1785448134000,
       "count": 25,
       "submittedAt": 1785449054476,
@@ -55,8 +55,8 @@
     },
     {
       "requestId": "3EB018F0A60DEC83EBB54E",
-      "chatHash": "4002298d68cb",
-      "anchorMsgHash": "0ba79ad0e9cc27e5",
+      "chatHash": "chat-2",
+      "anchorMsgHash": "msg-2",
       "anchorTimestamp": 1785448134000,
       "count": 25,
       "submittedAt": 1785449217597,
@@ -81,5 +81,6 @@
       "at": 1785449504016,
       "text": "phone back online: late peer_msg ack at 22:11:13Z, still no history response"
     }
-  ]
+  ],
+  "identityAliasing": "chat/message identities are opaque per-receipt aliases; the original unsalted hash prefixes were removed as dictionary-confirmable and the mapping destroyed"
 }

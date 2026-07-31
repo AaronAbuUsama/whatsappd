@@ -20,14 +20,17 @@
  *   quit             stop the session, release the lease, write the matrix
  *
  * Receipts stay sanitized: chat JIDs and message ids never leave the terminal —
- * the observation store and matrix JSON hold only salted-free sha256 prefixes,
- * timestamps, counts, and request ids (whatsappd-generated, not native).
+ * the observation store and matrix JSON hold only per-run-salted sha256
+ * prefixes, timestamps, counts, and request ids (whatsappd-generated, not
+ * native). The salt lives in process memory only.
  *
- * ADR-0009: a mkdir lease next to the shared credential store guards the one
- * live test account; the lease is held only while this process is connected.
+ * ADR-0009: a TTL-heartbeat lease next to the shared credential store guards
+ * the one live test account; held only while this process is connected, and
+ * a crashed holder's stale lease is taken over instead of stranding the
+ * account.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, rmdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
@@ -129,7 +132,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const lease = path.join(path.dirname(config.credentialDb), "live.lock");
   const releaseLease = (): void => {
     try {
-      rmdirSync(lease);
+      rmSync(lease, { recursive: true, force: true }); // lease dir + heartbeat file
     } catch {
       /* already released */
     }
@@ -274,7 +277,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         )
         .all(id) as unknown as BoundaryRow[];
       const submittedAt = r.submitted_at as number;
-      const fresh = msgs.filter((m) => (firstSeen.get(m.msgHash) ?? Infinity) > submittedAt).length;
+      // >= : a message first seen in the submission millisecond is credited
+      // to the request, not to the pre-existing set.
+      const fresh = msgs.filter(
+        (m) => (firstSeen.get(m.msgHash) ?? Infinity) >= submittedAt,
+      ).length;
       const verdict = boundaryVerdict(
         r.anchor_timestamp as number,
         r.anchor_msg_hash as string,
@@ -375,6 +382,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             const [jid, c] = entry;
             if (!c.oldest) throw new Error(`no anchored message known for ${jid}`);
             const count = args[1] ? Number(args[1]) : 50;
+            // Freshness baseline is captured BEFORE submission: a batch that
+            // lands while the submit promise is pending is request-triggered
+            // and must not be classified as pre-existing.
+            const submittedAt = Date.now();
             const { requestId } = await session.requestHistory(
               { ref: c.oldest.ref, timestamp: c.oldest.timestamp },
               { count },
@@ -385,7 +396,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
               c.oldest.hash,
               c.oldest.timestamp,
               count,
-              Date.now(),
+              submittedAt,
             );
             console.log(
               `📨 submitted ${requestId} (chat=${hashChat(jid)}, anchor=${new Date(c.oldest.timestamp).toISOString()}, count=${count}) — submission receipt only; watch for on_demand batches`,
@@ -435,20 +446,52 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
   process.on("SIGINT", () => void quit());
 
-  try {
-    mkdirSync(lease);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      console.error(`⛔ lease held: ${lease} exists — another worker owns the live account.`);
-      process.exit(2);
+  // TTL heartbeat per ADR-0009: a holder refreshes the heartbeat file; an
+  // acquirer may take over a lease whose heartbeat is stale (holder was
+  // SIGKILLed / host died), so a crash never permanently strands the account.
+  // ponytail: no fencing token — single-host harness; add one if proof runs
+  // ever span machines.
+  const heartbeatFile = path.join(lease, "heartbeat");
+  const HEARTBEAT_MS = 15_000;
+  const STALE_MS = 60_000;
+  const acquireLease = (): void => {
+    try {
+      mkdirSync(lease);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      let stale = false;
+      try {
+        stale = Date.now() - statSync(heartbeatFile).mtimeMs > STALE_MS;
+      } catch {
+        stale = true; // lease dir with no heartbeat: a holder that died mid-acquire
+      }
+      if (!stale) {
+        console.error(
+          `⛔ lease held: ${lease} has a live heartbeat — another worker owns the live account.`,
+        );
+        process.exit(2);
+      }
+      console.error(`⚠ taking over stale lease (heartbeat older than ${STALE_MS / 1000}s)`);
+      rmSync(lease, { recursive: true, force: true });
+      mkdirSync(lease);
     }
-    throw err;
-  }
+    writeFileSync(heartbeatFile, String(process.pid));
+  };
+  acquireLease();
+  const heartbeat = setInterval(() => {
+    try {
+      writeFileSync(heartbeatFile, String(process.pid));
+    } catch {
+      /* lease dir vanished — nothing to refresh */
+    }
+  }, HEARTBEAT_MS);
+  heartbeat.unref();
   console.log(`lease acquired: ${lease}\nconnecting account "${config.account}"…`);
   rl.prompt();
   try {
     await session.start();
   } finally {
+    clearInterval(heartbeat);
     releaseLease(); // held only while connected — including when start() rejects
   }
 }

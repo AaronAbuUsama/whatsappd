@@ -17,8 +17,8 @@
   "requests": [
     {
       "requestId": "3EB00D5D044C9D946A3369",
-      "chatHash": "4002298d68cb",
-      "anchorMsgHash": "670edc79fa111021",
+      "chatHash": "chat-1",
+      "anchorMsgHash": "msg-1",
       "anchorTimestamp": 1785450324000,
       "count": 50,
       "submittedAt": 1785450330642,
@@ -28,8 +28,8 @@
     },
     {
       "requestId": "3EB0ED5F3B6E3A90413768",
-      "chatHash": "4002298d68cb",
-      "anchorMsgHash": "670edc79fa111021",
+      "chatHash": "chat-1",
+      "anchorMsgHash": "msg-1",
       "anchorTimestamp": 1785450324000,
       "count": 25,
       "submittedAt": 1785450334678,
@@ -43,5 +43,6 @@
       "at": 1785450365043,
       "text": "confirmation run at post-review head: 2 requests (counts 50, 25) on the loopback self-chat, repeated on one anchor; both delivered (peer_msg acks), no response; allowlist refusal verified live. Full 5-request matrix incl. the phone-offline row was recorded earlier today and is preserved in git history at head b06fa2f."
     }
-  ]
+  ],
+  "identityAliasing": "chat/message identities are opaque per-receipt aliases; the original unsalted hash prefixes were removed as dictionary-confirmable and the mapping destroyed"
 }
