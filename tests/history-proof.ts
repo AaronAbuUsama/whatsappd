@@ -31,6 +31,7 @@
  * check backstops operator error. The product-grade ADR-0009 lease is issue
  * #20 backend work, not this harness.
  */
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -136,8 +137,26 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
   const dbPath = path.join(privateDir, `observations-${runId}.db`);
+  const logPath = path.join(privateDir, `transport-${runId}.log`);
+  // Capture-at-source rule: every property a receipt will assert (head, tree
+  // state, log identity) is recorded HERE, at run time, in the observation
+  // store. The receipt writer transcribes; it never re-derives.
+  const repoRoot = path.join(here, "..");
+  const runHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot }).toString().trim();
+  const runDirty =
+    execFileSync("git", ["status", "--porcelain"], { cwd: repoRoot }).toString().trim() !== "";
+  if (runDirty) {
+    console.error("⚠ dirty tree — this run's observations will NOT be receiptable (ADR-0017)");
+  }
   const db = new DatabaseSync(dbPath);
   db.exec(`
+    CREATE TABLE run(
+      run_id TEXT NOT NULL,
+      git_head TEXT NOT NULL,
+      dirty INTEGER NOT NULL,
+      log_path TEXT NOT NULL,
+      started_at INTEGER NOT NULL
+    );
     CREATE TABLE batch(
       seq INTEGER PRIMARY KEY,
       source TEXT NOT NULL,
@@ -175,6 +194,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     "INSERT INTO request(request_id, chat_hash, anchor_msg_hash, anchor_timestamp, count, submitted_at) VALUES(?,?,?,?,?,?)",
   );
   const insertNote = db.prepare("INSERT INTO note(at, text) VALUES(?,?)");
+  db.prepare(
+    "INSERT INTO run(run_id, git_head, dirty, log_path, started_at) VALUES(?,?,?,?,?)",
+  ).run(runId, runHead, runDirty ? 1 : 0, logPath, Date.now());
 
   // In-memory only (never persisted): real chat jids and oldest-known anchors.
   const chats = new Map<string, { count: number; oldest?: Anchor & { hash: string } }>();
@@ -217,10 +239,22 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     );
   }
 
-  const logger = pino({
-    level: process.env.LOG_LEVEL ?? "warn",
-    transport: { target: "pino-pretty", options: { colorize: true } },
-  });
+  // The runner owns its transport log: the file target always records at
+  // debug (so delivery-ack stanzas are captured regardless of console
+  // verbosity) and its path is bound to the run in the observation store.
+  const logger = pino(
+    { level: "debug" },
+    pino.transport({
+      targets: [
+        {
+          target: "pino-pretty",
+          level: process.env.LOG_LEVEL ?? "warn",
+          options: { colorize: true, destination: 1 },
+        },
+        { target: "pino/file", level: "debug", options: { destination: logPath } },
+      ],
+    }),
+  );
   const session = createSession({
     store: libsqlStore({ url: `file:${config.credentialDb}`, account: config.account }),
     auth: qrAuth(),
@@ -342,7 +376,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     try {
       const matrix = {
         runId,
-        gitHead: process.env.GIT_HEAD ?? null,
+        gitHead: runHead,
         batches: db.prepare("SELECT * FROM batch ORDER BY seq").all(),
         requests: db.prepare("SELECT * FROM request ORDER BY submitted_at").all(),
         notes: db.prepare("SELECT * FROM note ORDER BY at").all(),
@@ -353,6 +387,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     } catch (err) {
       console.error("matrix write failed:", err);
     }
+    // The transport log is written by a worker thread; give it a beat to
+    // flush so the file the receipt writer reads carries the final stanzas.
+    try {
+      logger.flush();
+    } catch {
+      /* flushing is best-effort */
+    }
+    await new Promise((r) => setTimeout(r, 500));
     process.exit(stopFailed ? 1 : 0);
   }
 
@@ -485,8 +527,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       }
       const age =
         ageMs == null ? "no heartbeat file" : `heartbeat ${Math.round(ageMs / 1000)}s old`;
+      // No heartbeat = a holder that died mid-acquire: recovery guidance
+      // applies just as much as to a stale heartbeat.
       const hint =
-        ageMs != null && ageMs > STALE_HINT_MS
+        ageMs == null || ageMs > STALE_HINT_MS
           ? " (likely a crashed holder — verify no proof runner is alive, then remove the directory manually)"
           : "";
       console.error(

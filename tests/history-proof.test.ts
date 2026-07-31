@@ -33,45 +33,31 @@ test("boundary verdict on an empty result claims nothing", () => {
 
 import { deliveryAcksFor } from "./history-proof-receipt.ts";
 
+const logLine = (recv: unknown): string => JSON.stringify({ level: 20, msg: "sent ack", recv });
+
 test("delivery acks are extracted only for matching peer_msg receipt stanzas", () => {
-  const log = `
-    "tag": "receipt",
-      "attrs": {
-        "from": "<acct>@s.whatsapp.net",
-        "type": "peer_msg",
-        "id": "REQ-A",
-        "t": "1785448017"
-      }
-    "tag": "receipt",
-      "attrs": {
-        "type": "sender",
-        "id": "REQ-A",
-        "t": "1785448099"
-      }
-    "tag": "receipt",
-      "attrs": {
-        "type": "peer_msg",
-        "id": "REQ-B",
-        "t": "1785449473"
-      }
-  `;
+  const log = [
+    logLine({
+      tag: "receipt",
+      attrs: { from: "<acct>@s.whatsapp.net", type: "peer_msg", id: "REQ-A", t: "1785448017" },
+    }),
+    logLine({ tag: "receipt", attrs: { type: "sender", id: "REQ-A", t: "1785448099" } }),
+    logLine({ tag: "receipt", attrs: { type: "peer_msg", id: "REQ-B", t: "1785449473" } }),
+    "not json at all",
+  ].join("\n");
   expect(deliveryAcksFor(log, "REQ-A")).toEqual(["2026-07-30T21:46:57.000Z"]);
   expect(deliveryAcksFor(log, "REQ-B")).toEqual(["2026-07-30T22:11:13.000Z"]);
   expect(deliveryAcksFor(log, "REQ-C")).toEqual([]);
 });
 
-test("an ack outside a stanza's own attrs block is never credited to it", () => {
-  // REQ-X's stanza is followed by unrelated log lines mentioning REQ-Y; the
-  // parser must not credit REQ-Y from REQ-X's segment.
-  const log = `
-    "tag": "receipt",
-      "attrs": {
-        "type": "peer_msg",
-        "id": "REQ-X",
-        "t": "1785448017"
-      }
-    retry cache note for "id": "REQ-Y" with "type": "peer_msg"
-  `;
+test("an ack outside a stanza's own attrs is never credited to it", () => {
+  // A sent-echo object carries the id without tag/attrs, and a free-text line
+  // mentions another request — neither may be credited as a delivery ack.
+  const log = [
+    logLine({ tag: "receipt", attrs: { type: "peer_msg", id: "REQ-X", t: "1785448017" } }),
+    JSON.stringify({ level: 20, sent: { id: "REQ-X", class: "receipt", type: "peer_msg" } }),
+    JSON.stringify({ level: 20, msg: 'retry cache note "id": "REQ-Y" "type": "peer_msg"' }),
+  ].join("\n");
   expect(deliveryAcksFor(log, "REQ-X")).toEqual(["2026-07-30T21:46:57.000Z"]);
   expect(deliveryAcksFor(log, "REQ-Y")).toEqual([]);
 });

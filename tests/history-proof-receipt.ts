@@ -1,31 +1,24 @@
 /**
- * Issue #18 receipt writer — condense a history-proof observation store into
+ * Issue #18 receipt writer — transcribe a history-proof observation store into
  * a committed, sanitized P4 proof receipt.
  *
- *   node --experimental-strip-types tests/history-proof-receipt.ts <observations.db> <run.log>
+ *   node --experimental-strip-types tests/history-proof-receipt.ts <observations.db>
  *
- * The tier is not an input: this writer only ever emits P4 receipts, named
- * `issue18-p4.run<N>-<gitHead7>.json`, one per live run, never overwriting —
- * a rerun adds evidence instead of destroying the old (ADR-0017: a receipt is
- * evidence only for the head it names).
+ * The writer is a pure transcriber: every property the receipt asserts was
+ * captured at source by the runner, at run time, inside the observation store —
+ * the git head and tree state (a dirty run is refused), the run's own
+ * transport log path (always recorded at debug level, so delivery-ack
+ * stanzas are complete), identities (salted per run), notes (redacted at
+ * entry), and per-request submission times. The writer re-derives nothing and
+ * takes no operator judgment beyond naming the store.
  *
- * The run's transport debug log (LOG_LEVEL=debug output) is REQUIRED: the
- * writer embeds each request's `peer_msg` delivery receipts parsed from it,
- * so the receipt carries the delivered/undelivered evidence its claims rest
- * on. An empty ack list for a request is itself evidence (e.g. the
- * phone-offline scenario).
- *
- * The embedded oracle fields (store SHA-256, counts, ordered-id digest,
- * timestamp bounds, close/reopen `snapshotRestarted`) are the Database Oracle
- * cross-check that ADR-0017 and issue #18 call SUPPORTING evidence; they
- * claim no proof rung of their own. P2 is a product-durability rung and is
- * not claimable until a durable product store exists (issue #20).
- *
- * Every emitted field is sanitized: hashed identities, counts, timestamps,
- * digests — never message contents or native addresses (long digit runs in
- * free-form notes are redacted defensively).
+ * Receipts are per-run and append-only, named `issue18-p4.run<N>-<head7>.json`,
+ * never overwritten — a rerun adds evidence instead of destroying the old
+ * (ADR-0017: a receipt is evidence only for the head it names). The tier is
+ * not an input: only P4 receipts exist. The embedded oracle fields are the
+ * Database Oracle cross-check ADR-0017 calls SUPPORTING evidence; they claim
+ * no rung of their own (P2 is product-durability work, issue #20).
  */
-import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -35,7 +28,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
 
-const [dbFile, runLog] = process.argv.slice(2);
+const [dbFile] = process.argv.slice(2);
 
 /**
  * Redact anything shaped like a native address: any run of digits (allowing
@@ -86,59 +79,86 @@ function oracle(db: DatabaseSync): Oracle {
 }
 
 /**
- * Pull `peer_msg` delivery receipts for a request id out of the run's debug
- * transport log. The stanza shape is a receipt node whose attrs carry the
- * request message id and a server timestamp (`"t": "<epoch-seconds>"`).
+ * Pull `peer_msg` delivery-receipt timestamps for a request id out of the
+ * runner's own transport log (pino JSON lines). Only a stanza whose own attrs
+ * carry the id is credited — neighboring stanzas or free-text mentions never
+ * count.
  */
 export function deliveryAcksFor(log: string, requestId: string): string[] {
   const acks: string[] = [];
-  // One stanza per split segment. Judge only the stanza's own attrs block so
-  // a neighboring stanza's fields can never be credited to this request.
-  for (const segment of log.split(/"tag": "receipt"/).slice(1)) {
-    const attrs = /"attrs": \{([\s\S]{0,400}?)\}/.exec(segment)?.[1];
-    if (!attrs) continue;
-    if (!attrs.includes('"type": "peer_msg"') || !attrs.includes(`"id": "${requestId}"`)) continue;
-    const t = /"t": "(\d+)"/.exec(attrs)?.[1];
-    if (t) acks.push(new Date(Number(t) * 1000).toISOString());
+  for (const line of log.split("\n")) {
+    if (!line.includes('"receipt"')) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const stack: unknown[] = [entry];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node || typeof node !== "object") continue;
+      const o = node as Record<string, unknown>;
+      const attrs = o.attrs as Record<string, unknown> | undefined;
+      if (
+        o.tag === "receipt" &&
+        attrs?.type === "peer_msg" &&
+        attrs.id === requestId &&
+        typeof attrs.t === "string"
+      ) {
+        acks.push(new Date(Number(attrs.t) * 1000).toISOString());
+      }
+      for (const v of Object.values(o)) if (v && typeof v === "object") stack.push(v);
+    }
   }
   return acks;
 }
 
-// Only run when executed directly, so deliveryAcksFor stays unit-testable.
+// Only run when executed directly, so the helpers stay unit-testable.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (!dbFile || !runLog) {
-    console.error("usage: history-proof-receipt.ts <observations.db> <run.log>");
+  if (!dbFile) {
+    console.error("usage: history-proof-receipt.ts <observations.db>");
     process.exit(1);
   }
   const db = new DatabaseSync(dbFile, { readOnly: true });
+
+  // Run provenance was captured at source by the runner; transcribe it.
+  const runs = db.prepare("SELECT * FROM run").all() as Array<Record<string, unknown>>;
+  if (runs.length !== 1) {
+    throw new Error(`observation store must carry exactly one run row, found ${runs.length}`);
+  }
+  const run = runs[0]!;
+  if (run.dirty) {
+    throw new Error(
+      "run executed on a dirty tree — its head does not name the exercised code, so no receipt can honestly carry it (ADR-0017)",
+    );
+  }
+  const gitHead = String(run.git_head);
+  const log = readFileSync(String(run.log_path), "utf8");
+  if (!log.includes('"tag":"receipt"') && !log.includes('"tag": "receipt"')) {
+    throw new Error(
+      "the run's transport log contains no receipt stanzas — refusing to assert delivery-ack evidence",
+    );
+  }
+
   const before = oracle(db);
   const requests = db.prepare("SELECT * FROM request ORDER BY submitted_at").all() as Array<
     Record<string, unknown>
   >;
+  // The log is the run's own (path from the run table), but belt-and-braces:
+  // every submitted request must appear in it.
+  for (const r of requests) {
+    if (!log.includes(String(r.request_id))) {
+      throw new Error(
+        `run log does not mention request ${String(r.request_id)} — store/log mismatch; refusing to assert delivery-ack evidence`,
+      );
+    }
+  }
   const correlatedStmt = db.prepare(
     `SELECT COUNT(DISTINCT b.seq) AS batches, COUNT(m.msg_hash) AS messages
        FROM batch b LEFT JOIN message m ON m.batch_seq = b.seq
       WHERE b.request_session_id = ?`,
   );
-  const log = readFileSync(runLog, "utf8");
-  // An empty or wrong log would make every ack list [] — indistinguishable
-  // from "checked and found none". Refuse to assert evidence from it.
-  if (!log.includes('"tag": "receipt"')) {
-    throw new Error(
-      "run log contains no receipt stanzas (wrong file or LOG_LEVEL != debug) — refusing to assert delivery-ack evidence",
-    );
-  }
-  // Bind the log to THIS observation run: every submitted request id must
-  // appear in it (the runner logs each submission), otherwise the log belongs
-  // to a different run and empty ack lists would be forged non-delivery
-  // evidence.
-  for (const r of requests) {
-    if (!log.includes(String(r.request_id))) {
-      throw new Error(
-        `run log does not mention request ${String(r.request_id)} — it is not this run's log; refusing to assert delivery-ack evidence`,
-      );
-    }
-  }
   const perRequest = requests.map((r) => {
     const correlated = correlatedStmt.get(String(r.request_id)) as {
       batches: number;
@@ -177,15 +197,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const snapshotRestarted = quickCheck === "ok" && JSON.stringify(before) === JSON.stringify(after);
   if (!snapshotRestarted) throw new Error("snapshot restart proof failed");
 
-  const gitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root }).toString().trim();
   const receipt = {
     nonce: randomUUID(),
     gitHead,
     tier: "P4",
+    runId: run.run_id,
     observationDbSha256: createHash("sha256").update(readFileSync(dbFile)).digest("hex"),
     ...before,
     snapshotRestarted,
-    deliveryAckSource: "peer_msg receipt stanzas in the same run's transport debug log",
+    deliveryAckSource:
+      "peer_msg receipt stanzas in the run's own transport log (path bound in the observation store at run start, recorded at debug level)",
     requests: perRequest,
     operatorNotes: notes,
   };

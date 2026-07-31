@@ -5,17 +5,21 @@ cited against Baileys 7.0.0-rc14 sources. This file is the single prose home
 for the live observations; every quantitative claim below names its backing
 receipt — `.proof-receipts/issue18-p4.run1-b06fa2f.json` (the 5-request
 matrix) or `.proof-receipts/issue18-p4.run2-ea53648.json` (the post-review
-confirmation run). Receipts are per-run and append-only; a receipt is
+confirmation run) — with one explicitly scoped exception: the issue #9
+initial-sync measurement, which predates the receipt discipline and is
+labeled indicative where it appears. Receipts are per-run and append-only; a receipt is
 evidence only for the git head it names (ADR-0017).
 
 ## What initial sync delivers (the linked-device cap)
 
-Pairing a linked device does **not** deliver full account history. Measured on
-the proof account (issue #9, fresh QR pairing): WhatsApp delivers roughly the
-last three months densely (7,065 of 7,665 messages in the prior three months)
-plus sparse fragments reaching further back. A consumer watching thousands of
-messages arrive at pairing has no protocol signal that this is everything —
-because it is not.
+Pairing a linked device does **not** deliver full account history. An
+informal one-off measurement on the proof account (issue #9, fresh QR
+pairing, before this proof's receipt discipline existed — indicative only,
+no retained receipt): WhatsApp delivered roughly the last three months
+densely (7,065 of 7,665 messages in the prior three months) plus sparse
+fragments reaching further back. A consumer watching thousands of messages
+arrive at pairing has no protocol signal that this is everything — because
+it is not.
 
 whatsappd deliberately pairs light and requests full history only on a
 registered reconnect (`shouldRequestFullHistoryOnOpen`, `src/baileys/socket.ts`).
