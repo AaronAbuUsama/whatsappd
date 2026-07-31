@@ -377,25 +377,31 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // finalized-run guard must imply the log already carries every queued
     // stanza, or a receipt could record late acknowledgements as absent.
     // flush() is awaited via its completion callback, with a bounded race so
-    // a wedged transport cannot hang shutdown; on timeout the run is still
-    // finalized, and the writer's per-request log binding catches any gap.
-    await Promise.race([
-      new Promise<void>((resolve) => {
+    // a wedged transport cannot hang shutdown.
+    const flushConfirmed = await Promise.race([
+      new Promise<boolean>((resolve) => {
         try {
-          logger.flush(() => resolve());
+          logger.flush(() => resolve(true));
         } catch {
-          resolve();
+          resolve(false);
         }
       }),
-      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000)),
     ]);
     // Finalization marker: the receipt writer refuses a run without one, so
     // a receipt can never transcribe a still-connected run's outcomes as
-    // absent.
-    try {
-      db.prepare("UPDATE run SET finalized_at = ?").run(Date.now());
-    } catch (err) {
-      console.error("run finalization failed:", err);
+    // absent. An unconfirmed flush leaves the run UNfinalized — better an
+    // unreceiptable run than a receipt over a possibly incomplete log.
+    if (flushConfirmed) {
+      try {
+        db.prepare("UPDATE run SET finalized_at = ?").run(Date.now());
+      } catch (err) {
+        console.error("run finalization failed:", err);
+      }
+    } else {
+      console.error(
+        "⚠ transport flush unconfirmed — run left unfinalized and therefore unreceiptable",
+      );
     }
     // The matrix is written even when teardown failed — observations are the
     // point of the run and must survive a bad stop.
@@ -588,9 +594,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (!ownsLease()) {
       // A successor took over while this process was stalled. Its lease is
       // not ours to refresh or release — close our socket and get out.
+      // Shutdown rides the command FIFO so an in-flight command's store
+      // writes land before finalization, same as every other quit path.
       console.error("⛔ lease lost to another worker after a stall — closing the socket");
       clearInterval(heartbeat);
-      void quit();
+      commandChain = commandChain.then(() => quit());
       return;
     }
     try {
