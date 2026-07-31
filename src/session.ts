@@ -126,6 +126,43 @@ export interface WhatsAppSession {
    */
   profilePictureUrl(jid: string, type?: "image" | "preview"): Promise<string | undefined>;
   /**
+   * Ask the linked phone for older messages in one chat, going back from the
+   * given anchor message. **Fire-and-hope: the phone may never answer.**
+   *
+   * @remarks
+   * This is an explicit, asynchronous protocol request (ADR-0010). Resolution
+   * means exactly one thing: the request stanza was handed to the transport.
+   * It does not await or prove server acceptance, it does not mean the phone
+   * received it (that happens later, if at all, and is not surfaced here),
+   * and it does not mean any history exists or will arrive. Treat a request
+   * that produces nothing as an expected outcome, not an error.
+   *
+   * If an answer comes, messages arrive later as `conversationSync` batches
+   * with `context.source === "on_demand"` and `context.requestSessionId`
+   * intended to echo this receipt's `requestId` — best-effort correlation,
+   * not a guarantee. There is NO completion, exhaustion, or delivered-count
+   * signal, and none can be synthesized: silence and "no older messages" are
+   * indistinguishable. UI built on this may say "request sent" or "no older
+   * saved messages"; it must never claim "all history loaded".
+   *
+   * Do not await "the result" — there is no result to await. Subscribe to
+   * `conversationSync` and treat anything that arrives as a windfall. For
+   * live-proof status, observed response rates, and device/platform caveats,
+   * see `docs/history-semantics.md` — the single home for those observations.
+   *
+   * @param anchor - The oldest known message to page back from: its ref plus
+   * its timestamp in epoch milliseconds.
+   * @param opts - Optional request size; `count` defaults to 50, the protocol
+   * request maximum (ADR-0010) — values outside 1..50 are rejected. Not a
+   * guarantee that more messages exist.
+   * @returns A submission receipt; `requestId` is the outgoing request
+   * message id.
+   */
+  requestHistory(
+    anchor: { readonly ref: MessageRef; readonly timestamp: number },
+    opts?: { readonly count?: number },
+  ): Promise<{ requestId: string }>;
+  /**
    * The connected account's own identity.
    *
    * @returns The identity once the socket is open, or `undefined` before then.
@@ -483,6 +520,16 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       if (status.phase !== "online" || !conn)
         throw new Error(`not online (phase: ${status.phase})`);
       return conn.profilePictureUrl(jid, type);
+    },
+    async requestHistory(anchor, opts) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      const count = opts?.count ?? 50;
+      // ADR-0010: 50 is the validated protocol request maximum, not a paging size.
+      if (!Number.isInteger(count) || count < 1 || count > 50)
+        throw new RangeError(`count must be an integer in 1..50, got ${count}`);
+      const requestId = await conn.requestHistory(count, anchor.ref, anchor.timestamp);
+      return { requestId };
     },
     identity: () => conn?.identity(),
     async stop() {

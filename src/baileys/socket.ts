@@ -85,6 +85,12 @@ export interface BaileysConn {
   groupMetadata(chatId: string): Promise<GroupMetadata>;
   /** Fetch the profile picture URL for a contact, account, or group JID. */
   profilePictureUrl(jid: string, type?: "image" | "preview"): Promise<string | undefined>;
+  /**
+   * Submit an on-demand history request to the linked phone, anchored at the
+   * given oldest known message. Resolves with the id of the outgoing request
+   * message — a submission receipt, not a delivery signal.
+   */
+  requestHistory(count: number, ref: MessageRef, timestampMs: number): Promise<string>;
   /** The connected account's own identity (jid/pushName/phone), once the socket is open. */
   identity(): WaIdentity | undefined;
   /** Intentional teardown — the resulting close is classified `intentional`. */
@@ -455,6 +461,8 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
       };
     },
     profilePictureUrl: (jid, type) => sock.profilePictureUrl(jid, type),
+    requestHistory: (count, ref, timestampMs) =>
+      sock.fetchMessageHistory(count, refToKey(ref), timestampMs),
     identity: () => {
       const u = sock.user;
       if (!u?.id) return undefined;
