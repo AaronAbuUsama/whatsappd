@@ -131,11 +131,11 @@ export interface WhatsAppSession {
    *
    * @remarks
    * This is an explicit, asynchronous protocol request (ADR-0010). Resolution
-   * means exactly one thing: the request was accepted by the server for relay.
-   * It does not mean the phone received it (that happens later, if at all, and
-   * is not surfaced here), and it does not mean any history exists or will
-   * arrive. Treat a request that produces nothing as an expected outcome, not
-   * an error.
+   * means exactly one thing: the request stanza was handed to the transport.
+   * It does not await or prove server acceptance, it does not mean the phone
+   * received it (that happens later, if at all, and is not surfaced here),
+   * and it does not mean any history exists or will arrive. Treat a request
+   * that produces nothing as an expected outcome, not an error.
    *
    * If an answer comes, messages arrive later as `conversationSync` batches
    * with `context.source === "on_demand"` and `context.requestSessionId`

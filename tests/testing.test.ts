@@ -262,3 +262,18 @@ test("group replies quote the actual participant", async () => {
     }),
   ).toThrow(/group messages require an actual sender/);
 });
+
+test("the driver records history requests and mirrors the count bound", async () => {
+  const driver = createTestWhatsAppSession();
+  const anchor = {
+    ref: { id: "OLDEST1", chatId: "person@s.whatsapp.net", fromMe: false },
+    timestamp: 1_700_000_000_000,
+  };
+
+  const receipt = await driver.session.requestHistory(anchor, { count: 25 });
+  expect(receipt).toEqual({ requestId: "test-history-1" });
+  expect(driver.commands.historyRequests).toEqual([{ anchor, count: 25, result: receipt }]);
+
+  await assert.rejects(driver.session.requestHistory(anchor, { count: 51 }), RangeError);
+  expect((await driver.session.requestHistory(anchor)).requestId).toBe("test-history-2");
+});

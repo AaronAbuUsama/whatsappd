@@ -206,6 +206,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // is judged against each request's own submission time — not a baseline
   // frozen at the first request.
   const firstSeen = new Map<string, number>();
+  // Set when a store write fails after a transport action succeeded: the
+  // observations no longer reflect the run, so it must never finalize.
+  let observationsIncomplete = false;
 
   function track(m: InboundMessage): void {
     const entry = chats.get(m.chatId) ?? { count: 0 };
@@ -394,7 +397,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // a receipt can never transcribe a still-connected run's outcomes as
     // absent. An unconfirmed flush leaves the run UNfinalized — better an
     // unreceiptable run than a receipt over a possibly incomplete log.
-    if (flushConfirmed) {
+    if (flushConfirmed && !observationsIncomplete) {
       try {
         db.prepare("UPDATE run SET finalized_at = ?").run(Date.now());
       } catch (err) {
@@ -402,7 +405,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       }
     } else {
       console.error(
-        "⚠ transport flush unconfirmed — run left unfinalized and therefore unreceiptable",
+        `⚠ ${flushConfirmed ? "observation store incomplete" : "transport flush unconfirmed"} — run left unfinalized and therefore unreceiptable`,
       );
     }
     // The matrix is written even when teardown failed — observations are the
@@ -458,14 +461,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             { ref: c.oldest.ref, timestamp: c.oldest.timestamp },
             { count },
           );
-          insertRequest.run(
-            requestId,
-            hashChat(jid),
-            c.oldest.hash,
-            c.oldest.timestamp,
-            count,
-            submittedAt,
-          );
+          try {
+            insertRequest.run(
+              requestId,
+              hashChat(jid),
+              c.oldest.hash,
+              c.oldest.timestamp,
+              count,
+              submittedAt,
+            );
+          } catch (err) {
+            // A submitted-but-unrecorded request makes the store incomplete:
+            // the run must never finalize into a receipt.
+            observationsIncomplete = true;
+            console.error("⚠ request insert failed — run is no longer receiptable:", err);
+          }
           console.log(
             `📨 submitted ${requestId} (chat=${hashChat(jid)}, anchor=${new Date(c.oldest.timestamp).toISOString()}, count=${count}) — submission receipt only; watch for on_demand batches`,
           );

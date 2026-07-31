@@ -43,10 +43,18 @@ export interface RecordedSessionCommands {
   }>;
   readonly read: Array<{ readonly refs: readonly MessageRef[] }>;
   readonly typing: Array<{ readonly chatId: string; readonly on: boolean }>;
+  readonly historyRequests: Array<{
+    readonly anchor: { readonly ref: MessageRef; readonly timestamp: number };
+    readonly count: number;
+    readonly result: { readonly requestId: string };
+  }>;
 }
 
 export interface TestWhatsAppSessionDriver {
-  readonly session: Pick<WhatsAppSession, "subscribe" | "send" | "markRead" | "setTyping">;
+  readonly session: Pick<
+    WhatsAppSession,
+    "subscribe" | "send" | "markRead" | "setTyping" | "requestHistory"
+  >;
   readonly commands: RecordedSessionCommands;
   emit(event: TestWhatsAppEvent): Promise<void>;
 }
@@ -60,6 +68,11 @@ export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
   }> = [];
   const read: Array<{ readonly refs: readonly MessageRef[] }> = [];
   const typing: Array<{ readonly chatId: string; readonly on: boolean }> = [];
+  const historyRequests: Array<{
+    readonly anchor: { readonly ref: MessageRef; readonly timestamp: number };
+    readonly count: number;
+    readonly result: { readonly requestId: string };
+  }> = [];
   const send = async (
     to: string,
     content: Outbound,
@@ -82,8 +95,18 @@ export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
       async setTyping(chatId, on) {
         typing.push({ chatId, on });
       },
+      async requestHistory(anchor, opts) {
+        const count = opts?.count ?? 50;
+        // Mirror the real seam's ADR-0010 bound so driver-tested code cannot
+        // pass counts the live session would reject.
+        if (!Number.isInteger(count) || count < 1 || count > 50)
+          throw new RangeError(`count must be an integer in 1..50, got ${count}`);
+        const result = { requestId: `test-history-${historyRequests.length + 1}` };
+        historyRequests.push({ anchor, count, result });
+        return result;
+      },
     },
-    commands: { sent, read, typing },
+    commands: { sent, read, typing, historyRequests },
     emit(event) {
       return (pipeline = pipeline.then(() => dispatcher.dispatch(event)));
     },

@@ -49,9 +49,10 @@ not evidence that more messages exist.
 `requestHistory` resolves with `{ requestId }`, where `requestId` is the id of
 the **outgoing request message** (a `PeerDataOperationRequestMessage` relayed
 to your own account; Baileys `messages-recv.js` `fetchMessageHistory`).
-Resolution proves the request was accepted by the server for relay. It does
-**not** prove the phone received it, will answer it, or that any older
-messages exist.
+Resolution proves only that the request stanza was handed to the transport —
+it does not await server acceptance (the relay ack arrives separately, as
+observed in the matrix below), and it does **not** prove the phone received
+it, will answer it, or that any older messages exist.
 
 ### How returned history arrives
 
