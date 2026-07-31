@@ -141,16 +141,21 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Next step
 
-Issues #16 and #17 are closed (see the issue #15 re-plan receipt, 2026-07-30).
-Once the #16 salvage PR merges, the executable frontier is:
+Issues #16, #17, #18, and #10 are closed; #19 and #52 are closed `wontfix` by
+the product-first grill (issue #15 re-plan receipt, 2026-07-31). Issue #20
+delivers the first complete product path — runtime, backend capabilities,
+memory implementations, and the in-process client for one text message.
 
-1. GitHub issue #18 — live history semantics.
-2. GitHub issue #19 — pre-acceptance crash boundary.
+The executable graph is:
 
-#18 and #19 run in parallel; both feed #20. Issue #10 (sender-identity fix,
-ADR-0001) lands as a pre-#20 fix. Every other issue remains blocked by the
-edges recorded in its body. Do not start a descendant merely because the
-documentation PR is mechanically green.
+```text
+#20 ─┬─→ #21 media capture ─────────────────┐
+     └─→ #24 stored paging ─┬─→ #25 backfill┼─→ #39
+                            └─→ #38 libSQL ─┘
+```
+
+Every other issue remains blocked by the edges recorded in its body. Do not
+start a descendant merely because the documentation PR is mechanically green.
 
 ## Resuming in a new session
 

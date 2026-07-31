@@ -70,6 +70,9 @@ try {
       assert.equal(typeof root.createSession, "function");
       assert.equal(typeof createTestWhatsAppSession, "function");
       assert.equal(typeof root.memoryStore, "function");
+      assert.equal(typeof root.createWhatsAppRuntime, "function");
+      assert.equal(typeof root.createInProcessWhatsAppClient, "function");
+      assert.equal(typeof root.memoryBackend, "function");
       for (const removed of ["createChannelAdapter", "bindTools"]) {
         assert.equal(removed in root, false);
       }
