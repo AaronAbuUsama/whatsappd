@@ -86,16 +86,24 @@ delivered count tied to the request (ADR-0010 consequence).
 ## The observed reality (P4, live linked phone, 2026-07-30)
 
 The central live finding: **the phone acknowledges receipt of every on-demand
-request and answers none of them.** The full chain was observed on a real
-account (primary: iPhone) with Baileys 7.0.0-rc14, the newest release at the
-time (published 2026-07-29):
+request, and no answer was ever observed.** The full chain was observed on a
+real account (primary: iPhone) with Baileys 7.0.0-rc14, the newest release at
+the time (published 2026-07-29):
 
 | Step           | Signal                                                 | Observed                                                                       |
 | -------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
 | Submission     | `requestHistory` resolves with the request message id  | ✅ all 7 attempts across both runs (incl. with the phone fully offline, run 1) |
 | Server relay   | ack for the outgoing peer message                      | ✅ all 7 attempts                                                              |
 | Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ every online attempt; run 2 embeds them per request (`deliveryAcksAt`)      |
-| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **never** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)                     |
+| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **none observed** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)             |
+
+One seam caveat sharpens, rather than weakens, the verdict: whatsappd's
+normalization (`toMessagingHistoryEvents`, `src/baileys/socket.ts`) emits no
+batch for a history payload whose normalized chats, contacts, and messages
+are all empty — so a hypothetical entirely-empty response is
+indistinguishable from silence at this seam. "0 of 7" is therefore a claim
+about _observable_ batches, and one more reason no empty-result or
+exhaustion signal can honestly be offered.
 
 Conditions varied without effect: phone idle vs. WhatsApp foregrounded during
 an active conversation, personal DM vs. self-chat, `count` 50/25/10, anchors

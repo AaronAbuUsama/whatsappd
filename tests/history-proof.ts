@@ -373,6 +373,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     } finally {
       releaseLease();
     }
+    // Drain the transport log BEFORE stamping finalization: the writer's
+    // finalized-run guard must imply the log already carries every queued
+    // stanza, or a receipt could record late acknowledgements as absent.
+    try {
+      logger.flush();
+    } catch {
+      /* flushing is best-effort */
+    }
+    await new Promise((r) => setTimeout(r, 500));
     // Finalization marker: the receipt writer refuses a run without one, so
     // a receipt can never transcribe a still-connected run's outcomes as
     // absent.
@@ -397,14 +406,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     } catch (err) {
       console.error("matrix write failed:", err);
     }
-    // The transport log is written by a worker thread; give it a beat to
-    // flush so the file the receipt writer reads carries the final stanzas.
-    try {
-      logger.flush();
-    } catch {
-      /* flushing is best-effort */
-    }
-    await new Promise((r) => setTimeout(r, 500));
     process.exit(stopFailed ? 1 : 0);
   }
 
@@ -550,8 +551,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
     writeFileSync(heartbeatFile, leaseToken);
     // Bind the observations to the runner that held the account (part of the
-    // capture-at-source provenance the receipt transcribes).
-    db.prepare("UPDATE run SET lease_token = ?").run(leaseToken);
+    // capture-at-source provenance the receipt transcribes). A failure here
+    // must not strand the just-created lease.
+    try {
+      db.prepare("UPDATE run SET lease_token = ?").run(leaseToken);
+    } catch (err) {
+      releaseLease();
+      throw err;
+    }
   };
   acquireLease();
   const heartbeat = setInterval(() => {
