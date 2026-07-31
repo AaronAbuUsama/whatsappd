@@ -376,12 +376,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // Drain the transport log BEFORE stamping finalization: the writer's
     // finalized-run guard must imply the log already carries every queued
     // stanza, or a receipt could record late acknowledgements as absent.
-    try {
-      logger.flush();
-    } catch {
-      /* flushing is best-effort */
-    }
-    await new Promise((r) => setTimeout(r, 500));
+    // flush() is awaited via its completion callback, with a bounded race so
+    // a wedged transport cannot hang shutdown; on timeout the run is still
+    // finalized, and the writer's per-request log binding catches any gap.
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        try {
+          logger.flush(() => resolve());
+        } catch {
+          resolve();
+        }
+      }),
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+    ]);
     // Finalization marker: the receipt writer refuses a run without one, so
     // a receipt can never transcribe a still-connected run's outcomes as
     // absent.
@@ -410,90 +417,106 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "history> " });
-  rl.on("line", (line) => {
-    void (async () => {
-      const [cmd, ...args] = line.trim().split(/\s+/);
-      try {
-        switch (cmd) {
-          case "chats": {
-            sortedChats().forEach(([jid, c], i) => {
-              const o = c.oldest;
-              console.log(
-                `${String(i).padStart(3)}  ${jid}  msgs=${c.count}  oldest=${o ? new Date(o.timestamp).toISOString() : "-"}`,
-              );
-            });
-            break;
-          }
-          case "req": {
-            const idx = Number(args[0]);
-            const entry = sortedChats()[idx];
-            if (!entry) throw new Error(`no chat at index ${args[0]} — run \`chats\``);
-            const [jid, c] = entry;
-            if (!c.oldest) throw new Error(`no anchored message known for ${jid}`);
-            const count = args[1] ? Number(args[1]) : 50;
-            // Freshness baseline is captured BEFORE submission: a batch that
-            // lands while the submit promise is pending is request-triggered
-            // and must not be classified as pre-existing.
-            const submittedAt = Date.now();
-            const { requestId } = await session.requestHistory(
-              { ref: c.oldest.ref, timestamp: c.oldest.timestamp },
-              { count },
-            );
-            insertRequest.run(
-              requestId,
-              hashChat(jid),
-              c.oldest.hash,
-              c.oldest.timestamp,
-              count,
-              submittedAt,
-            );
+  // Commands run strictly serialized: a later `quit` (typed or SIGINT-queued)
+  // can only start after every in-flight command — e.g. a `req` awaiting
+  // submission — has completed its observation-store writes, so finalization
+  // can never race a pending insert.
+  let commandChain = Promise.resolve();
+  const handleCommand = async (line: string): Promise<void> => {
+    const [cmd, ...args] = line.trim().split(/\s+/);
+    try {
+      switch (cmd) {
+        case "chats": {
+          sortedChats().forEach(([jid, c], i) => {
+            const o = c.oldest;
             console.log(
-              `📨 submitted ${requestId} (chat=${hashChat(jid)}, anchor=${new Date(c.oldest.timestamp).toISOString()}, count=${count}) — submission receipt only; watch for on_demand batches`,
+              `${String(i).padStart(3)}  ${jid}  msgs=${c.count}  oldest=${o ? new Date(o.timestamp).toISOString() : "-"}`,
             );
-            break;
-          }
-          case "send": {
-            // Anchor bootstrap: a returning device receives no history redelivery,
-            // so an empty run has no requestable anchors until traffic exists.
-            const target = args[0]?.includes("@") ? args[0] : sortedChats()[Number(args[0])]?.[0];
-            if (!target) throw new Error(`no chat for ${args[0]} — pass an index or a full jid`);
-            if (!config.sendAllowlist?.includes(target)) {
-              throw new Error(`send to ${target} refused: not in the owner's sendAllowlist`);
-            }
-            const text = args.slice(1).join(" ") || `issue18 anchor ${Date.now()}`;
-            const ref = await session.send(target, { text });
-            console.log(`📤 sent ${ref.id} to ${target}`);
-            break;
-          }
-          case "status":
-            showStatus();
-            break;
-          case "oracle":
-            showOracle();
-            break;
-          case "note":
-            // Notes end up in committed receipts: strip anything shaped like a
-            // native address (E.164 / long digit runs) before it is stored.
-            insertNote.run(Date.now(), args.join(" ").replace(/\+?\d{7,15}/g, "<redacted>"));
-            console.log("noted");
-            break;
-          case "quit":
-            await quit();
-            break;
-          case "":
-            break;
-          default:
-            console.log(
-              "commands: chats | req <idx> [n] | send <idx|jid> [text] | status | oracle | note <text> | quit",
-            );
+          });
+          break;
         }
-      } catch (err) {
-        console.error(`✖ ${(err as Error).message}`);
+        case "req": {
+          const idx = Number(args[0]);
+          const entry = sortedChats()[idx];
+          if (!entry) throw new Error(`no chat at index ${args[0]} — run \`chats\``);
+          const [jid, c] = entry;
+          if (!c.oldest) throw new Error(`no anchored message known for ${jid}`);
+          const count = args[1] ? Number(args[1]) : 50;
+          // Freshness baseline is captured BEFORE submission: a batch that
+          // lands while the submit promise is pending is request-triggered
+          // and must not be classified as pre-existing.
+          const submittedAt = Date.now();
+          const { requestId } = await session.requestHistory(
+            { ref: c.oldest.ref, timestamp: c.oldest.timestamp },
+            { count },
+          );
+          insertRequest.run(
+            requestId,
+            hashChat(jid),
+            c.oldest.hash,
+            c.oldest.timestamp,
+            count,
+            submittedAt,
+          );
+          console.log(
+            `📨 submitted ${requestId} (chat=${hashChat(jid)}, anchor=${new Date(c.oldest.timestamp).toISOString()}, count=${count}) — submission receipt only; watch for on_demand batches`,
+          );
+          break;
+        }
+        case "send": {
+          // Anchor bootstrap: a returning device receives no history redelivery,
+          // so an empty run has no requestable anchors until traffic exists.
+          const target = args[0]?.includes("@") ? args[0] : sortedChats()[Number(args[0])]?.[0];
+          if (!target) throw new Error(`no chat for ${args[0]} — pass an index or a full jid`);
+          if (!config.sendAllowlist?.includes(target)) {
+            throw new Error(`send to ${target} refused: not in the owner's sendAllowlist`);
+          }
+          const text = args.slice(1).join(" ") || `issue18 anchor ${Date.now()}`;
+          const ref = await session.send(target, { text });
+          console.log(`📤 sent ${ref.id} to ${target}`);
+          break;
+        }
+        case "status":
+          showStatus();
+          break;
+        case "oracle":
+          showOracle();
+          break;
+        case "note":
+          // Notes end up in committed receipts: strip anything shaped like a
+          // native address (E.164 / long digit runs) before it is stored.
+          insertNote.run(Date.now(), args.join(" ").replace(/\+?\d{7,15}/g, "<redacted>"));
+          console.log("noted");
+          break;
+        case "quit":
+          await quit();
+          break;
+        case "":
+          break;
+        default:
+          console.log(
+            "commands: chats | req <idx> [n] | send <idx|jid> [text] | status | oracle | note <text> | quit",
+          );
       }
-      rl.prompt();
-    })();
+    } catch (err) {
+      console.error(`✖ ${(err as Error).message}`);
+    }
+    rl.prompt();
+  };
+  rl.on("line", (line) => {
+    commandChain = commandChain.then(() => handleCommand(line));
   });
-  process.on("SIGINT", () => void quit());
+  let sigints = 0;
+  process.on("SIGINT", () => {
+    sigints++;
+    if (sigints >= 2) {
+      // Escape hatch for a hung command: exit without finalization — the run
+      // stays unreceiptable, which is the honest outcome for a torn shutdown.
+      console.error("\nforce exit without finalization (second SIGINT)");
+      process.exit(130);
+    }
+    commandChain = commandChain.then(() => quit());
+  });
 
   // Operator sentinel, deliberately NOT a self-healing lease: acquisition
   // always refuses an existing lock and never steals it — automatic stale
