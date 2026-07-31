@@ -11,18 +11,43 @@
  *
  * @packageDocumentation
  */
+import { isOnline, isTerminal, type Status } from "../model/status.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import {
   AccountAlreadyClaimedError,
   AccountNotHeldError,
   type AccountLease,
+  type StoredMessagePage,
+  type StoredMessagePageOptions,
   type WhatsAppBackend,
   type WhatsAppClient,
   type WhatsAppClientFrame,
   type WhatsAppDurableEvent,
   type WhatsAppSnapshot,
 } from "./contracts.ts";
+
+/**
+ * What a connection status durably says about *when*, if anything.
+ *
+ * @remarks
+ * Only the two ends of the lifecycle are facts worth keeping: the account was
+ * online at this instant, or it had gone. `connecting`, `pairing` and
+ * `authenticated` are transitions — the account is neither reachable nor known
+ * to be gone — and stamping either timestamp from one would misreport a
+ * reconnect attempt as a disconnection (ADR-0020).
+ *
+ * `backing_off` counts as gone, and has to: a dropped socket goes straight
+ * there rather than through `disconnected` (`src/machine.ts`, `onClose`), so
+ * reading only the literal phase would leave the commonest disconnection of all
+ * unrecorded and last-disconnected reflecting nothing but deliberate stops.
+ */
+const connectionInstant = (status: Status): "connected" | "disconnected" | undefined =>
+  isOnline(status)
+    ? "connected"
+    : status.phase === "disconnected" || status.phase === "backing_off" || isTerminal(status)
+      ? "disconnected"
+      : undefined;
 
 /**
  * The part of a live session the runtime uses.
@@ -80,8 +105,10 @@ export interface WhatsAppRuntime {
   start(): Promise<void>;
   /** Stop consuming, close the session, and release the account lease. */
   stop(): Promise<void>;
-  /** The account's current mirror and revision. */
+  /** The account's current Snapshot Window and revision. */
   snapshot(): Promise<WhatsAppSnapshot>;
+  /** One chat's stored messages, newest first. Reads storage, never WhatsApp. */
+  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
   /** Observe published frames. The client seam; applications use a client. */
   onFrame(listener: (frame: WhatsAppClientFrame) => void): Unsubscribe;
 }
@@ -173,20 +200,22 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * What this slice consumes from the session.
    *
    * @remarks
-   * Only what the mirror can project is subscribed at all. Update, contact and
-   * group events have no projection yet and are not observed in this slice —
-   * which is a scope statement, not a bypass: nothing reaches the mirror by
-   * another route, and the store still refuses any unsupported event type a
-   * caller hands it. What is observed is accepted whole, never trimmed to what
-   * currently projects.
+   * Only what the mirror can project is subscribed at all. `update` events have
+   * no projection yet and are not observed — which is a scope statement, not a
+   * bypass: nothing reaches the mirror by another route, and the store still
+   * refuses any unsupported event type a caller hands it. What is observed is
+   * accepted whole, never trimmed to what currently projects.
    */
   const handlers: WhatsAppSessionHandlers = {
     message: (message) => accept({ type: "message", message }),
     conversationSync: (batch) => accept({ type: "conversation_sync", batch }),
+    contact: (contact) => accept({ type: "contact", contact }),
+    group: (group) => accept({ type: "group", group }),
     // Connection and presence are live signals with an expiry, never records:
     // a stored `online` or `typing` would be reported as current after it
-    // stopped being true.
-    connection: (status) => {
+    // stopped being true. Only the instant each was observed at is durable, and
+    // an instant restores as history rather than as current state (ADR-0020).
+    connection: async (status) => {
       const claim = lease;
       // Connection truth is only ever this claim's; without one there is
       // nothing a client could treat as current.
@@ -201,9 +230,23 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
           fencingToken: claim.fencingToken,
         },
       });
+      const kind = connectionInstant(status);
+      if (kind) await accept({ type: "account_connection", kind, at: observedAt });
     },
-    presence: (presence) => {
-      publish({ type: "presence", presence, expiresAt: Date.now() + freshnessMs });
+    presence: async (presence) => {
+      const observedAt = Date.now();
+      publish({ type: "presence", presence, expiresAt: observedAt + freshnessMs });
+      // Every presence kind — typing, available, and the `unavailable` that
+      // ends a session — is evidence the address was there at that instant, so
+      // one rule covers them all and none of them stores what it was doing. In
+      // a group WhatsApp names the participant and in a 1:1 the chat is the
+      // peer; the address that was present is recorded either way, never the
+      // chat a group's typing arrived on.
+      await accept({
+        type: "last_seen",
+        contactId: presence.participant ?? presence.chatId,
+        at: presence.at ?? observedAt,
+      });
     },
   };
 
@@ -386,6 +429,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     start,
     stop,
     snapshot: () => backend.data.snapshot(accountId),
+    messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
     onFrame(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -404,6 +448,10 @@ const CANCELLED = Symbol("cancelled");
  */
 export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAppClient {
   return {
+    // Straight to the mirror, deliberately independent of any watch: paging is
+    // a read, and nothing about it asks WhatsApp for anything (ADR-0010).
+    messages: (chatId, options) => runtime.messages(chatId, options),
+
     async *watch(options) {
       const signal = options?.signal;
       const queued: WhatsAppClientFrame[] = [];

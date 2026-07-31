@@ -11,10 +11,33 @@
  *
  * @packageDocumentation
  */
-import type { PresenceUpdate, Status, WhatsAppAddress } from "../model/index.ts";
+import type { GroupParticipant, PresenceUpdate, Status, WhatsAppAddress } from "../model/index.ts";
 import type { MessageRef } from "../model/outbound.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { WhatsAppEvent } from "../subscription.ts";
+
+/**
+ * One durable timestamp derived from an ephemeral signal (ADR-0020).
+ *
+ * @remarks
+ * *When* an address was last observed present, and *when* this account's
+ * session last connected or disconnected, are facts that stay true. The
+ * statuses they were derived from — `available`, `typing`, `online` — are not,
+ * which is why neither reaches storage: these carry an instant and nothing
+ * else, so no replay can restore a status as current.
+ */
+export type ObservedInstant =
+  | {
+      readonly type: "last_seen";
+      /** The address observed present — a group's participant, not its chat. */
+      readonly contactId: string;
+      readonly at: number;
+    }
+  | {
+      readonly type: "account_connection";
+      readonly kind: "connected" | "disconnected";
+      readonly at: number;
+    };
 
 /**
  * The source events that may be durably accepted.
@@ -22,9 +45,13 @@ import type { WhatsAppEvent } from "../subscription.ts";
  * @remarks
  * Connection and presence are excluded by type, not by a runtime filter:
  * replaying a stored `online` or `typing` would manufacture current state
- * (ADR-0014), so it must be impossible to hand one to a data store.
+ * (ADR-0014), so it must be impossible to hand one to a data store. The
+ * {@link ObservedInstant} a runtime derives from them carries no status at all
+ * and is durable (ADR-0020).
  */
-export type WhatsAppDurableEvent = Exclude<WhatsAppEvent, { type: "connection" | "presence" }>;
+export type WhatsAppDurableEvent =
+  | Exclude<WhatsAppEvent, { type: "connection" | "presence" }>
+  | ObservedInstant;
 
 /**
  * One observation offered to {@link WhatsAppDataStore.accept}.
@@ -63,24 +90,136 @@ export interface ChatRecord {
   readonly lastMessageAt: number;
 }
 
+/** One contact in the current mirror. Identity is `(accountId, contactId)`. */
+export interface ContactRecord {
+  readonly accountId: string;
+  readonly contactId: string;
+  /** Every known equivalent native id WhatsApp delivered, primary id first. */
+  readonly nativeIds: readonly string[];
+  readonly displayName?: string;
+  readonly profileName?: string;
+  readonly verifiedName?: string;
+  readonly username?: string;
+  /** A URL, `null` when the contact has none, absent when never reported. */
+  readonly imgUrl?: string | null;
+  readonly status?: string;
+  /**
+   * When this address was last observed present, as a millisecond epoch
+   * timestamp; absent until one presence observation names it.
+   *
+   * @remarks
+   * A historical instant, never a live state (ADR-0020). It says an address was
+   * there at a time, and says nothing about now — the live
+   * {@link WhatsAppClientFrame} presence frame is the only thing that does, and
+   * it expires.
+   */
+  readonly lastSeenAt?: number;
+}
+
+/** One group in the current mirror. Identity is `(accountId, groupId)`. */
+export interface GroupRecord {
+  readonly accountId: string;
+  readonly groupId: string;
+  readonly subject?: string;
+  readonly participants: readonly GroupParticipant[];
+}
+
+/**
+ * One account's own durable state in the current mirror.
+ *
+ * @remarks
+ * Connection *timestamps* only. There is deliberately no stored status: a
+ * restored `online` is exactly the manufactured current state Connection
+ * Freshness exists to prevent, while "this account was last connected at T"
+ * stays true however old it gets (ADR-0020).
+ */
+export interface AccountRecord {
+  readonly accountId: string;
+  /** When this account's session was last observed online, as an epoch ms. */
+  readonly lastConnectedAt?: number;
+  /** When it was last observed disconnected or terminal, as an epoch ms. */
+  readonly lastDisconnectedAt?: number;
+}
+
 /** A current-mirror record carried by a snapshot or a patch. */
 export type MirrorRecord =
+  | { readonly type: "account"; readonly account: AccountRecord }
   | { readonly type: "chat"; readonly chat: ChatRecord }
+  | { readonly type: "contact"; readonly contact: ContactRecord }
+  | { readonly type: "group"; readonly group: GroupRecord }
   | { readonly type: "message"; readonly message: MessageRecord };
 
 /**
- * The current mirror for one account at one revision.
+ * The Snapshot Window: one account's bounded current mirror at one revision.
  *
  * @remarks
- * ponytail: this slice puts every stored message in the snapshot. The target
- * shape is chat summaries plus stored `messages()` pages — that split arrives
- * with saved-message paging (#24), which is the first consumer that needs it.
+ * Account state, chat summaries, contacts, and groups — and deliberately not a
+ * message window per chat, whose size would grow with chats multiplied by
+ * windows while a UI shows one conversation (ADR-0010). An opened chat reads
+ * {@link WhatsAppDataStore.messages} instead.
  */
 export interface WhatsAppSnapshot {
   readonly accountId: string;
   readonly revision: number;
+  readonly account: AccountRecord;
   readonly chats: readonly ChatRecord[];
+  readonly contacts: readonly ContactRecord[];
+  readonly groups: readonly GroupRecord[];
+}
+
+/**
+ * A stable position in one chat's stored messages (ADR-0010).
+ *
+ * @remarks
+ * Ordering is `(timestamp, messageId)` descending, both parts required:
+ * timestamps collide — a history sync commonly lands several messages on the
+ * same second — and a page boundary that fell inside a collision would drop or
+ * repeat whichever of them the storage engine happened to order second.
+ */
+export interface StoredMessageCursor {
+  readonly timestamp: number;
+  readonly messageId: string;
+}
+
+/** How much of one chat to read, and from where. */
+export interface StoredMessagePageOptions {
+  /** Read strictly older than this position. Omit for the newest page. */
+  readonly before?: StoredMessageCursor;
+  /**
+   * How many messages to read, newest first.
+   *
+   * @remarks
+   * A database page size, unrelated to the 50 that bounds a WhatsApp history
+   * request (ADR-0010) — the two are separate reads and neither bounds the
+   * other.
+   *
+   * @defaultValue `25`
+   */
+  readonly limit?: number;
+}
+
+/**
+ * One Stored Message Page: messages already in the mirror, newest first.
+ *
+ * @remarks
+ * Read from the backend alone. Nothing here contacts WhatsApp, so an exhausted
+ * page is a statement about storage and never about WhatsApp (ADR-0010).
+ */
+export interface StoredMessagePage {
+  readonly accountId: string;
+  readonly chatId: string;
   readonly messages: readonly MessageRecord[];
+  /**
+   * Pass as `before` to read the next older page. Absent when nothing older is
+   * *stored*.
+   *
+   * @remarks
+   * Its absence never means WhatsApp has no more: an application may say that
+   * no older messages are saved and that it can ask the linked phone, and may
+   * not say that all history is loaded (ADR-0010). Present only when an older
+   * stored message actually exists, so following it never yields an empty page.
+   */
+  readonly nextBefore?: StoredMessageCursor;
 }
 
 /**
@@ -169,6 +308,23 @@ export interface WhatsAppDataStore {
 
   /** Read the account's current mirror and its revision. */
   snapshot(accountId: string): Promise<WhatsAppSnapshot>;
+
+  /**
+   * Read one chat's stored messages, newest first.
+   *
+   * @remarks
+   * The backend read behind an opened conversation, and behind scrolling it.
+   * It never contacts WhatsApp; asking for older messages than WhatsApp has
+   * delivered is a History Backfill Request, a different operation with a
+   * phone dependency and an asynchronous result (ADR-0010).
+   *
+   * @throws {@link RangeError} when `limit` is not a positive integer.
+   */
+  messages(
+    accountId: string,
+    chatId: string,
+    options?: StoredMessagePageOptions,
+  ): Promise<StoredMessagePage>;
 
   /** Read accepted source batches strictly after a consumer's own `seq`. */
   accepted(accountId: string, afterSeq: number): Promise<readonly AcceptedWhatsAppBatch[]>;
@@ -307,9 +463,11 @@ export class AccountNotHeldError extends Error {
  * Thrown when a durable event has no projection in this slice.
  *
  * @remarks
- * The initial slice accepts text messages only. Every other durable event
- * fails loudly here rather than being dropped on the way to storage: a silent
- * skip would report a mirror as current when it is missing changes.
+ * This slice projects text messages, the chats they belong to, contacts,
+ * groups, and derived observation instants. Every other durable event — an
+ * `update`, an authoritative sync replacement — fails loudly here rather than
+ * being dropped on the way to storage: a silent skip would report a mirror as
+ * current when it is missing changes.
  */
 export class UnsupportedDurableEventError extends Error {
   constructor(what: string) {
@@ -324,7 +482,8 @@ export class UnsupportedDurableEventError extends Error {
  * @remarks
  * Connection Freshness: a client treats an expired observation, or one made
  * under a different {@link AccountLease}, as unavailable. It is never stored
- * and never hydrated as startup truth.
+ * and never hydrated as startup truth — {@link AccountRecord} keeps when the
+ * account last connected, which is a different claim from being connected now.
  */
 export interface WhatsAppClientConnectionState {
   readonly status: Status;
@@ -362,8 +521,19 @@ export type WhatsAppClientFrame =
 /** The backend-independent contract applications and React bindings consume. */
 export interface WhatsAppClient {
   /**
-   * Watch one account: a current snapshot first, then the changes that follow
-   * it, each stamped with the revision it moves the mirror to.
+   * Watch one account: a current Snapshot Window first, then the changes that
+   * follow it, each stamped with the revision it moves the mirror to.
    */
   watch(options?: { readonly signal?: AbortSignal }): AsyncIterable<WhatsAppClientFrame>;
+
+  /**
+   * Read one opened chat's stored messages, newest first, then older pages
+   * from the returned cursor.
+   *
+   * @remarks
+   * A snapshot carries no message window, so this is how a conversation is
+   * filled (ADR-0010). It reads storage only — see
+   * {@link WhatsAppDataStore.messages}.
+   */
+  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
 }
