@@ -153,6 +153,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const requests = db.prepare("SELECT * FROM request ORDER BY submitted_at").all() as Array<
     Record<string, unknown>
   >;
+  // An issue-18 P4 receipt asserts on-demand request behavior; a run that
+  // submitted none has nothing to receipt.
+  if (requests.length === 0) {
+    throw new Error("run contains no history requests — nothing to receipt");
+  }
   // The log is the run's own (path from the run table), but belt-and-braces:
   // every submitted request must appear in it.
   for (const r of requests) {

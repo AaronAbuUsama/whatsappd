@@ -381,7 +381,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const flushConfirmed = await Promise.race([
       new Promise<boolean>((resolve) => {
         try {
-          logger.flush(() => resolve(true));
+          // The callback is error-bearing: a transport I/O failure means the
+          // log may be incomplete, which is NOT a confirmed flush.
+          logger.flush((err?: Error) => resolve(err == null));
         } catch {
           resolve(false);
         }
