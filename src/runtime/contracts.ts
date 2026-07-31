@@ -35,6 +35,17 @@ export type WhatsAppDurableEvent = Exclude<WhatsAppEvent, { type: "connection" |
  * and no implementation has a second identifier to prefer by mistake.
  */
 export interface WhatsAppDataEvent {
+  /**
+   * A stable identity for this observation, assigned by the caller.
+   *
+   * @remarks
+   * It is what makes a retry after an ambiguous backend result distinguishable
+   * from WhatsApp genuinely delivering the same thing twice. Without it a store
+   * must either append a duplicate or discard a real repeated observation,
+   * because an identical payload at an identical millisecond is not evidence of
+   * either.
+   */
+  readonly eventId: string;
   /** When the runtime observed the event, as a millisecond epoch timestamp. */
   readonly observedAt: number;
   readonly event: WhatsAppDurableEvent;
@@ -133,10 +144,22 @@ export interface WhatsAppDataStore {
    * Append the source events, project them into the current mirror, and stamp
    * the resulting revision as one operation.
    *
+   * @param fencingToken - The writer's current {@link AccountLease} token. A
+   * token below one this account has already accepted is a paused worker
+   * resuming after its claim moved on, and is rejected (ADR-0009).
+   * @returns The committed batch. Re-offering events that were already accepted
+   * returns their original batch instead of appending a second copy, so a
+   * retry after an ambiguous failure is safe.
+   *
    * @throws {@link UnsupportedDurableEventError} when an event has no
-   * projection yet — nothing is appended and the revision does not move.
+   * projection yet, and {@link StaleAccountClaimError} for a superseded token —
+   * in both cases nothing is appended and the revision does not move.
    */
-  accept(accountId: string, events: readonly WhatsAppDataEvent[]): Promise<AcceptedWhatsAppBatch>;
+  accept(
+    accountId: string,
+    events: readonly WhatsAppDataEvent[],
+    fencingToken: number,
+  ): Promise<AcceptedWhatsAppBatch>;
 
   /** Read the account's current mirror and its revision. */
   snapshot(accountId: string): Promise<WhatsAppSnapshot>;
@@ -149,8 +172,16 @@ export interface WhatsAppDataStore {
 export interface AccountLease {
   readonly accountId: string;
   readonly holderId: string;
-  /** Monotonically increasing; a stale holder's writes are rejected by it. */
-  readonly fencingToken: string;
+  /**
+   * Monotonically increasing across every claim on this account; a stale
+   * holder's durable writes are rejected by comparing it.
+   *
+   * @remarks
+   * A number rather than an opaque id because ADR-0009 requires it to be
+   * *ordered*: a store deciding whether a writer has been superseded has to
+   * compare tokens, and string order would rank claim 10 below claim 9.
+   */
+  readonly fencingToken: number;
   readonly expiresAt: number;
 }
 
@@ -214,6 +245,32 @@ export class AccountAlreadyClaimedError extends Error {
 }
 
 /**
+ * Thrown when a writer's claim on the account has already been superseded.
+ *
+ * @remarks
+ * The case it exists for: a worker pauses past its lease TTL, another worker
+ * claims the account, and the first resumes holding a buffered event. The lease
+ * alone cannot stop that write — only the store comparing fencing tokens at the
+ * acceptance boundary can (ADR-0009).
+ */
+export class StaleAccountClaimError extends Error {
+  readonly accountId: string;
+  readonly fencingToken: number;
+  /** The newest token this account has accepted a write from. */
+  readonly currentToken: number;
+
+  constructor(accountId: string, fencingToken: number, currentToken: number) {
+    super(
+      `claim ${fencingToken} on WhatsApp account "${accountId}" was superseded by claim ${currentToken}`,
+    );
+    this.name = "StaleAccountClaimError";
+    this.accountId = accountId;
+    this.fencingToken = fencingToken;
+    this.currentToken = currentToken;
+  }
+}
+
+/**
  * Thrown when a durable event has no projection in this slice.
  *
  * @remarks
@@ -241,7 +298,7 @@ export interface WhatsAppClientConnectionState {
   readonly observedAt: number;
   readonly expiresAt: number;
   /** The fencing token of the lease this observation was made under. */
-  readonly fencingToken: string;
+  readonly fencingToken: number;
 }
 
 /** One frame of a {@link WhatsAppClient.watch} stream. */

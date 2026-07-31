@@ -281,6 +281,11 @@ export interface CredentialStore {
 
 Durable WhatsApp state has different invariants:
 
+The sketches below predate ADR-0018, which splits the source cursor from the
+mirror revision, gives each observation a caller-assigned identity, and passes
+the writer's fencing token into acceptance. Read `src/runtime/contracts.ts` for
+the shipped shapes.
+
 ```ts
 export interface AcceptedWhatsAppBatch {
   readonly accountId: string;

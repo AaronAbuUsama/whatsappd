@@ -11,7 +11,7 @@ unblocked ticket frontier may start.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0015`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0018`                                   |
 | Published build specification    | GitHub issue #15                                           |
 | Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
@@ -59,6 +59,7 @@ issues #16 through #41 are the approved dependency graph.
 | Conversation-sync deletion requires explicit, scope-bounded replacement metadata         | PR #12 review  |
 | Executing command claims expire to terminal `outcome_unknown`, never automatic retry     | PR #12 review  |
 | Actorless receipts use a non-null aggregate subject for idempotent projection            | PR #12 review  |
+| Acceptance has its own cursor, observation identity, and fencing token                   | 0018           |
 
 ## Semantics that must not be collapsed
 
@@ -159,7 +160,7 @@ start a descendant merely because the documentation PR is mechanically green.
 
 ## Resuming in a new session
 
-Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0017,
+Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0018,
 specification issue #15, and the currently unblocked ticket bodies. Treat
 current source as evidence of the old package, not evidence that the target APIs
 already exist. Reopening an accepted decision requires an explicit superseding

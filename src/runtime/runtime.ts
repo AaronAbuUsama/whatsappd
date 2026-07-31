@@ -119,6 +119,12 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   let unsubscribe: Unsubscribe | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | undefined;
+  let supervisor: Promise<void> | undefined;
+  /** A terminal session failure, held until a `stop()` reports it. */
+  let failure: { readonly error: unknown } | undefined;
+  // Bumped by every start and every stop, so an `open()` suspended on an await
+  // can tell that the runtime it was starting has since been torn down.
+  let generation = 0;
 
   const publish = (frame: WhatsAppClientFrame): void => {
     for (const listener of listeners) listener(frame);
@@ -132,7 +138,15 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * client update.
    */
   const accept = async (event: WhatsAppDurableEvent): Promise<void> => {
-    const accepted = await backend.data.accept(accountId, [{ observedAt: Date.now(), event }]);
+    const claim = lease;
+    // Writing without a claim is exactly what the lease exists to prevent, so
+    // an event that outlives its claim fails rather than reaching the mirror.
+    if (!claim) throw new Error(`no account claim held for "${accountId}"`);
+    const accepted = await backend.data.accept(
+      accountId,
+      [{ eventId: crypto.randomUUID(), observedAt: Date.now(), event }],
+      claim.fencingToken,
+    );
     if (accepted.revision === accepted.fromRevision) return;
     publish({ type: "patch", patch: accepted.patch });
   };
@@ -167,18 +181,41 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     },
   };
 
-  async function stop(): Promise<void> {
+  /** Release everything this runtime holds, retaining any failure to report. */
+  async function teardown(): Promise<void> {
+    generation += 1;
     running = undefined;
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = undefined;
     unsubscribe?.();
     unsubscribe = undefined;
     const closing = session;
+    const supervised = supervisor;
     session = undefined;
-    await closing?.stop?.();
+    supervisor = undefined;
     const claim = lease;
     lease = undefined;
-    if (claim) await backend.leases.release(claim);
+    try {
+      await closing?.stop?.();
+      // Nothing awaited the supervisor while the session ran, so its terminal
+      // failure — a rejected handler, a dead socket — arrives here.
+      await supervised;
+    } catch (error) {
+      failure ??= { error };
+    } finally {
+      // A claim outliving a failed teardown would lock the account out until
+      // its TTL expired, so the release does not depend on the close working.
+      if (claim) await backend.leases.release(claim);
+    }
+  }
+
+  async function stop(): Promise<void> {
+    await teardown();
+    // Reported once, to whoever stops the runtime — a session that died on its
+    // own is not allowed to disappear quietly.
+    const held = failure;
+    failure = undefined;
+    if (held) throw held.error;
   }
 
   /** Hold the claim for the session's life; losing it stops the runtime. */
@@ -196,12 +233,21 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   }
 
   async function open(): Promise<void> {
+    const mine = (generation += 1);
+    const stopped = (): boolean => generation !== mine;
+    /** The session ended on its own; the runtime must not keep the account. */
+    const ended = (): void => {
+      if (!stopped()) void teardown().catch(() => {});
+    };
+    let claimed: AccountLease | undefined;
     try {
       // The claim comes first: a duplicate worker must fail before it can open
       // a second socket on the account and diverge its Signal state.
       const claim = await backend.leases.acquire(accountId, holderId, leaseTtlMs);
       if (!claim.acquired) throw new AccountAlreadyClaimedError(accountId, claim.heldUntil);
-      lease = claim.lease;
+      claimed = claim.lease;
+      if (stopped()) throw new Error(`runtime for "${accountId}" was stopped while starting`);
+      lease = claimed;
       heartbeat = setInterval(
         () => {
           // ponytail: a timer has nowhere to report a failed teardown, and the
@@ -212,13 +258,32 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         Math.max(1, Math.floor(leaseTtlMs / 2)),
       );
       heartbeat.unref?.();
-      session = await config.openSession(backend.credentials);
-      unsubscribe = session.subscribe(handlers);
-      await session.start?.();
+
+      const opened = await config.openSession(backend.credentials);
+      // A stop() that ran while the session was opening already released the
+      // claim, so subscribing now would consume WhatsApp with no claim at all —
+      // possibly alongside the worker that took the account over.
+      if (stopped()) {
+        await opened.stop?.();
+        throw new Error(`runtime for "${accountId}" was stopped while starting`);
+      }
+      session = opened;
+      unsubscribe = opened.subscribe(handlers);
+      // A live session's start() resolves only once the session has ended, so
+      // it is supervised rather than awaited: startup returns when the account
+      // is being consumed, and the session's terminal failure surfaces from
+      // stop(). Awaiting it here would hang every caller for the whole session.
+      supervisor = opened.start?.();
+      // When the session ends on its own the runtime stops with it, so a dead
+      // session never keeps holding the account.
+      void supervisor?.then(ended, ended);
     } catch (error) {
-      // Leaves nothing claimed or subscribed behind; `stop()` clears the memo,
-      // so a later `start()` is a real retry rather than the same rejection.
-      await stop();
+      // Leaves nothing claimed or subscribed behind. `teardown()` clears the
+      // memo, so a later `start()` is a real retry rather than the same
+      // rejection, and the explicit release covers a claim taken after a
+      // concurrent stop() had already let go.
+      if (!stopped()) await teardown().catch(() => {});
+      if (claimed) await backend.leases.release(claimed).catch(() => {});
       throw error;
     }
   }
@@ -259,13 +324,36 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
       const onAbort = (): void => wake?.();
       signal?.addEventListener("abort", onAbort, { once: true });
 
-      try {
+      // The revision the consumer has been brought up to. Patches are applied
+      // only from exactly here (ADR-0011), so it moves with what is yielded
+      // rather than staying at the first snapshot's revision.
+      let applied = -1;
+      const resnapshot = async (): Promise<WhatsAppSnapshot> => {
         const snapshot = await runtime.snapshot();
+        applied = snapshot.revision;
+        return snapshot;
+      };
+
+      try {
+        if (signal?.aborted) return;
+        const snapshot = await resnapshot();
+        if (signal?.aborted) return;
         yield { type: "snapshot", snapshot };
         while (!signal?.aborted) {
           for (const frame of queued.splice(0)) {
-            // Changes the snapshot already contains would repeat a revision.
-            if (frame.type === "patch" && frame.patch.revision <= snapshot.revision) continue;
+            if (frame.type === "patch") {
+              // Already applied — a repeat, or a change the snapshot carried.
+              if (frame.patch.revision <= applied) continue;
+              // A missing intermediate change cannot be applied over, and
+              // nothing may be silently skipped: replace state with a snapshot.
+              if (frame.patch.fromRevision !== applied) {
+                const fresh = await resnapshot();
+                if (signal?.aborted) return;
+                yield { type: "snapshot", snapshot: fresh };
+                continue;
+              }
+              applied = frame.patch.revision;
+            }
             yield frame;
             if (signal?.aborted) return;
           }

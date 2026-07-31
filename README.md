@@ -83,17 +83,22 @@ const runtime = createWhatsAppRuntime({
   openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
 });
 
+// Returns once the account is being consumed; the session keeps running.
 await runtime.start();
 
 for await (const frame of createInProcessWhatsAppClient(runtime).watch()) {
   if (frame.type === "snapshot") console.log(frame.snapshot.revision, frame.snapshot.messages);
   if (frame.type === "patch") console.log(frame.patch.revision, frame.patch.upserts);
 }
+
+// Releases the account lease, and reports a session that died on its own.
+await runtime.stop();
 ```
 
 A watch begins with the current snapshot and its revision, then delivers each
-change as a patch whose `fromRevision` is the revision it applies to. Replaying
-a message the mirror already holds produces no patch.
+change as a patch whose `fromRevision` is the revision it applies to; a gap
+replaces state with a fresh snapshot rather than applying over it. Replaying a
+message the mirror already holds produces no patch.
 
 Credentials, WhatsApp data, the account lease, and media bytes are four separate
 capabilities. `memoryBackend()` groups in-memory implementations of all four;

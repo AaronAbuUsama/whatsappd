@@ -6,10 +6,12 @@
 import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
 import {
+  StaleAccountClaimError,
   UnsupportedDurableEventError,
   type WhatsAppBackend,
   type WhatsAppClient,
   type WhatsAppClientFrame,
+  type WhatsAppDataEvent,
   type WhatsAppPatch,
   type WhatsAppSnapshot,
 } from "../src/runtime/contracts.ts";
@@ -178,9 +180,9 @@ test("the client receives no update until acceptance commits", async () => {
     ...memoryBackend(),
     data: {
       ...data,
-      async accept(accountId, events) {
+      async accept(accountId, events, fencingToken) {
         await held;
-        return data.accept(accountId, events);
+        return data.accept(accountId, events, fencingToken);
       },
     },
   };
@@ -384,9 +386,51 @@ test("the account lease is a compare-and-swap claim with a fencing token", async
 
   const next = await leases.acquire("personal", "worker-b", 30_000);
   assert.ok(next.acquired);
-  expect(Number(next.lease.fencingToken) > Number(first.lease.fencingToken)).toBe(true);
+  expect(next.lease.fencingToken > first.lease.fencingToken).toBe(true);
   // The previous holder can no longer touch the claim that replaced it.
   expect(await leases.release(first.lease)).toBe(false);
+});
+
+test("a superseded claim cannot write, however long its event was buffered", async () => {
+  const data = memoryDataStore();
+  const observation = (eventId: string): WhatsAppDataEvent => ({
+    eventId,
+    observedAt: AT,
+    event: { type: "message", message: hello(eventId) },
+  });
+
+  // Worker B, holding the newer claim, writes first.
+  await data.accept("personal", [observation("m2")], 2);
+  // Worker A resumes on its old claim with an event it buffered before pausing.
+  await assert.rejects(
+    data.accept("personal", [observation("m1")], 1),
+    (error: unknown) => error instanceof StaleAccountClaimError,
+  );
+
+  const snapshot = await data.snapshot("personal");
+  expect(snapshot.revision).toBe(1);
+  expect(snapshot.messages.map((message) => message.messageId)).toEqual(["m2"]);
+  expect((await data.accepted("personal", 0)).length).toBe(1);
+});
+
+test("re-offering an accepted observation returns its batch instead of a second copy", async () => {
+  const data = memoryDataStore();
+  const observation: WhatsAppDataEvent = {
+    eventId: "obs-1",
+    observedAt: AT,
+    event: { type: "message", message: hello() },
+  };
+
+  const first = await data.accept("personal", [observation], 1);
+  // The retry a caller makes after an ambiguous backend result.
+  expect(await data.accept("personal", [observation], 1)).toBe(first);
+  expect((await data.accepted("personal", 0)).length).toBe(1);
+
+  // A genuinely distinct observation of the same thing is still recorded, and
+  // still moves nothing, because identity is the caller's, not the payload's.
+  const again = await data.accept("personal", [{ ...observation, eventId: "obs-2" }], 1);
+  expect([again.seq, again.fromRevision, again.revision]).toEqual([2, 1, 1]);
+  expect((await data.snapshot("personal")).messages.length).toBe(1);
 });
 
 test("reconnecting with no new history preserves the existing current state", async () => {
@@ -477,6 +521,117 @@ test("a batch that hits an unsupported event stores none of it", async () => {
   await runtime.stop();
 });
 
+test("start returns while the session runs, and the session's end frees the account", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  let endSession!: () => void;
+  const supervising = new Promise<void>((resolve) => {
+    endSession = resolve;
+  });
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    // A live session's start() resolves only when the session ends.
+    openSession: () => ({ ...driver.session, start: () => supervising }),
+  });
+
+  await runtime.start();
+  await driver.emit({ type: "message", message: hello() });
+  expect((await runtime.snapshot()).revision).toBe(1);
+  // Still consuming, so the account is still claimed.
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(false);
+
+  endSession();
+  await supervising;
+  await tick();
+
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("a stop while the session is opening leaves the account claimed by nobody", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  let finishOpening!: () => void;
+  const opening = new Promise<void>((resolve) => {
+    finishOpening = resolve;
+  });
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: async () => {
+      await opening;
+      return driver.session;
+    },
+  });
+
+  const starting = runtime.start();
+  await tick();
+  await runtime.stop();
+  finishOpening();
+
+  await assert.rejects(starting, /stopped while starting/);
+  // Never subscribed, so WhatsApp is not being consumed without a claim.
+  await driver.emit({ type: "message", message: hello() });
+  expect((await runtime.snapshot()).revision).toBe(0);
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("a terminal session failure is reported by stop, not swallowed", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const died = new Error("socket died");
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => ({ ...driver.session, start: () => Promise.reject(died) }),
+  });
+
+  await runtime.start();
+  await tick();
+
+  await assert.rejects(runtime.stop(), (error: unknown) => error === died);
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("a client applies only contiguous patches and re-snapshots after a gap", async () => {
+  let current: WhatsAppSnapshot = { accountId: "personal", revision: 0, chats: [], messages: [] };
+  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
+  const runtime: WhatsAppRuntime = {
+    accountId: "personal",
+    start: async () => {},
+    stop: async () => {},
+    snapshot: async () => current,
+    onFrame(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const publish = (fromRevision: number, revision: number): void => {
+    for (const listener of listeners)
+      listener({
+        type: "patch",
+        patch: { accountId: "personal", fromRevision, revision, upserts: [] },
+      });
+  };
+
+  const seen = watching(createInProcessWhatsAppClient(runtime));
+  await tick();
+  publish(0, 1);
+  await tick();
+  publish(0, 1); // the same change repeated
+  await tick();
+
+  // Revision 2 never arrives, so revision 3 cannot be applied over the gap.
+  current = { accountId: "personal", revision: 3, chats: [], messages: [] };
+  publish(2, 3);
+  await tick();
+
+  expect(seen.frames.map((frame) => frame.type)).toEqual(["snapshot", "patch", "snapshot"]);
+  expect(snapshotsOf(seen.frames).map((snapshot) => snapshot.revision)).toEqual([0, 3]);
+
+  await seen.close();
+});
+
 test("connection and presence expire and never become stored truth", async () => {
   const { driver, runtime, client } = lane("personal", { freshnessMs: 5_000 });
   await runtime.start();
@@ -491,7 +646,7 @@ test("connection and presence expire and never become stored truth", async () =>
   const connection = seen.frames.find((frame) => frame.type === "connection");
   assert.ok(connection?.type === "connection");
   expect(connection.state.expiresAt - connection.state.observedAt).toBe(5_000);
-  expect(connection.state.fencingToken.length > 0).toBe(true);
+  expect(connection.state.fencingToken > 0).toBe(true);
 
   const presence = seen.frames.find((frame) => frame.type === "presence");
   assert.ok(presence?.type === "presence");
