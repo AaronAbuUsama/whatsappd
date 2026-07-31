@@ -18,6 +18,7 @@ import {
   type WAMessageUpdate,
   type MessageUserReceiptUpdate,
 } from "baileys";
+import type { WhatsAppAddress } from "../model/message.ts";
 import type { ReceiptStatus, Update } from "../model/update.ts";
 import type { DownloadThunk } from "./download.ts";
 import { keyToRef } from "./outbound.ts";
@@ -62,6 +63,7 @@ function statusOf(s: number | null | undefined): ReceiptStatus | undefined {
  */
 export function mapMessageUpdate(
   u: WAMessageUpdate,
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): Update | undefined {
   const ref = keyToRef(u.key);
@@ -83,7 +85,7 @@ export function mapMessageUpdate(
       message: edited,
       messageTimestamp: up.messageTimestamp ?? undefined,
     } as WAMessage;
-    const message = toInbound(synthetic, true, makeDownload);
+    const message = toInbound(synthetic, true, self, makeDownload);
     if (!message) return undefined;
     return { kind: "edit", ref, message };
   }

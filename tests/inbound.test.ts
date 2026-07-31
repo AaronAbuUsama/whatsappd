@@ -1,11 +1,11 @@
 import { expect, test } from "./_expect.ts";
 import { toInbound } from "../src/baileys/inbound.ts";
-import { baseMessage, realMessage } from "./fixtures.ts";
+import { baseMessage, realMessage, SELF } from "./fixtures.ts";
 
 // ── text ───────────────────────────────────────────────────────────────────
 
 test("conversation → text", () => {
-  const m = toInbound(baseMessage({}, { conversation: "hello" }), true)!;
+  const m = toInbound(baseMessage({}, { conversation: "hello" }), true, SELF)!;
   expect(m.kind).toBe("text");
   expect((m as { text: string }).text).toBe("hello");
   expect(m.live).toBe(true);
@@ -14,7 +14,7 @@ test("conversation → text", () => {
 });
 
 test("extendedTextMessage → text", () => {
-  const m = toInbound(baseMessage({}, { extendedTextMessage: { text: "hi there" } }), false)!;
+  const m = toInbound(baseMessage({}, { extendedTextMessage: { text: "hi there" } }), false, SELF)!;
   expect(m.kind).toBe("text");
   expect((m as { text: string }).text).toBe("hi there");
   expect(m.live).toBe(false); // history append
@@ -23,7 +23,7 @@ test("extendedTextMessage → text", () => {
 // round-trip through Baileys' OWN generator — the strong test
 test("round-trip: real generated text message parses back to text", async () => {
   const raw = await realMessage({ text: "round trip" });
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("text");
   expect((m as { text: string }).text).toBe("round trip");
 });
@@ -44,7 +44,7 @@ test("imageMessage → image with metadata + caption", () => {
       },
     },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("image");
   const im = m as {
     media: { mimetype?: string; fileLength?: number; width?: number };
@@ -61,7 +61,7 @@ test("audioMessage ptt → audio voice-note metadata", () => {
     {},
     { audioMessage: { mimetype: "audio/ogg; codecs=opus", seconds: 7, ptt: true } },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("audio");
   const a = m as { media: { ptt?: boolean; seconds?: number } };
   expect(a.media.ptt).toBe(true);
@@ -73,7 +73,7 @@ test("documentMessage → document with fileName", () => {
     {},
     { documentMessage: { mimetype: "application/pdf", fileName: "report.pdf", fileLength: 999 } },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("document");
   expect((m as { media: { fileName?: string } }).media.fileName).toBe("report.pdf");
 });
@@ -82,14 +82,14 @@ test("media handle: download() is wired to the injected fetcher", async () => {
   const bytes = Buffer.from("FAKEBYTES");
   const makeDownload = () => () => Promise.resolve(bytes);
   const raw = baseMessage({}, { imageMessage: { mimetype: "image/jpeg" } });
-  const m = toInbound(raw, true, makeDownload)!;
+  const m = toInbound(raw, true, SELF, makeDownload)!;
   const im = m as { media: { download(): Promise<Buffer> } };
   expect((await im.media.download()).toString()).toBe("FAKEBYTES");
 });
 
 test("media handle: default (no socket) exists but rejects on download()", async () => {
   const raw = baseMessage({}, { imageMessage: { mimetype: "image/jpeg" } });
-  const m = toInbound(raw, true)!; // no downloader bound
+  const m = toInbound(raw, true, SELF)!; // no downloader bound
   const im = m as { media: { download(): Promise<Buffer> } };
   let rejected = false;
   await im.media.download().catch((e: Error) => {
@@ -106,7 +106,7 @@ test("locationMessage → location", () => {
     {},
     { locationMessage: { degreesLatitude: 51.5, degreesLongitude: -0.12, name: "London" } },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("location");
   const l = m as { lat: number; lng: number; name?: string };
   expect(l.lat).toBe(51.5);
@@ -119,7 +119,7 @@ test("contactMessage → contacts", () => {
     {},
     { contactMessage: { displayName: "Jane", vcard: "BEGIN:VCARD\nEND:VCARD" } },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("contacts");
   const c = m as unknown as { contacts: { name?: string; vcard: string }[] };
   expect(c.contacts[0]!.name).toBe("Jane");
@@ -136,7 +136,7 @@ test("pollCreationMessage → poll", () => {
       },
     },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("poll");
   const p = m as unknown as { name: string; options: string[]; selectableCount: number };
   expect(p.name).toBe("Lunch?");
@@ -148,7 +148,7 @@ test("pollCreationMessage → poll", () => {
 
 test("unknown type → unsupported (never dropped, never thrown)", () => {
   const raw = baseMessage({}, { reactionMessage: { text: "👍", key: { id: "X" } } });
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("unsupported");
   expect((m as { rawType: string }).rawType).toBe("reactionMessage");
 });
@@ -160,14 +160,14 @@ test("viewOnce wrapper → inner image detected, flag kept", () => {
       viewOnceMessage: { message: { imageMessage: { mimetype: "image/jpeg", caption: "secret" } } },
     },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("image");
   expect(m.flags?.viewOnce).toBe(true);
 });
 
 test("ephemeral wrapper → inner text detected, flag kept", () => {
   const raw = baseMessage({}, { ephemeralMessage: { message: { conversation: "poof" } } });
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.kind).toBe("text");
   expect((m as { text: string }).text).toBe("poof");
   expect(m.flags?.ephemeral).toBe(true);
@@ -187,7 +187,7 @@ test("quote + mentions lifted into context", () => {
       },
     },
   );
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.context?.quoted?.id).toBe("QUOTED1");
   expect(m.context?.quoted?.from).toBe("9999@s.whatsapp.net");
   expect(m.context?.mentions).toEqual(["111@s.whatsapp.net"]);
@@ -199,32 +199,85 @@ test("LID addressing resolved + alt kept (decode-wa-message.ts)", () => {
     participant: "55555@lid",
     participantAlt: "12345@s.whatsapp.net",
   });
-  const m = toInbound(raw, true)!;
-  expect(m.from).toBe("55555@lid");
-  expect(m.addressing?.mode).toBe("lid");
-  expect(m.addressing?.alt).toBe("12345@s.whatsapp.net");
+  const m = toInbound(raw, true, SELF)!;
+  expect(m.sender.id).toBe("55555@lid");
+  expect(m.sender.mode).toBe("lid");
+  expect(m.sender.alt).toBe("12345@s.whatsapp.net");
 });
 
-test("LID 1:1 DM with empty-string participant → from falls back to chatId (live-observed)", () => {
+test("LID 1:1 DM with empty-string participant → sender falls back to chatId (live-observed)", () => {
   // WhatsApp delivers participant="" (not undefined) on LID-addressed DMs.
   const raw = baseMessage({
     remoteJid: "100000000000000@lid",
     participant: "",
     addressingMode: "lid",
   });
-  const m = toInbound(raw, true)!;
-  expect(m.from).toBe("100000000000000@lid");
+  const m = toInbound(raw, true, SELF)!;
+  expect(m.sender.id).toBe("100000000000000@lid");
 });
 
 test("group chat flagged isGroup", () => {
   const raw = baseMessage({ remoteJid: "123-456@g.us", participant: "777@s.whatsapp.net" });
-  const m = toInbound(raw, true)!;
+  const m = toInbound(raw, true, SELF)!;
   expect(m.isGroup).toBe(true);
-  expect(m.from).toBe("777@s.whatsapp.net");
+  expect(m.sender.id).toBe("777@s.whatsapp.net");
+});
+
+// ── sender: the four cases (#10 / ADR-0001) ──────────────────────────────────
+
+test("incoming DM → sender is the chat peer", () => {
+  const m = toInbound(baseMessage({ remoteJid: "1234567890@s.whatsapp.net" }), true, SELF)!;
+  expect(m.fromMe).toBe(false);
+  expect(m.sender.id).toBe("1234567890@s.whatsapp.net");
+  expect(m.sender.mode).toBe("pn");
+});
+
+test("incoming group → sender is the actual participant, not the group", () => {
+  const raw = baseMessage({ remoteJid: "123-456@g.us", participant: "777@s.whatsapp.net" });
+  const m = toInbound(raw, true, SELF)!;
+  expect(m.sender.id).toBe("777@s.whatsapp.net");
+});
+
+test("own DM → sender is the linked account, never the peer", () => {
+  // The defect this fixes: WhatsApp leaves participant empty on own DMs, so the
+  // old peer fallback named the counterpart as the author of your own message.
+  const raw = baseMessage({ remoteJid: "1234567890@s.whatsapp.net", fromMe: true });
+  const m = toInbound(raw, true, SELF)!;
+  expect(m.fromMe).toBe(true);
+  expect(m.sender.id).toBe(SELF.id);
+  expect(m.sender.id).not.toBe("1234567890@s.whatsapp.net");
+});
+
+test("own group message → sender is the linked account, never the group chat", () => {
+  const raw = baseMessage({ remoteJid: "123-456@g.us", participant: "777@s.whatsapp.net" });
+  raw.key.fromMe = true;
+  const m = toInbound(raw, true, SELF)!;
+  expect(m.sender.id).toBe(SELF.id);
+  expect(m.sender.id).not.toBe("123-456@g.us");
+});
+
+test("own message in a LID chat is named by the account's LID form", () => {
+  const raw = baseMessage({
+    remoteJid: "100000000000000@lid",
+    participant: "",
+    addressingMode: "lid",
+    fromMe: true,
+  });
+  const m = toInbound(raw, true, SELF)!;
+  expect(m.sender.id).toBe(SELF.alt); // the account's own @lid
+  expect(m.sender.mode).toBe("lid");
+  expect(m.sender.alt).toBe(SELF.id); // the equivalent phone-number form is kept
+});
+
+test("own message keeps the only known form when no equivalent is known", () => {
+  const pnOnly = { id: "me@s.whatsapp.net", mode: "pn" } as const;
+  const raw = baseMessage({ remoteJid: "1000@lid", addressingMode: "lid", fromMe: true });
+  const m = toInbound(raw, true, pnOnly)!;
+  expect(m.sender.id).toBe("me@s.whatsapp.net"); // never invents a LID
 });
 
 test("no remoteJid/id → dropped (not addressable)", () => {
-  expect(toInbound({ key: { id: "X" }, message: { conversation: "x" } } as never, true)).toBe(
+  expect(toInbound({ key: { id: "X" }, message: { conversation: "x" } } as never, true, SELF)).toBe(
     undefined,
   );
 });
@@ -246,6 +299,7 @@ test("contactsArrayMessage → contacts with multiple entries", () => {
       },
     ),
     true,
+    SELF,
   )!;
   expect(m.kind).toBe("contacts");
   const c = m as unknown as { contacts: { name?: string; vcard: string }[] };

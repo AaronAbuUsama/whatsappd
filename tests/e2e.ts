@@ -107,7 +107,7 @@ session.subscribe({
   async message(m) {
     if (!m.live) return;
     const summary = m.kind === "text" ? m.text : `[${m.kind}]`;
-    console.log(`📩 ${m.fromMe ? "(me)" : m.from}: ${summary}`);
+    console.log(`📩 ${m.fromMe ? "(me)" : m.sender.id}: ${summary}`);
     if (!m.fromMe && m.kind === "text" && m.text.trim().toLowerCase() === "ping") {
       await session.markRead([refOf(m)]); // blue ticks on the sender's side
       // Hold the typing indicator visibly. WhatsApp expires `composing` after a

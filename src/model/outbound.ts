@@ -48,6 +48,6 @@ export function refOf(m: InboundMessage): MessageRef {
     id: m.id,
     chatId: m.chatId,
     fromMe: m.fromMe,
-    ...(m.isGroup && { participant: m.from }),
+    ...(m.isGroup && { participant: m.sender.id }),
   };
 }

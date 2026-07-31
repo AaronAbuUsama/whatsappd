@@ -4,6 +4,7 @@ import type {
   HistoryChat,
   HistoryContact,
   InboundMessage,
+  WhatsAppAddress,
 } from "../model/index.ts";
 import { noDownloader, type DownloadThunk } from "./download.ts";
 import { toInbound } from "./inbound.ts";
@@ -87,6 +88,7 @@ function toHistoryContact(contact: HistoryPayload["contacts"][number]): HistoryC
 
 export function toConversationSyncBatch(
   payload: ConversationSyncPayload,
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): ConversationSyncBatch {
   const chats = payload.chats.flatMap((chat) => {
@@ -97,7 +99,7 @@ export function toConversationSyncBatch(
     const mapped = toHistoryContact(contact);
     return mapped ? [mapped] : [];
   });
-  const messages = toConversationSyncMessages(payload.messages, makeDownload);
+  const messages = toConversationSyncMessages(payload.messages, self, makeDownload);
   const source = (() => {
     switch (payload.syncType) {
       case proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP:
@@ -133,10 +135,11 @@ export function toConversationSyncBatch(
 
 function toConversationSyncMessages(
   messages: readonly WAMessage[],
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): InboundMessage[] {
   return messages.flatMap((raw) => {
-    const msg = toInbound(raw, false, makeDownload);
+    const msg = toInbound(raw, false, self, makeDownload);
     return msg ? [msg] : [];
   });
 }

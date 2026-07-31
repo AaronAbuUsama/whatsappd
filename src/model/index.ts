@@ -4,7 +4,7 @@ export { isTerminal, isOnline } from "./status.ts";
 export type {
   InboundMessage,
   MessageContext,
-  Addressing,
+  WhatsAppAddress,
   MessageFlags,
   MediaMeta,
   MediaHandle,

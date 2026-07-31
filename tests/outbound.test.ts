@@ -3,6 +3,7 @@ import { generateWAMessage, type AnyMessageContent } from "baileys";
 import { toContent, refToKey, keyToRef, toOptions } from "../src/baileys/outbound.ts";
 import { toInbound } from "../src/baileys/inbound.ts";
 import { refOf, type MessageRef, type Outbound } from "../src/model/outbound.ts";
+import { SELF } from "./fixtures.ts";
 
 const REF: MessageRef = { id: "MSG1", chatId: "111@s.whatsapp.net", fromMe: false };
 
@@ -111,6 +112,7 @@ test("refOf lifts an inbound message into a ref", () => {
       messageTimestamp: 1,
     } as never,
     true,
+    SELF,
   )!;
   expect(refOf(inbound)).toEqual({ id: "ID9", chatId: "c@s.whatsapp.net", fromMe: false });
 });
@@ -125,7 +127,7 @@ async function roundTrip(out: Outbound) {
       throw new Error("no media upload in round-trip");
     },
   });
-  return toInbound(raw, true)!;
+  return toInbound(raw, true, SELF)!;
 }
 
 test("round-trip: text survives Outbound → Baileys → Inbound", async () => {

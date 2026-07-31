@@ -8,6 +8,7 @@
 import makeWASocket, {
   Browsers,
   fetchLatestBaileysVersion,
+  jidNormalizedUser,
   makeCacheableSignalKeyStore,
   proto,
   type BaileysEventMap,
@@ -24,6 +25,7 @@ import type {
   ConversationSyncBatch,
   InboundMessage,
   WaIdentity,
+  WhatsAppAddress,
 } from "../model/index.ts";
 import type { Update } from "../model/update.ts";
 import type { MessageRef, Outbound, SendOptions } from "../model/outbound.ts";
@@ -101,26 +103,57 @@ type MessagesUpsertPayload = BaileysEventMap["messages.upsert"];
 type MessagingHistoryPayload = BaileysEventMap["messaging-history.set"];
 type MessagingHistoryStatusPayload = BaileysEventMap["messaging-history.status"];
 
+/**
+ * The linked account's own address, in the forms WhatsApp knows it by.
+ *
+ * @remarks
+ * `sock.user` is the registered credential identity, so it exists from the
+ * moment credentials do — strictly before any message event can arrive. The
+ * device suffix (`:12`) is stripped because participants are never named with
+ * one, and the LID form is carried as the equivalent native address so a LID
+ * chat can name the same account in its own scheme.
+ *
+ * An account with no id is unreachable in practice; the empty address is left
+ * deliberately empty rather than falling back to the chat, since naming the
+ * peer as the author is exactly the corruption ADR-0001 forbids.
+ *
+ * @param sock - The socket, for its registered `user`.
+ * @param logger - Used to report the unreachable identity-less case.
+ * @returns The account's address in `pn` form, with its `lid` form as `alt`.
+ */
+function selfAddress(sock: Pick<WASocket, "user">, logger: Logger): WhatsAppAddress {
+  const u = sock.user;
+  if (!u?.id) {
+    logger.error("message conversion before the account identity exists — sender left empty");
+    return { id: "", mode: "pn" };
+  }
+  const lid = u.lid ? jidNormalizedUser(u.lid) : undefined;
+  return { id: jidNormalizedUser(u.id), mode: "pn", ...(lid && { alt: lid }) };
+}
+
 export function toMessagesUpsertEvents(
   payload: MessagesUpsertPayload,
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): RawEvent[] {
   if (payload.type !== "notify") {
     const sync = toConversationSyncBatch(
       { chats: [], contacts: [], messages: payload.messages },
+      self,
       makeDownload,
     );
     return sync.messages.length > 0 ? [{ t: "conversation_sync", sync }] : [];
   }
 
   return payload.messages.flatMap((raw) => {
-    const msg = toInbound(raw, true, makeDownload);
+    const msg = toInbound(raw, true, self, makeDownload);
     return msg ? [{ t: "message", msg } satisfies RawEvent] : [];
   });
 }
 
 export function toMessagingHistoryEvents(
   payload: MessagingHistoryPayload,
+  self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
 ): RawEvent[] {
   const events: RawEvent[] = [];
@@ -128,7 +161,7 @@ export function toMessagingHistoryEvents(
   if (!complete && typeof payload.progress === "number" && Number.isFinite(payload.progress)) {
     events.push({ t: "conversation_sync_progress", progress: payload.progress });
   }
-  const sync = toConversationSyncBatch(payload, makeDownload);
+  const sync = toConversationSyncBatch(payload, self, makeDownload);
   if (sync.chats.length > 0 || sync.contacts.length > 0 || sync.messages.length > 0) {
     events.push({ t: "conversation_sync", sync });
   }
@@ -363,14 +396,16 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
 
   sock.ev.on("messages.upsert", (payload) => {
     rememberRecent(recent, payload.messages);
-    for (const event of toMessagesUpsertEvents(payload, makeDownload)) queue.push(event);
+    for (const event of toMessagesUpsertEvents(payload, selfAddress(sock, logger), makeDownload)) {
+      queue.push(event);
+    }
   });
 
   // Update events: receipts, reactions, edits, revokes. Each mapper returns
   // undefined for shapes we don't model — we only enqueue hits.
   sock.ev.on("messages.update", (updates) => {
     for (const u of updates) {
-      const update = mapMessageUpdate(u, makeDownload);
+      const update = mapMessageUpdate(u, selfAddress(sock, logger), makeDownload);
       if (update) queue.push({ t: "update", update });
     }
   });
@@ -411,7 +446,13 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
   sock.ev.on("messaging-history.set", (payload) => {
     logger.info(historySetTelemetry(payload), "messaging history set");
     rememberRecent(recent, payload.messages);
-    for (const event of toMessagingHistoryEvents(payload, makeDownload)) queue.push(event);
+    for (const event of toMessagingHistoryEvents(
+      payload,
+      selfAddress(sock, logger),
+      makeDownload,
+    )) {
+      queue.push(event);
+    }
   });
 
   sock.ev.on("messaging-history.status", (payload) => {

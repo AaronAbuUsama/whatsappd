@@ -19,13 +19,19 @@ export interface MessageContext {
 }
 
 /**
- * How the sender identity was resolved. `from` on the message is the resolved
- * id; `alt` carries the alternate form so a host can map between the two
- * identity schemes (LID and phone number).
+ * An actual WhatsApp address (ADR-0001).
+ *
+ * @remarks
+ * `id` is the native address of the party WhatsApp named, and `mode` says which
+ * identity scheme it belongs to; `alt` carries the known equivalent native form
+ * (LID ↔ phone-number JID) when WhatsApp supplies one, so a host can join the
+ * two schemes. This is an address, not a person: no identity is merged,
+ * invented, or resolved beyond the forms WhatsApp itself delivered.
  */
-export interface Addressing {
+export interface WhatsAppAddress {
+  readonly id: string;
   readonly mode: "lid" | "pn";
-  /** The alternate identity, when available. */
+  /** The known equivalent native form, when available. */
   readonly alt?: string;
 }
 
@@ -39,8 +45,11 @@ export interface MessageFlags {
 interface Base {
   readonly id: string;
   readonly chatId: string;
-  /** resolved sender identity (see `addressing` for the alternate form) */
-  readonly from: string;
+  /**
+   * The actual author of the message. Own-sent messages name the linked
+   * account, never the peer or the group chat.
+   */
+  readonly sender: WhatsAppAddress;
   /** sender's WhatsApp display name (proto pushName), when present. */
   readonly pushName?: string;
   readonly fromMe: boolean;
@@ -49,7 +58,6 @@ interface Base {
   readonly live: boolean;
   readonly isGroup: boolean;
   readonly context?: MessageContext;
-  readonly addressing?: Addressing;
   readonly flags?: MessageFlags;
 }
 

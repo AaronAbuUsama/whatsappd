@@ -5,7 +5,7 @@ import { toMessagesUpsertEvents } from "../src/baileys/socket.ts";
 import { createSession } from "../src/session.ts";
 import { pairingAuth, qrAuth } from "../src/ports.ts";
 import { memoryStore } from "../src/stores/memory.ts";
-import { baseMessage } from "./fixtures.ts";
+import { baseMessage, SELF } from "./fixtures.ts";
 import { textMessage } from "../src/testing.ts";
 
 // createSession is inert until start() — it opens no socket — so the public
@@ -693,23 +693,26 @@ test("live fromMe messages stay visible to consumers and can be replied to", asy
   let releaseMessage!: () => void;
   const messageHandled = new Promise<void>((resolve) => (releaseMessage = resolve));
   const sent: unknown[] = [];
-  const liveEvents = toMessagesUpsertEvents({
-    type: "notify",
-    messages: [
-      baseMessage(
-        {
-          remoteJid: "15551234567@s.whatsapp.net",
-          fromMe: true,
-          id: "SELF1",
-        },
-        { conversation: "ping" },
-      ),
-    ],
-  } as BaileysEventMap["messages.upsert"]);
+  const liveEvents = toMessagesUpsertEvents(
+    {
+      type: "notify",
+      messages: [
+        baseMessage(
+          {
+            remoteJid: "15551234567@s.whatsapp.net",
+            fromMe: true,
+            id: "SELF1",
+          },
+          { conversation: "ping" },
+        ),
+      ],
+    } as BaileysEventMap["messages.upsert"],
+    SELF,
+  );
   expect(liveEvents.length).toBe(1);
   expect(liveEvents[0]).toMatchObject({
     t: "message",
-    msg: { fromMe: true, live: true, text: "ping" },
+    msg: { fromMe: true, live: true, text: "ping", sender: { id: SELF.id } },
   });
   const fakeConn = {
     events: (async function* () {

@@ -24,7 +24,7 @@ export type {
   WaIdentity,
   InboundMessage,
   MessageContext,
-  Addressing,
+  WhatsAppAddress,
   MessageFlags,
   MediaMeta,
   MediaHandle,

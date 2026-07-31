@@ -7,7 +7,7 @@ import {
   toMessagingHistoryStatusEvents,
   toMessagesUpsertEvents,
 } from "../src/baileys/socket.ts";
-import { baseMessage } from "./fixtures.ts";
+import { baseMessage, SELF } from "./fixtures.ts";
 
 type HistoryPayload = BaileysEventMap["messaging-history.set"];
 type HistoryStatusPayload = BaileysEventMap["messaging-history.status"];
@@ -74,7 +74,7 @@ test("messaging-history.set emits one conversation sync batch and no inbound mes
     progress: 50,
   } as HistoryPayload;
 
-  const events = toMessagingHistoryEvents(payload);
+  const events = toMessagingHistoryEvents(payload, SELF);
 
   expect(events.some((event) => event.t === "message")).toBe(false);
   expect(events.filter((event) => event.t === "conversation_sync").length).toBe(1);
@@ -90,37 +90,46 @@ test("messaging-history.set emits one conversation sync batch and no inbound mes
 });
 
 test("messaging-history.set progress without data remains status-only", () => {
-  const events = toMessagingHistoryEvents({
-    chats: [],
-    contacts: [],
-    messages: [],
-    isLatest: false,
-    progress: 42,
-  } as HistoryPayload);
+  const events = toMessagingHistoryEvents(
+    {
+      chats: [],
+      contacts: [],
+      messages: [],
+      isLatest: false,
+      progress: 42,
+    } as HistoryPayload,
+    SELF,
+  );
 
   expect(events).toEqual([{ t: "conversation_sync_progress", progress: 42 }]);
 });
 
 test("messaging-history.set completion remains a status signal without a data batch", () => {
-  const events = toMessagingHistoryEvents({
-    chats: [],
-    contacts: [],
-    messages: [],
-    isLatest: true,
-    progress: 100,
-  } as HistoryPayload);
+  const events = toMessagingHistoryEvents(
+    {
+      chats: [],
+      contacts: [],
+      messages: [],
+      isLatest: true,
+      progress: 100,
+    } as HistoryPayload,
+    SELF,
+  );
 
   expect(events).toEqual([{ t: "conversation_sync_complete" }]);
 });
 
 test("messaging-history.set isLatest alone does not mark sync complete", () => {
-  const events = toMessagingHistoryEvents({
-    chats: [],
-    contacts: [],
-    messages: [],
-    isLatest: true,
-    progress: null,
-  } as HistoryPayload);
+  const events = toMessagingHistoryEvents(
+    {
+      chats: [],
+      contacts: [],
+      messages: [],
+      isLatest: true,
+      progress: null,
+    } as HistoryPayload,
+    SELF,
+  );
 
   expect(events).toEqual([]);
 });
@@ -146,19 +155,22 @@ test("INITIAL_BOOTSTRAP messaging-history.status does not complete the recent sy
 });
 
 test("messages.upsert notify still emits live inbound messages", () => {
-  const events = toMessagesUpsertEvents({
-    type: "notify",
-    messages: [
-      baseMessage(
-        {
-          remoteJid: "1555@s.whatsapp.net",
-          fromMe: false,
-          id: "LIVE1",
-        },
-        { conversation: "live message" },
-      ),
-    ],
-  } as MessagesUpsert);
+  const events = toMessagesUpsertEvents(
+    {
+      type: "notify",
+      messages: [
+        baseMessage(
+          {
+            remoteJid: "1555@s.whatsapp.net",
+            fromMe: false,
+            id: "LIVE1",
+          },
+          { conversation: "live message" },
+        ),
+      ],
+    } as MessagesUpsert,
+    SELF,
+  );
 
   expect(events.length).toBe(1);
   expect(events[0]?.t).toBe("message");
@@ -171,19 +183,22 @@ test("messages.upsert notify still emits live inbound messages", () => {
 });
 
 test("messages.upsert notify preserves live fromMe messages", () => {
-  const events = toMessagesUpsertEvents({
-    type: "notify",
-    messages: [
-      baseMessage(
-        {
-          remoteJid: "1555@s.whatsapp.net",
-          fromMe: true,
-          id: "SELF1",
-        },
-        { conversation: "ping" },
-      ),
-    ],
-  } as MessagesUpsert);
+  const events = toMessagesUpsertEvents(
+    {
+      type: "notify",
+      messages: [
+        baseMessage(
+          {
+            remoteJid: "1555@s.whatsapp.net",
+            fromMe: true,
+            id: "SELF1",
+          },
+          { conversation: "ping" },
+        ),
+      ],
+    } as MessagesUpsert,
+    SELF,
+  );
 
   expect(events.length).toBe(1);
   expect(events[0]).toMatchObject({
@@ -200,20 +215,23 @@ test("messages.upsert notify preserves live fromMe messages", () => {
 });
 
 test("messages.upsert append emits historical messages through conversation sync only", () => {
-  const events = toMessagesUpsertEvents({
-    type: "append",
-    messages: [
-      baseMessage(
-        {
-          remoteJid: "123-456@g.us",
-          participant: "1555@s.whatsapp.net",
-          fromMe: true,
-          id: "APPEND1",
-        },
-        { conversation: "older append message" },
-      ),
-    ],
-  } as MessagesUpsert);
+  const events = toMessagesUpsertEvents(
+    {
+      type: "append",
+      messages: [
+        baseMessage(
+          {
+            remoteJid: "123-456@g.us",
+            participant: "1555@s.whatsapp.net",
+            fromMe: true,
+            id: "APPEND1",
+          },
+          { conversation: "older append message" },
+        ),
+      ],
+    } as MessagesUpsert,
+    SELF,
+  );
 
   expect(events.some((event) => event.t === "message")).toBe(false);
   expect(events.length).toBe(1);
@@ -225,7 +243,7 @@ test("messages.upsert append emits historical messages through conversation sync
   expect(events[0].sync.messages[0]).toMatchObject({
     id: "APPEND1",
     chatId: "123-456@g.us",
-    from: "1555@s.whatsapp.net",
+    sender: { id: SELF.id }, // fromMe: the appended history names the linked account
     fromMe: true,
     live: false,
     isGroup: true,
