@@ -16,6 +16,15 @@ saved page returns no cursor, which says that nothing older is _stored_ and
 deliberately makes no claim that WhatsApp history is complete. Paging reads the
 backend alone and issues no WhatsApp history command.
 
+A conversation is fed by `messages()` and by the message upserts on `watch()`,
+and the two reconcile on `(chatId, messageId)` rather than by appending. A
+backdated message — a clock-skewed send, and routinely the backfill of #25 —
+arrives as a patch _and_ appears in the older page that now contains it;
+applying both by identity leaves one message, and nothing is ever skipped
+because the cursor is a position in the ordering rather than an offset. Each
+page carries the `revision` it was read at, so the two surfaces can be ordered
+as well as merged.
+
 Contacts and groups now project instead of only being recorded: the runtime
 subscribes `contact` and `group`, a conversation sync's contacts and its group
 chats' subjects and rosters become mirror records, and a contact merges rather
@@ -30,3 +39,12 @@ the `online` and `typing` statuses they came from remain unstorable. The
 instants advance monotonically, so a replayed or late older observation takes no
 revision. Connection Freshness is unchanged — a live connection frame still
 expires and is never hydrated as startup truth.
+
+`unavailable` is deliberately the one presence kind that stamps nothing: it says
+the address is gone rather than present, and the mapping stamps its `at` with
+receipt time, so recording it would date a week-old last-seen to now and the
+monotonic advance would make that permanent. The final disconnection is stamped
+by teardown, because stopping unsubscribes before the session reaches
+`disconnected` and the handler would otherwise never see it. A contact is
+matched through any of its `nativeIds`, so a LID-keyed update naming its PN
+joins the existing record instead of opening a second one.

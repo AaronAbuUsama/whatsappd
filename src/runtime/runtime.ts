@@ -171,17 +171,15 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   };
 
   /**
-   * Persist one observation, then publish what it changed.
+   * Persist one observation under a named claim, then publish what it changed.
    *
    * @remarks
-   * A replay changes nothing, takes no revision, and therefore produces no
-   * client update.
+   * The claim is a parameter rather than a read of `lease`, because teardown
+   * has to write its final observation *after* clearing that field — see
+   * {@link release}. Every other caller passes the live one through
+   * {@link accept}.
    */
-  const accept = async (event: WhatsAppDurableEvent): Promise<void> => {
-    const claim = lease;
-    // Writing without a claim is exactly what the lease exists to prevent, so
-    // an event that outlives its claim fails rather than reaching the mirror.
-    if (!claim) throw new AccountNotHeldError(accountId, "unclaimed");
+  const acceptUnder = async (claim: AccountLease, event: WhatsAppDurableEvent): Promise<void> => {
     // The cached claim is only evidence until it expires: a loop that stalls
     // past the TTL can reach here before the heartbeat notices, and by then
     // another worker may hold the account.
@@ -194,6 +192,21 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     );
     if (accepted.revision === accepted.fromRevision) return;
     publish({ type: "patch", patch: accepted.patch });
+  };
+
+  /**
+   * Persist one observation, then publish what it changed.
+   *
+   * @remarks
+   * A replay changes nothing, takes no revision, and therefore produces no
+   * client update.
+   */
+  const accept = (event: WhatsAppDurableEvent): Promise<void> => {
+    const claim = lease;
+    // Writing without a claim is exactly what the lease exists to prevent, so
+    // an event that outlives its claim fails rather than reaching the mirror.
+    if (!claim) throw new AccountNotHeldError(accountId, "unclaimed");
+    return acceptUnder(claim, event);
   };
 
   /**
@@ -236,12 +249,23 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     presence: async (presence) => {
       const observedAt = Date.now();
       publish({ type: "presence", presence, expiresAt: observedAt + freshnessMs });
-      // Every presence kind — typing, available, and the `unavailable` that
-      // ends a session — is evidence the address was there at that instant, so
-      // one rule covers them all and none of them stores what it was doing. In
-      // a group WhatsApp names the participant and in a 1:1 the chat is the
-      // peer; the address that was present is recorded either way, never the
-      // chat a group's typing arrived on.
+      // An ephemeral signal must not be able to take the account down. Unlike a
+      // message, a dropped last-seen loses nothing that cannot be observed
+      // again, so a frame arriving without a claim is let go exactly as the
+      // connection handler lets one go.
+      if (!lease) return;
+      // `unavailable` is the one kind that is not evidence of presence: it says
+      // the address is gone, and `src/baileys/presence.ts` stamps `at` with
+      // *receipt* time rather than WhatsApp's own last-seen. Recording it would
+      // therefore date a peer offline for a week to right now — and `advance()`
+      // would make that permanent, destroying the very history this exists to
+      // keep (ADR-0020).
+      if (presence.kind === "unavailable") return;
+      // What remains — typing, recording, available, idle — all mean the
+      // address was there at that instant, and none of them stores what it was
+      // doing. In a group WhatsApp names the participant and in a 1:1 the chat
+      // is the peer; the address that was present is recorded either way, never
+      // the chat a group's typing arrived on.
       await accept({
         type: "last_seen",
         contactId: presence.participant ?? presence.chatId,
@@ -277,6 +301,29 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
 
     if (timer) clearInterval(timer);
     off?.();
+    // The final disconnection is stamped here rather than from the connection
+    // handler, and it has to be: teardown unsubscribes and gives the claim back
+    // before the session reaches `disconnected` (`src/machine.ts`), so that
+    // handler can never see the instant this runtime stopped consuming the
+    // account and `lastDisconnectedAt` would stay stale through every shutdown.
+    // A crash is a disconnection too, so this is not conditional on stopping
+    // cleanly — a field that only recorded deliberate stops would miss the
+    // commonest way an account goes offline. `off` is the evidence there was a
+    // session at all: a startup that failed before subscribing never connected,
+    // so it has no disconnection to record.
+    let unstamped: unknown;
+    if (off && claim) {
+      // Held rather than thrown, and folded in only below: a store that cannot
+      // take this last write must not overwrite the failure that killed the
+      // session, which is the one the caller needs to see.
+      await acceptUnder(claim, {
+        type: "account_connection",
+        kind: "disconnected",
+        at: Date.now(),
+      }).catch((error: unknown) => {
+        unstamped = error;
+      });
+    }
     try {
       await open?.stop?.();
       // Nothing awaited the supervisor while the session ran, so its terminal
@@ -285,6 +332,9 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     } catch (error) {
       failure ??= { error };
     } finally {
+      // Reported only when nothing worse happened: the session's own death
+      // outranks a teardown that could not write its last timestamp.
+      if (unstamped !== undefined) failure ??= { error: unstamped };
       // A claim outliving a failed close would lock the account out until its
       // TTL expired, so the release does not depend on the close working.
       if (claim) await backend.leases.release(claim);

@@ -102,7 +102,15 @@ export interface ContactRecord {
   readonly username?: string;
   /** A URL, `null` when the contact has none, absent when never reported. */
   readonly imgUrl?: string | null;
-  readonly status?: string;
+  /**
+   * The contact's own about/status text, when they published one.
+   *
+   * @remarks
+   * Named `about` rather than `status` deliberately: `Status` is the connection
+   * phase throughout this file, and a durable field called `status` on a mirror
+   * record reads as exactly the thing ADR-0020 forbids storing.
+   */
+  readonly about?: string;
   /**
    * When this address was last observed present, as a millisecond epoch
    * timestamp; absent until one presence observation names it.
@@ -208,6 +216,16 @@ export interface StoredMessagePageOptions {
 export interface StoredMessagePage {
   readonly accountId: string;
   readonly chatId: string;
+  /**
+   * The mirror revision this page was read at.
+   *
+   * @remarks
+   * The handle that orders this page against the patch stream: every change up
+   * to and including this revision is already reflected here, so a consumer
+   * knows which patches its open conversation has and has not absorbed. Same
+   * number, same meaning, as {@link WhatsAppSnapshot.revision}.
+   */
+  readonly revision: number;
   readonly messages: readonly MessageRecord[];
   /**
    * Pass as `before` to read the next older page. Absent when nothing older is
@@ -534,6 +552,25 @@ export interface WhatsAppClient {
    * A snapshot carries no message window, so this is how a conversation is
    * filled (ADR-0010). It reads storage only — see
    * {@link WhatsAppDataStore.messages}.
+   *
+   * **Both surfaces are applied by record identity.** A conversation is fed by
+   * this method *and* by the message upserts on {@link WhatsAppClient.watch},
+   * and the two are reconciled on `(chatId, messageId)` — the identity of
+   * {@link MessageRecord} — never by appending. That is what makes "no
+   * duplicate, no skip" hold rather than depending on arrival order:
+   *
+   * - A message newer than an open cursor can only arrive as a patch. Paging
+   *   older can never reach it, so it cannot be delivered twice.
+   * - A message that sorts *below* an open cursor — a backdated send, a clock
+   *   skew, the backfill of #25 — arrives as a patch and is also returned by
+   *   the older page that now contains it. Both describe one record at one
+   *   identity, so an upsert leaves one message; an append would leave two.
+   * - Nothing is ever skipped, because the cursor is a position in the ordering
+   *   rather than an offset: a record inserted below it still falls inside the
+   *   next page.
+   *
+   * {@link StoredMessagePage.revision} says which patches a page already
+   * reflects, so the two surfaces can be ordered as well as merged.
    */
   messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
 }

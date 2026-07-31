@@ -41,6 +41,16 @@ and `AccountRecord.lastConnectedAt` / `lastDisconnectedAt` are the projections;
 each advances monotonically, so a replayed or late-arriving older observation
 changes no record and takes no revision.
 
+`unavailable` is the one presence kind that produces no instant, and excluding
+it is the difference between keeping history and destroying it. It does not say
+"present now"; it says the address is gone. WhatsApp does not send its own
+last-seen with it either — `src/baileys/presence.ts` stamps `at` with _receipt_
+time — and Baileys reports `unavailable` for a peer that has been offline for
+days, notably right after a presence subscription. Recording it would therefore
+date a week-old last-seen to this instant, and the monotonic advance would make
+that permanent. Every other kind — typing, recording, available, idle — is
+evidence the address was there.
+
 Only the two ends of the connection lifecycle produce an instant. `connecting`,
 `pairing` and `authenticated` are transitions in which the account is neither
 reachable nor known to be gone, and stamping either timestamp from one would
@@ -64,6 +74,14 @@ commonest disconnection there is unrecorded.
   the filter that prevents it is exactly the runtime filter ADR-0014 refused in
   favour of making the mistake untypeable.
 
+The final disconnection is stamped by teardown rather than by the connection
+handler. Stopping unsubscribes and gives the claim back before the session
+reaches `disconnected`, so that handler can never observe the instant the
+runtime actually stopped consuming the account. A crash is a disconnection too,
+so the stamp is not conditional on stopping cleanly — and it must not mask the
+failure that killed the session, so a store that cannot take this last write is
+reported only when nothing worse happened.
+
 ## Consequences
 
 - `WhatsAppDurableEvent` is no longer a subset of `WhatsAppEvent`. It is the
@@ -75,6 +93,10 @@ commonest disconnection there is unrecorded.
 - Presence traffic now takes revisions. A chat whose peer is repeatedly present
   advances the account revision without any message changing; clients apply
   those patches as contact upserts.
+- A contact is matched through any of its `nativeIds`, not through whichever
+  native form an observation happened to be keyed by. Without that a LID-keyed
+  update naming its PN would open a second record and strand the name on one
+  snapshot entry and the last-seen on another.
 - The slice that models a contact's live availability owns the reverse
   question — whether a client should ever _derive_ presence from `lastSeenAt` —
   and the answer this decision assumes is no.

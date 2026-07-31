@@ -41,6 +41,8 @@ interface AccountMirror {
   account: AccountRecord;
   chats: Map<string, ChatRecord>;
   contacts: Map<string, ContactRecord>;
+  /** Every known native id → the contact record that owns it (PN ↔ LID). */
+  contactKeys: Map<string, string>;
   groups: Map<string, GroupRecord>;
   messages: Map<string, MessageRecord>;
   batches: AcceptedWhatsAppBatch[];
@@ -94,25 +96,42 @@ const advance = (current: number | undefined, at: number): number => Math.max(cu
  * established. `nativeIds` unions rather than replaces for the same reason —
  * WhatsApp delivers a contact's PN and LID forms in different events, and a
  * host joining the two schemes needs both to survive.
+ *
+ * The record is found through *any* id the observation claims, not through
+ * whichever form happens to be primary this time. `ContactUpdate.nativeIds`
+ * exists to be matched on, and without doing so a LID-keyed update naming its
+ * PN would open a second record — leaving the name on one snapshot entry and
+ * the last-seen on another.
  */
 function projectContact(
   pending: AccountMirror,
   upserts: MirrorRecord[],
   contact: ContactRecord,
 ): void {
-  const existing = pending.contacts.get(contact.contactId);
+  const known = contact.nativeIds
+    .map((id) => pending.contactKeys.get(id))
+    .find((id) => id !== undefined);
+  const contactId = known ?? contact.contactId;
+  const existing = pending.contacts.get(contactId);
   const merged: ContactRecord = existing
     ? {
         ...existing,
         ...contact,
+        // The record keeps the identity it was first stored under: a newly
+        // delivered form joins it rather than renaming it out from under every
+        // consumer holding the old key.
+        contactId,
         nativeIds: [...new Set([...existing.nativeIds, ...contact.nativeIds])],
         ...(contact.lastSeenAt !== undefined && {
           lastSeenAt: advance(existing.lastSeenAt, contact.lastSeenAt),
         }),
       }
     : contact;
+  // Indexed before the no-change bail, so a form this observation was the first
+  // to name still resolves next time even when it moved nothing.
+  for (const id of merged.nativeIds) pending.contactKeys.set(id, contactId);
   if (existing && isDeepStrictEqual(existing, merged)) return;
-  pending.contacts.set(contact.contactId, merged);
+  pending.contacts.set(contactId, merged);
   upserts.push({ type: "contact", contact: merged });
 }
 
@@ -159,19 +178,18 @@ function projectSyncedChat(
   accountId: string,
   chat: HistoryChat,
 ): void {
-  const subject = chat.subject !== undefined && { subject: chat.subject };
   projectChat(pending, upserts, {
     accountId,
     chatId: chat.id,
     isGroup: chat.isGroup,
-    ...subject,
+    ...(chat.subject !== undefined && { subject: chat.subject }),
     lastMessageAt: chat.lastMessageAt ?? 0,
   });
   if (!chat.isGroup) return;
   projectGroup(pending, upserts, {
     accountId,
     groupId: chat.id,
-    ...subject,
+    ...(chat.subject !== undefined && { subject: chat.subject }),
     participants: chat.participants ?? pending.groups.get(chat.id)?.participants ?? [],
   });
 }
@@ -295,7 +313,7 @@ function projectEvent(
         ...(contact.verifiedName !== undefined && { verifiedName: contact.verifiedName }),
         ...(contact.username !== undefined && { username: contact.username }),
         ...(contact.imgUrl !== undefined && { imgUrl: contact.imgUrl }),
-        ...(contact.status !== undefined && { status: contact.status }),
+        ...(contact.status !== undefined && { about: contact.status }),
       });
     }
     case "group": {
@@ -339,6 +357,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       account: { accountId },
       chats: new Map(),
       contacts: new Map(),
+      contactKeys: new Map(),
       groups: new Map(),
       messages: new Map(),
       batches: [],
@@ -363,6 +382,7 @@ export function memoryDataStore(): WhatsAppDataStore {
         ...mirror,
         chats: new Map(mirror.chats),
         contacts: new Map(mirror.contacts),
+        contactKeys: new Map(mirror.contactKeys),
         groups: new Map(mirror.groups),
         messages: new Map(mirror.messages),
       };
@@ -384,6 +404,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       mirror.account = pending.account;
       mirror.chats = pending.chats;
       mirror.contacts = pending.contacts;
+      mirror.contactKeys = pending.contactKeys;
       mirror.groups = pending.groups;
       mirror.messages = pending.messages;
       mirror.revision = revision;
@@ -416,10 +437,11 @@ export function memoryDataStore(): WhatsAppDataStore {
       if (!Number.isInteger(limit) || limit < 1)
         throw new RangeError(`limit must be a positive integer, got ${limit}`);
       const before = options?.before;
+      const mirror = mirrorOf(accountId);
       // ponytail: no ordering index, so a page sorts the chat's whole history.
       // Fine while the mirror is a Map in one process; the persistent backend
       // (#38) pages on a `(chat_id, timestamp desc, message_id desc)` index.
-      const ordered = [...mirrorOf(accountId).messages.values()]
+      const ordered = [...mirror.messages.values()]
         .filter((message) => message.chatId === chatId)
         .sort(newestFirst);
       // Strictly older than the cursor in that same order, so a message sharing
@@ -433,6 +455,9 @@ export function memoryDataStore(): WhatsAppDataStore {
       return {
         accountId,
         chatId,
+        // Read from the same mirror state as the rows above, so a consumer can
+        // tell which patches this page already reflects.
+        revision: mirror.revision,
         messages,
         ...(last && { nextBefore: { timestamp: last.timestamp, messageId: last.messageId } }),
       };

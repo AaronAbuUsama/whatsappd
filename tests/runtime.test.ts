@@ -249,13 +249,22 @@ test("a fresh client reconstructs the same message state and revision", async ()
   await runtime.stop();
 
   // A replacement worker for the same account: same backend, new runtime, new
-  // client — the mirror and its revision come back unchanged.
+  // client — the conversation comes back unchanged.
   const replacement = lane("personal", { backend });
   await replacement.runtime.start();
   const seen = watching(replacement.client);
   await tick();
 
-  expect(snapshotsOf(seen.frames)).toEqual([stored]);
+  const [restored] = snapshotsOf(seen.frames);
+  assert.ok(restored);
+  expect({ ...restored, account: stored.account, revision: stored.revision }).toEqual(stored);
+  expect((await replacement.runtime.messages(PERSON)).messages).toEqual(
+    (await runtime.messages(PERSON)).messages,
+  );
+  // The only thing the stop moved: the account now knows when it last went
+  // offline, which is history rather than a status (ADR-0020).
+  expect(typeof restored.account.lastDisconnectedAt).toBe("number");
+  expect(restored.revision).toBe(stored.revision + 1);
 
   await seen.close();
   await replacement.runtime.stop();
@@ -330,12 +339,16 @@ test("a backend failure publishes nothing and stops processing with the original
   // Fails once, then works: a store that failed for ever could not tell "stopped
   // processing" apart from "processed and failed again".
   let accepts = 0;
+  // Counted separately from the teardown's own disconnect stamp, which is not
+  // a WhatsApp change and is the only other thing that writes here.
+  let messageAccepts = 0;
   const backend: WhatsAppBackend = {
     ...memoryBackend(),
     data: {
       ...data,
       accept: (accountId, events, fencingToken) => {
         accepts += 1;
+        if (events.some((observation) => observation.event.type === "message")) messageAccepts += 1;
         return accepts === 1
           ? Promise.reject(outage)
           : data.accept(accountId, events, fencingToken);
@@ -357,9 +370,16 @@ test("a backend failure publishes nothing and stops processing with the original
   // reaches the store even though the store would now accept it.
   await assert.rejects(driver.emit({ type: "message", message: hello("m2") }), isOutage);
   await tick();
-  expect(accepts).toBe(1);
+  expect(messageAccepts).toBe(1);
 
-  expect(patchesOf(seen.frames)).toEqual([]);
+  // The failed change reached no client: nothing a watcher saw carries a
+  // message, and the mirror still holds none.
+  expect(
+    patchesOf(seen.frames).flatMap((patch) =>
+      patch.upserts.filter((upsert) => upsert.type === "message"),
+    ),
+  ).toEqual([]);
+  expect((await runtime.messages(PERSON)).messages).toEqual([]);
   // A watcher learns the runtime died, and learns it from the original failure
   // rather than waiting for ever on an update that cannot come.
   const last = seen.frames.at(-1);
@@ -1257,6 +1277,8 @@ test("opening a chat reads its first saved page, and older pages follow a stable
   const first = await client.messages(PERSON, { limit: 3 });
   expect(first.accountId).toBe("personal");
   expect(first.chatId).toBe(PERSON);
+  // The revision this page reflects, so it can be ordered against patches.
+  expect(first.revision).toBe((await runtime.snapshot()).revision);
   expect(first.messages.map((message) => message.messageId)).toEqual(["m7", "m6", "m5"]);
   // The cursor is the page's oldest position, by timestamp *and* identity.
   expect(first.nextBefore).toEqual({ timestamp: AT + 4_000, messageId: "m5" });
@@ -1273,7 +1295,7 @@ test("opening a chat reads its first saved page, and older pages follow a stable
   // The oldest saved page says only that nothing older is *stored*. Nothing
   // here claims WhatsApp history is complete, and nothing asked WhatsApp.
   expect(last.nextBefore).toBe(undefined);
-  expect(Object.keys(last).sort()).toEqual(["accountId", "chatId", "messages"]);
+  expect(Object.keys(last).sort()).toEqual(["accountId", "chatId", "messages", "revision"]);
 
   // Every message came back exactly once, and only this chat's.
   expect(await pagedIds(client, PERSON, 2)).toEqual(["m7", "m6", "m5", "m4", "m3", "m2", "m1"]);
@@ -1366,6 +1388,76 @@ test("paging interleaved with a live update neither duplicates nor skips a messa
   await runtime.stop();
 });
 
+test("a backdated message below an open cursor reconciles by identity on both surfaces", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: conversation(5),
+    },
+  });
+  const seen = watching(client);
+  await tick();
+
+  const first = await client.messages(PERSON, { limit: 2 });
+  expect(first.messages.map((message) => message.messageId)).toEqual(["m5", "m4"]);
+
+  // The hard case, and the one #25's backfill makes routine: a message that
+  // sorts *below* the cursor the reader is already holding - here between m3
+  // and m4. A clock-skewed send does the same thing.
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "late", chatId: PERSON, text: "late", timestamp: AT + 2_500 }),
+  });
+  await tick();
+
+  const rest = await pagedIds(client, PERSON, 2, first.nextBefore);
+  // Nothing is skipped: the cursor is a position in the ordering, not an
+  // offset, so a record inserted below it falls inside the next page, in order.
+  expect(rest).toEqual(["late", "m3", "m2", "m1"]);
+
+  const patched = patchesOf(seen.frames)
+    .flatMap((patch) => patch.upserts)
+    .filter((upsert) => upsert.type === "message")
+    .map((upsert) => upsert.message);
+  // It genuinely reaches the reader on both surfaces - the contract's hard
+  // case, not a hypothetical, and appending would leave two of it.
+  expect(patched.map((message) => message.messageId)).toEqual(["late"]);
+  expect(rest.includes("late")).toBe(true);
+
+  // Applying both by record identity - which is how a conversation is fed -
+  // leaves exactly one of each message and loses none.
+  const identity = (chatId: string, messageId: string): string => `${chatId} ${messageId}`;
+  const reconciled = new Set([
+    ...first.messages.map((message) => identity(message.chatId, message.messageId)),
+    ...patched.map((message) => identity(message.chatId, message.messageId)),
+    ...rest.map((messageId) => identity(PERSON, messageId)),
+  ]);
+  expect([...reconciled].map((key) => key.split(" ")[1]).sort()).toEqual([
+    "late",
+    "m1",
+    "m2",
+    "m3",
+    "m4",
+    "m5",
+  ]);
+
+  // The page and the patch agree on the record itself, so identity is the only
+  // thing a consumer has to reconcile on.
+  const paged = (await client.messages(PERSON, { limit: 10 })).messages.find(
+    (message) => message.messageId === "late",
+  );
+  expect(paged).toEqual(patched[0]);
+  expect(driver.commands.historyRequests).toEqual([]);
+
+  await seen.close();
+  await runtime.stop();
+});
+
 test("a stale update is ignored, a future base re-snapshots, and pages read through both", async () => {
   const data = memoryDataStore();
   const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
@@ -1441,4 +1533,169 @@ test("a page size must be a positive integer", async () => {
   for (const limit of [0, -1, 1.5, Number.NaN]) {
     await assert.rejects(data.messages("personal", PERSON, { limit }), RangeError);
   }
+});
+
+test("a real runtime's missed update is detected and replaced with a fresh snapshot", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+
+  // A real client watch over the real runtime and the real backend, with one
+  // live update dropped on the way to this watcher — the wire loss the
+  // contiguity rule exists to survive. Nothing about the mirror is faked: the
+  // snapshots and pages below are the backend's own.
+  let drop = 0;
+  const lossy: WhatsAppClient = createInProcessWhatsAppClient({
+    ...runtime,
+    onFrame: (listener) =>
+      runtime.onFrame((frame) => {
+        if (frame.type === "patch" && drop > 0) {
+          drop -= 1;
+          return;
+        }
+        listener(frame);
+      }),
+  });
+
+  const seen = watching(lossy);
+  await tick();
+  expect(snapshotsOf(seen.frames).map((snapshot) => snapshot.revision)).toEqual([0]);
+
+  await driver.emit({ type: "message", message: hello("m1") });
+  await tick();
+  const opened = await lossy.messages(PERSON, { limit: 1 });
+  expect(opened.messages.map((message) => message.messageId)).toEqual(["m1"]);
+
+  // The next change never reaches this watcher.
+  drop = 1;
+  await driver.emit({ type: "message", message: hello("m2") });
+  await tick();
+  expect(patchesOf(seen.frames).length).toBe(1);
+
+  // The one after it therefore arrives on a base the watcher does not hold, and
+  // a fresh snapshot replaces state rather than applying over the hole.
+  await driver.emit({ type: "message", message: hello("m3") });
+  await tick();
+
+  expect(seen.frames.map((frame) => frame.type)).toEqual(["snapshot", "patch", "snapshot"]);
+  const recovered = snapshotsOf(seen.frames).at(-1);
+  assert.ok(recovered);
+  expect(recovered.revision).toBe((await runtime.snapshot()).revision);
+  // Recovery loses nothing: the chat still pages to every stored message, and
+  // the missed one is back.
+  expect(await pagedIds(lossy, PERSON, 2)).toEqual(["m3", "m2", "m1"]);
+  expect(driver.commands.historyRequests).toEqual([]);
+
+  await seen.close();
+  await runtime.stop();
+});
+
+test("a group's roster follows participant changes without deleting a record", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  const seen = watching(client);
+  await tick();
+
+  await driver.emit({
+    type: "group",
+    group: {
+      kind: "metadata",
+      id: ROOM,
+      subject: "The Room",
+      participants: [{ id: PERSON, role: "admin" }],
+      at: AT,
+    },
+  });
+  await driver.emit({
+    type: "group",
+    group: {
+      kind: "participants",
+      id: ROOM,
+      action: "add",
+      participants: [{ id: SELF }],
+      at: AT,
+    },
+  });
+  await tick();
+  expect((await runtime.snapshot()).groups).toEqual([
+    {
+      accountId: "personal",
+      groupId: ROOM,
+      subject: "The Room",
+      participants: [{ id: PERSON, role: "admin" }, { id: SELF }],
+    },
+  ]);
+
+  // A promotion edits the participant in place rather than adding a second.
+  await driver.emit({
+    type: "group",
+    group: {
+      kind: "participants",
+      id: ROOM,
+      action: "promote",
+      participants: [{ id: SELF, role: "admin" }],
+      at: AT,
+    },
+  });
+  // A removal edits the record's roster; it never removes the group record, so
+  // no patch carries a deletion (ADR-0019).
+  await driver.emit({
+    type: "group",
+    group: {
+      kind: "participants",
+      id: ROOM,
+      action: "remove",
+      participants: [{ id: PERSON }],
+      at: AT,
+    },
+  });
+  await tick();
+
+  const groups = (await runtime.snapshot()).groups;
+  expect(groups.length).toBe(1);
+  expect(groups[0]?.participants).toEqual([{ id: SELF, role: "admin" }]);
+  // The subject the metadata event established survived every roster change.
+  expect(groups[0]?.subject).toBe("The Room");
+  expect(
+    patchesOf(seen.frames).every((patch) => patch.upserts.every((upsert) => "type" in upsert)),
+  ).toBe(true);
+  expect(Object.keys(patchesOf(seen.frames)[0] ?? {}).includes("deletes")).toBe(false);
+
+  await seen.close();
+  await runtime.stop();
+});
+
+test("going unavailable never dates a contact's last-seen to now", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+
+  // The peer was genuinely seen a week ago.
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1_000;
+  await driver.emit({
+    type: "presence",
+    presence: { chatId: PERSON, kind: "available", at: weekAgo },
+  });
+  const before = (await runtime.snapshot()).contacts[0]?.lastSeenAt;
+  expect(before).toBe(weekAgo);
+
+  // WhatsApp reports a long-offline peer as `unavailable`, and the mapping
+  // stamps `at` with receipt time rather than a real last-seen — so recording
+  // it would move a week-old last-seen to this instant, permanently.
+  await driver.emit({
+    type: "presence",
+    presence: { chatId: PERSON, kind: "unavailable", at: Date.now() },
+  });
+
+  expect((await runtime.snapshot()).contacts[0]?.lastSeenAt).toBe(weekAgo);
+  await runtime.stop();
+});
+
+test("a presence frame arriving without a claim is let go, not fatal", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+  // The account has been given back; a frame already in flight must not take
+  // the session down the way an unpersistable message would.
+  await runtime.stop();
+
+  await driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing", at: AT } });
+  expect((await runtime.snapshot()).contacts).toEqual([]);
 });
