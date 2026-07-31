@@ -130,13 +130,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // it. Acquired only at connection time (below), so a setup crash can never
   // strand it.
   const lease = path.join(path.dirname(config.credentialDb), "live.lock");
-  const releaseLease = (): void => {
-    try {
-      rmSync(lease, { recursive: true, force: true }); // lease dir + heartbeat file
-    } catch {
-      /* already released */
-    }
-  };
+  let releaseLease = (): void => {}; // bound after the lease exists (below)
 
   const runId = new Date().toISOString().replace(/[:.]/g, "-");
   const dbPath = path.join(privateDir, `observations-${runId}.db`);
@@ -446,14 +440,33 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
   process.on("SIGINT", () => void quit());
 
-  // TTL heartbeat per ADR-0009: a holder refreshes the heartbeat file; an
-  // acquirer may take over a lease whose heartbeat is stale (holder was
+  // TTL heartbeat per ADR-0009: a holder refreshes a token-bearing heartbeat
+  // file; an acquirer may take over a lease whose heartbeat is stale (holder
   // SIGKILLed / host died), so a crash never permanently strands the account.
-  // ponytail: no fencing token — single-host harness; add one if proof runs
-  // ever span machines.
+  // Ownership is fenced by the token: a holder that resumes after a takeover
+  // sees a foreign token, closes its socket (close-on-loss), and never
+  // touches the successor's lease. ponytail: token check is read-then-write,
+  // not atomic — fine for one host with 15s beats vs 60s staleness; use a
+  // real lock service if proof runs ever span machines.
   const heartbeatFile = path.join(lease, "heartbeat");
+  const leaseToken = `${process.pid}:${runId}`;
   const HEARTBEAT_MS = 15_000;
   const STALE_MS = 60_000;
+  const ownsLease = (): boolean => {
+    try {
+      return readFileSync(heartbeatFile, "utf8") === leaseToken;
+    } catch {
+      return false;
+    }
+  };
+  releaseLease = (): void => {
+    if (!ownsLease()) return; // a successor's lease is not ours to delete
+    try {
+      rmSync(lease, { recursive: true, force: true }); // lease dir + heartbeat file
+    } catch {
+      /* already released */
+    }
+  };
   const acquireLease = (): void => {
     try {
       mkdirSync(lease);
@@ -475,14 +488,22 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       rmSync(lease, { recursive: true, force: true });
       mkdirSync(lease);
     }
-    writeFileSync(heartbeatFile, String(process.pid));
+    writeFileSync(heartbeatFile, leaseToken);
   };
   acquireLease();
   const heartbeat = setInterval(() => {
+    if (!ownsLease()) {
+      // A successor took over while this process was stalled. Its lease is
+      // not ours to refresh or release — close our socket and get out.
+      console.error("⛔ lease lost to another worker after a stall — closing the socket");
+      clearInterval(heartbeat);
+      void quit();
+      return;
+    }
     try {
-      writeFileSync(heartbeatFile, String(process.pid));
+      writeFileSync(heartbeatFile, leaseToken);
     } catch {
-      /* lease dir vanished — nothing to refresh */
+      /* lease dir vanished — the ownsLease check above handles the fallout */
     }
   }, HEARTBEAT_MS);
   heartbeat.unref();
