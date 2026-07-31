@@ -599,6 +599,54 @@ test("a stop while the session is opening leaves the account claimed by nobody",
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
 });
 
+test("a stop while the claim is being announced never opens WhatsApp", async () => {
+  const data = memoryDataStore();
+  let finishClaiming!: () => void;
+  const claiming = new Promise<void>((resolve) => {
+    finishClaiming = resolve;
+  });
+  const backend: WhatsAppBackend = {
+    ...memoryBackend(),
+    data: {
+      ...data,
+      async claim(accountId, fencingToken) {
+        await claiming;
+        return data.claim(accountId, fencingToken);
+      },
+    },
+  };
+  let opened = 0;
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => {
+      opened += 1;
+      return createTestWhatsAppSession().session;
+    },
+  });
+
+  const starting = runtime.start();
+  await tick();
+  await runtime.stop();
+  finishClaiming();
+
+  await assert.rejects(starting, /stopped while starting/);
+  expect(opened).toBe(0);
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("concurrent starts share one startup instead of racing for the account", async () => {
+  const { runtime, opened } = lane("personal");
+
+  const [first, second] = await Promise.allSettled([runtime.start(), runtime.start()]);
+
+  expect(first.status).toBe("fulfilled");
+  expect(second.status).toBe("fulfilled");
+  expect(opened()).toBe(1);
+
+  await runtime.stop();
+});
+
 test("a terminal session failure is reported by stop, not swallowed", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();

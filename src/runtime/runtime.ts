@@ -136,6 +136,8 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   }
 
   let current: Run | undefined;
+  /** One startup shared by every caller that asks while it is in flight. */
+  let pendingStart: Promise<void> | undefined;
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
 
@@ -258,20 +260,46 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     }
   }
 
+  /**
+   * Await one step of startup, and stop if the runtime was stopped meanwhile.
+   *
+   * @remarks
+   * Every await in `open()` is a point where a concurrent `stop()` may have
+   * released the account, and continuing past one would act — install a
+   * heartbeat, open WhatsApp — on behalf of a cycle that no longer owns
+   * anything. Routing them all through here is what keeps that check from
+   * being something each new await has to remember.
+   *
+   * @param undo - Undoes this step's own effect, for the window before the run
+   * records it and teardown can.
+   */
+  async function step<T>(
+    run: Run,
+    work: Promise<T>,
+    undo?: (value: T) => Promise<void>,
+  ): Promise<T> {
+    const value = await work;
+    if (live(run)) return value;
+    await undo?.(value)?.catch(() => {});
+    throw new Error(`runtime for "${accountId}" was stopped while starting`);
+  }
+
   async function open(run: Run): Promise<void> {
     // The claim comes first: a duplicate worker must fail before it can open a
     // second socket on the account and diverge its Signal state.
-    const claim = await backend.leases.acquire(accountId, holderId, leaseTtlMs);
+    const claim = await step(
+      run,
+      backend.leases.acquire(accountId, holderId, leaseTtlMs),
+      async (result) => {
+        if (result.acquired) await backend.leases.release(result.lease);
+      },
+    );
     if (!claim.acquired) throw new AccountAlreadyClaimedError(accountId, claim.heldUntil);
-    if (!live(run)) {
-      await backend.leases.release(claim.lease).catch(() => {});
-      throw new Error(`runtime for "${accountId}" was stopped while starting`);
-    }
     run.lease = claim.lease;
     // Announce the claim at the acceptance boundary before WhatsApp is opened,
     // so a superseded worker's writes are refused from this moment rather than
     // from whenever this one first writes (ADR-0009).
-    await backend.data.claim(accountId, claim.lease.fencingToken);
+    await step(run, backend.data.claim(accountId, claim.lease.fencingToken));
     run.heartbeat = setInterval(
       () => {
         // ponytail: a timer has nowhere to report a failed teardown, and the
@@ -283,14 +311,14 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     );
     run.heartbeat.unref?.();
 
-    const opened = await config.openSession(backend.credentials);
     // A stop() that ran while the session was opening has already released the
     // claim, so subscribing now would consume WhatsApp with no claim at all —
     // possibly alongside the worker that took the account over.
-    if (!live(run)) {
-      await opened.stop?.();
-      throw new Error(`runtime for "${accountId}" was stopped while starting`);
-    }
+    const opened = await step(
+      run,
+      Promise.resolve(config.openSession(backend.credentials)),
+      (session) => Promise.resolve(session.stop?.()),
+    );
     run.session = opened;
     run.unsubscribe = opened.subscribe(handlers);
     // A live session's start() resolves only once the session has ended, so it
@@ -309,7 +337,11 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   function start(): Promise<void> {
     const active = current;
     if (active && !active.stopping) return active.starting ?? Promise.resolve();
-    return (async () => {
+    // Callers that arrive before a run exists — or while one is being torn
+    // down — share this one startup. Letting each build its own would have them
+    // race for the account, and the loser's failure would leave the runtime
+    // stopped despite everyone having asked for it to start.
+    pendingStart ??= (async () => {
       // A start during a teardown waits for it rather than racing its release.
       await active?.stopping?.catch(() => {});
       const run: Run = {
@@ -329,8 +361,11 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         throw error;
       });
       run.starting = starting;
-      return starting;
-    })();
+      await starting;
+    })().finally(() => {
+      pendingStart = undefined;
+    });
+    return pendingStart;
   }
 
   return {
