@@ -24,10 +24,12 @@
  * prefixes, timestamps, counts, and request ids (whatsappd-generated, not
  * native). The salt lives in process memory only.
  *
- * ADR-0009: a TTL-heartbeat lease next to the shared credential store guards
- * the one live test account; held only while this process is connected, and
- * a crashed holder's stale lease is taken over instead of stranding the
- * account.
+ * One worker per live account: an operator sentinel (mkdir + heartbeat) next
+ * to the shared credential store, held only while this process is connected.
+ * Acquisition refuses an existing lock — recovery from a crashed holder is a
+ * manual rmdir guided by the printed heartbeat age; a token close-on-loss
+ * check backstops operator error. The product-grade ADR-0009 lease is issue
+ * #20 backend work, not this harness.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -124,7 +126,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     throw new Error("config.json requires an absolute credentialDb and an account");
   }
 
-  // ADR-0009: one worker per live account. The lease lives NEXT TO the shared
+  // One worker per live account. The sentinel lives NEXT TO the shared
   // credential store so parallel lanes (e.g. issue #19) in other worktrees
   // contend on the same path. mkdir is atomic; EEXIST means someone else owns
   // it. Acquired only at connection time (below), so a setup crash can never
