@@ -346,6 +346,74 @@ export interface WhatsAppDataStore {
 
   /** Read accepted source batches strictly after a consumer's own `seq`. */
   accepted(accountId: string, afterSeq: number): Promise<readonly AcceptedWhatsAppBatch[]>;
+
+  /**
+   * Read this account's per-chat History Backfill Request progress.
+   *
+   * @remarks
+   * Durable because the queue has to survive a restart without either losing
+   * its place or re-hammering a phone it already backed off from (#25). It is
+   * deliberately *not* a mirror record: nothing here is WhatsApp state a client
+   * renders, and it takes no revision.
+   *
+   * @param dueBy - When given, only chats eligible at or before this instant,
+   * soonest first — the queue's own read. Omit for every chat's progress.
+   */
+  historyProgress(accountId: string, dueBy?: number): Promise<readonly ChatHistoryProgress[]>;
+
+  /**
+   * Record what one History Backfill Request attempt learned.
+   *
+   * @remarks
+   * Takes the writer's fencing token for the same reason `accept()` does: a
+   * paused worker resuming after its claim moved on must not walk another
+   * worker's queue backwards (ADR-0009, ADR-0018).
+   *
+   * @throws {@link StaleAccountClaimError} for a superseded token.
+   */
+  recordHistoryAttempt(
+    accountId: string,
+    progress: ChatHistoryProgress,
+    fencingToken: number,
+  ): Promise<void>;
+}
+
+/**
+ * How far back one chat's stored history reaches, and when to ask again.
+ *
+ * @remarks
+ * The queue's durable memory for one chat. `oldest` is the anchor a request is
+ * made from; everything else exists so a restart resumes rather than restarts,
+ * and so a phone that answers nothing is asked less often rather than in a loop
+ * (ADR-0010).
+ */
+export interface ChatHistoryProgress {
+  readonly accountId: string;
+  readonly chatId: string;
+  /**
+   * The oldest WhatsApp message this chat has stored, and when it was sent.
+   *
+   * @remarks
+   * The anchor a request asks from. Absent until the chat has stored a message
+   * — a chat with nothing to anchor on cannot be requested from at all.
+   */
+  readonly oldest?: StoredMessageCursor;
+  /** When this chat was last asked, as a millisecond epoch timestamp. */
+  readonly lastAttemptAt?: number;
+  /** When an attempt last actually stored something older. */
+  readonly lastProgressAt?: number;
+  /**
+   * Consecutive attempts that stored nothing older.
+   *
+   * @remarks
+   * The backoff input, and the honest name for what is being counted. It is
+   * *not* evidence that WhatsApp has no more history: #18 proved a request can
+   * be delivered to the phone and simply never answered, so a high count means
+   * "asking is not working", never "the chat is exhausted" (ADR-0010).
+   */
+  readonly noProgressCount: number;
+  /** The earliest instant this chat may be asked again. */
+  readonly nextAttemptAt: number;
 }
 
 /** A single-writer claim on one account (ADR-0009). */

@@ -21,6 +21,7 @@ import {
   type AccountLease,
   type AccountLeaseStore,
   type AccountRecord,
+  type ChatHistoryProgress,
   type ChatRecord,
   type ContactRecord,
   type GroupRecord,
@@ -45,6 +46,8 @@ interface AccountMirror {
   contactKeys: Map<string, string>;
   groups: Map<string, GroupRecord>;
   messages: Map<string, MessageRecord>;
+  /** Per-chat History Backfill Request progress; durable, but not mirror state. */
+  history: Map<string, ChatHistoryProgress>;
   batches: AcceptedWhatsAppBatch[];
 }
 
@@ -390,6 +393,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       contactKeys: new Map(),
       groups: new Map(),
       messages: new Map(),
+      history: new Map(),
       batches: [],
     };
     accounts.set(accountId, created);
@@ -495,6 +499,25 @@ export function memoryDataStore(): WhatsAppDataStore {
 
     async accepted(accountId, afterSeq) {
       return mirrorOf(accountId).batches.filter((batch) => batch.seq > afterSeq);
+    },
+
+    async historyProgress(accountId, dueBy) {
+      const all = [...mirrorOf(accountId).history.values()];
+      if (dueBy === undefined) return all;
+      // Soonest-due first is what makes the queue fair: a chat that has been
+      // waiting longest is reached before one just deferred, so no chat can be
+      // starved by a livelier neighbour.
+      return all
+        .filter((progress) => progress.nextAttemptAt <= dueBy)
+        .sort((a, b) => a.nextAttemptAt - b.nextAttemptAt);
+    },
+
+    async recordHistoryAttempt(accountId, progress, fencingToken) {
+      const mirror = mirrorOf(accountId);
+      if (fencingToken < mirror.claim)
+        throw new StaleAccountClaimError(accountId, fencingToken, mirror.claim);
+      mirror.claim = fencingToken;
+      mirror.history.set(progress.chatId, progress);
     },
   };
 }

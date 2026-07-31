@@ -1783,3 +1783,43 @@ test("a live group rename reaches the chat summary, not just the group record", 
 
   await runtime.stop();
 });
+
+// ── Background history queue progress (#25) ──────────────────────────────────
+
+test("per-chat history progress is durable, fenced, and read soonest-due first", async () => {
+  const data = memoryDataStore();
+  const progress = (chatId: string, nextAttemptAt: number, noProgressCount = 0) => ({
+    accountId: "personal",
+    chatId,
+    oldest: { timestamp: AT, messageId: "m1" },
+    noProgressCount,
+    nextAttemptAt,
+  });
+
+  await data.recordHistoryAttempt("personal", progress(PERSON, 300), 1);
+  await data.recordHistoryAttempt("personal", progress(ROOM, 100), 3);
+
+  // The queue's own read: only what is due, soonest first, so a chat waiting
+  // longest is reached before one just deferred and nothing is starved.
+  expect((await data.historyProgress("personal", 200)).map((p) => p.chatId)).toEqual([ROOM]);
+  expect((await data.historyProgress("personal", 1_000)).map((p) => p.chatId)).toEqual([
+    ROOM,
+    PERSON,
+  ]);
+  expect((await data.historyProgress("personal")).length).toBe(2);
+  // Another account's queue is not this one's.
+  expect(await data.historyProgress("other")).toEqual([]);
+
+  // A resumed worker whose claim moved on cannot walk the queue backwards.
+  await assert.rejects(
+    data.recordHistoryAttempt("personal", progress(ROOM, 1, 99), 2),
+    (error: unknown) => error instanceof StaleAccountClaimError,
+  );
+  expect(
+    (await data.historyProgress("personal")).find((p) => p.chatId === ROOM)?.nextAttemptAt,
+  ).toBe(100);
+
+  // Progress is not mirror state: it takes no revision and is in no snapshot.
+  expect((await data.snapshot("personal")).revision).toBe(0);
+  expect(Object.keys(await data.snapshot("personal")).includes("history")).toBe(false);
+});
