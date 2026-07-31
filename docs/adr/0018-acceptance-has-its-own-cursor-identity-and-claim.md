@@ -45,8 +45,15 @@ in and no implementation has a second identifier to prefer by mistake.
 
 ## Durable acceptance carries the writer's fencing token
 
-`accept()` takes the writer's current `AccountLease` fencing token, and a store
-rejects a token below one it has already accepted for that account.
+A worker announces its claim to the data store as soon as it acquires the lease
+and before it opens WhatsApp. `accept()` then takes the writer's current
+`AccountLease` fencing token, and a store rejects any token below the newest one
+that account has seen.
+
+Announcing is separate from writing because learning the current claim from
+writes alone leaves a window: between a replacement worker acquiring the account
+and its first write, the previous worker's buffered events would still be
+accepted.
 
 ADR-0009 requires the fencing token to prevent stale holders from writing
 durable state, but a lease the acceptance boundary never sees cannot do that: a

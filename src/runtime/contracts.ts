@@ -161,6 +161,22 @@ export interface WhatsAppDataStore {
     fencingToken: number,
   ): Promise<AcceptedWhatsAppBatch>;
 
+  /**
+   * Record the writer that now holds this account, before it writes anything.
+   *
+   * @remarks
+   * Acceptance can only refuse a superseded writer if it knows a newer claim
+   * exists. Learning that from writes alone leaves a window: between a
+   * replacement worker acquiring the account and its first write, the previous
+   * worker's buffered events would still be accepted. A worker therefore
+   * announces its claim here as soon as it acquires the lease and before it
+   * opens WhatsApp (ADR-0009, ADR-0018).
+   *
+   * @throws {@link StaleAccountClaimError} when this account has already moved
+   * on to a newer claim.
+   */
+  claim(accountId: string, fencingToken: number): Promise<void>;
+
   /** Read the account's current mirror and its revision. */
   snapshot(accountId: string): Promise<WhatsAppSnapshot>;
 

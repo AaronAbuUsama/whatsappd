@@ -60,7 +60,11 @@ export {
   memoryLeaseStore,
   memoryMediaStore,
 } from "./runtime/memory.ts";
-export { AccountAlreadyClaimedError, UnsupportedDurableEventError } from "./runtime/contracts.ts";
+export {
+  AccountAlreadyClaimedError,
+  StaleAccountClaimError,
+  UnsupportedDurableEventError,
+} from "./runtime/contracts.ts";
 export type {
   AcceptedWhatsAppBatch,
   AccountLease,

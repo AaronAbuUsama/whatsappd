@@ -413,6 +413,29 @@ test("a superseded claim cannot write, however long its event was buffered", asy
   expect((await data.accepted("personal", 0)).length).toBe(1);
 });
 
+test("a replacement's claim fences the previous writer before it writes anything", async () => {
+  const data = memoryDataStore();
+  const observation = (eventId: string): WhatsAppDataEvent => ({
+    eventId,
+    observedAt: AT,
+    event: { type: "message", message: hello(eventId) },
+  });
+
+  await data.accept("personal", [observation("m1")], 1);
+  // The replacement announces its claim and has not written anything yet.
+  await data.claim("personal", 2);
+
+  await assert.rejects(
+    data.accept("personal", [observation("m2")], 1),
+    (error: unknown) => error instanceof StaleAccountClaimError,
+  );
+  await assert.rejects(
+    data.claim("personal", 1),
+    (error: unknown) => error instanceof StaleAccountClaimError,
+  );
+  expect((await data.snapshot("personal")).messages.map((m) => m.messageId)).toEqual(["m1"]);
+});
+
 test("re-offering an accepted observation returns its batch instead of a second copy", async () => {
   const data = memoryDataStore();
   const observation: WhatsAppDataEvent = {
@@ -591,6 +614,69 @@ test("a terminal session failure is reported by stop, not swallowed", async () =
 
   await assert.rejects(runtime.stop(), (error: unknown) => error === died);
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("a stop during an automatic teardown joins it instead of racing it", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const died = new Error("socket died");
+  let finishClosing!: () => void;
+  const closing = new Promise<void>((resolve) => {
+    finishClosing = resolve;
+  });
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => ({
+      ...driver.session,
+      start: () => Promise.reject(died),
+      stop: () => closing,
+    }),
+  });
+
+  await runtime.start();
+  await tick(); // the dead session's teardown is now in flight, waiting on stop()
+
+  const stopping = assert.rejects(runtime.stop(), (error: unknown) => error === died);
+  await tick();
+  // The caller has not been told the runtime stopped while it still holds the
+  // account.
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(false);
+
+  finishClosing();
+  await stopping;
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("aborting a watch during a hung snapshot read releases its subscription", async () => {
+  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
+  const runtime: WhatsAppRuntime = {
+    accountId: "personal",
+    start: async () => {},
+    stop: async () => {},
+    snapshot: () => new Promise<WhatsAppSnapshot>(() => {}), // never settles
+    onFrame(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const controller = new AbortController();
+  const pump = (async () => {
+    for await (const _frame of createInProcessWhatsAppClient(runtime).watch({
+      signal: controller.signal,
+    }));
+  })();
+
+  await tick();
+  expect(listeners.size).toBe(1);
+  controller.abort();
+
+  const finished = await Promise.race([
+    pump.then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+  ]);
+  expect(finished).toBe(true);
+  expect(listeners.size).toBe(0);
 });
 
 test("a client applies only contiguous patches and re-snapshots after a gap", async () => {

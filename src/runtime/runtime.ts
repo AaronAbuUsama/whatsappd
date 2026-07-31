@@ -114,17 +114,33 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   const freshnessMs = config.freshnessMs ?? 15_000;
 
   const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
-  let lease: AccountLease | undefined;
-  let session: RuntimeSession | undefined;
-  let unsubscribe: Unsubscribe | undefined;
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
-  let running: Promise<void> | undefined;
-  let supervisor: Promise<void> | undefined;
+  /**
+   * Everything one start-to-stop cycle owns.
+   *
+   * @remarks
+   * The lifecycle is asynchronous in four places at once — acquiring, opening,
+   * renewing, supervising — so the state they touch belongs to the cycle rather
+   * than to the runtime. A continuation that resumes after its cycle ended
+   * writes to a `Run` nobody reads any more, instead of reaching into shared
+   * variables a replacement cycle is using.
+   */
+  interface Run {
+    lease: AccountLease | undefined;
+    session: RuntimeSession | undefined;
+    unsubscribe: Unsubscribe | undefined;
+    heartbeat: ReturnType<typeof setInterval> | undefined;
+    supervisor: Promise<void> | undefined;
+    starting: Promise<void> | undefined;
+    /** Set the moment teardown begins, so concurrent stops join it. */
+    stopping: Promise<void> | undefined;
+  }
+
+  let current: Run | undefined;
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
-  // Bumped by every start and every stop, so an `open()` suspended on an await
-  // can tell that the runtime it was starting has since been torn down.
-  let generation = 0;
+
+  /** Whether this cycle still owns the runtime, checked after every await. */
+  const live = (run: Run): boolean => current === run && run.stopping === undefined;
 
   const publish = (frame: WhatsAppClientFrame): void => {
     for (const listener of listeners) listener(frame);
@@ -138,7 +154,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * client update.
    */
   const accept = async (event: WhatsAppDurableEvent): Promise<void> => {
-    const claim = lease;
+    const claim = current?.lease;
     // Writing without a claim is exactly what the lease exists to prevent, so
     // an event that outlives its claim fails rather than reaching the mirror.
     if (!claim) throw new Error(`no account claim held for "${accountId}"`);
@@ -161,7 +177,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // a stored `online` or `typing` would be reported as current after it
     // stopped being true.
     connection: (status) => {
-      const claim = lease;
+      const claim = current?.lease;
       // Connection truth is only ever this claim's; without one there is
       // nothing a client could treat as current.
       if (!claim) return;
@@ -181,36 +197,39 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     },
   };
 
-  /** Release everything this runtime holds, retaining any failure to report. */
-  async function teardown(): Promise<void> {
-    generation += 1;
-    running = undefined;
-    if (heartbeat) clearInterval(heartbeat);
-    heartbeat = undefined;
-    unsubscribe?.();
-    unsubscribe = undefined;
-    const closing = session;
-    const supervised = supervisor;
-    session = undefined;
-    supervisor = undefined;
-    const claim = lease;
-    lease = undefined;
-    try {
-      await closing?.stop?.();
-      // Nothing awaited the supervisor while the session ran, so its terminal
-      // failure — a rejected handler, a dead socket — arrives here.
-      await supervised;
-    } catch (error) {
-      failure ??= { error };
-    } finally {
-      // A claim outliving a failed teardown would lock the account out until
-      // its TTL expired, so the release does not depend on the close working.
-      if (claim) await backend.leases.release(claim);
-    }
+  /**
+   * Release everything one cycle holds, retaining any failure to report.
+   *
+   * @remarks
+   * Memoized on the run, so a public `stop()` racing the automatic teardown of
+   * a dead session joins that one instead of starting a second: two teardowns
+   * would let the caller return while the account was still claimed.
+   */
+  function teardown(run: Run): Promise<void> {
+    return (run.stopping ??= (async () => {
+      if (run.heartbeat) clearInterval(run.heartbeat);
+      run.unsubscribe?.();
+      const claim = run.lease;
+      run.lease = undefined;
+      try {
+        await run.session?.stop?.();
+        // Nothing awaited the supervisor while the session ran, so its terminal
+        // failure — a rejected handler, a dead socket — arrives here.
+        await run.supervisor;
+      } catch (error) {
+        failure ??= { error };
+      } finally {
+        // A claim outliving a failed teardown would lock the account out until
+        // its TTL expired, so the release does not depend on the close working.
+        if (claim) await backend.leases.release(claim);
+        if (current === run) current = undefined;
+      }
+    })());
   }
 
   async function stop(): Promise<void> {
-    await teardown();
+    const run = current;
+    if (run) await teardown(run);
     // Reported once, to whoever stops the runtime — a session that died on its
     // own is not allowed to disappear quietly.
     const held = failure;
@@ -218,81 +237,105 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     if (held) throw held.error;
   }
 
-  /** Hold the claim for the session's life; losing it stops the runtime. */
-  async function renew(): Promise<void> {
-    const held = lease;
-    if (!held) return;
+  /** Hold the claim for the session's life; losing it stops the cycle. */
+  async function renew(run: Run): Promise<void> {
+    const held = run.lease;
+    if (!held || !live(run)) return;
     const result = await backend.leases
       .renew(held, leaseTtlMs)
       .catch(() => ({ renewed: false }) as const);
-    if (result.renewed) lease = result.lease;
+    // The renewal may have committed after this cycle ended, in which case its
+    // claim belongs to nobody: hand it back rather than assigning a stale lease
+    // over whatever replaced this cycle.
+    if (!live(run)) {
+      if (result.renewed) await backend.leases.release(result.lease).catch(() => {});
+      return;
+    }
+    if (result.renewed) run.lease = result.lease;
     else {
-      lease = undefined; // the claim is gone; releasing it would evict its new holder
-      await stop();
+      run.lease = undefined; // gone; releasing it would evict its new holder
+      await teardown(run);
     }
   }
 
-  async function open(): Promise<void> {
-    const mine = (generation += 1);
-    const stopped = (): boolean => generation !== mine;
-    /** The session ended on its own; the runtime must not keep the account. */
-    const ended = (): void => {
-      if (!stopped()) void teardown().catch(() => {});
-    };
-    let claimed: AccountLease | undefined;
-    try {
-      // The claim comes first: a duplicate worker must fail before it can open
-      // a second socket on the account and diverge its Signal state.
-      const claim = await backend.leases.acquire(accountId, holderId, leaseTtlMs);
-      if (!claim.acquired) throw new AccountAlreadyClaimedError(accountId, claim.heldUntil);
-      claimed = claim.lease;
-      if (stopped()) throw new Error(`runtime for "${accountId}" was stopped while starting`);
-      lease = claimed;
-      heartbeat = setInterval(
-        () => {
-          // ponytail: a timer has nowhere to report a failed teardown, and the
-          // claim is gone either way. Surfacing it needs the runtime fault
-          // channel that degraded state introduces.
-          void renew().catch(() => {});
-        },
-        Math.max(1, Math.floor(leaseTtlMs / 2)),
-      );
-      heartbeat.unref?.();
-
-      const opened = await config.openSession(backend.credentials);
-      // A stop() that ran while the session was opening already released the
-      // claim, so subscribing now would consume WhatsApp with no claim at all —
-      // possibly alongside the worker that took the account over.
-      if (stopped()) {
-        await opened.stop?.();
-        throw new Error(`runtime for "${accountId}" was stopped while starting`);
-      }
-      session = opened;
-      unsubscribe = opened.subscribe(handlers);
-      // A live session's start() resolves only once the session has ended, so
-      // it is supervised rather than awaited: startup returns when the account
-      // is being consumed, and the session's terminal failure surfaces from
-      // stop(). Awaiting it here would hang every caller for the whole session.
-      supervisor = opened.start?.();
-      // When the session ends on its own the runtime stops with it, so a dead
-      // session never keeps holding the account.
-      void supervisor?.then(ended, ended);
-    } catch (error) {
-      // Leaves nothing claimed or subscribed behind. `teardown()` clears the
-      // memo, so a later `start()` is a real retry rather than the same
-      // rejection, and the explicit release covers a claim taken after a
-      // concurrent stop() had already let go.
-      if (!stopped()) await teardown().catch(() => {});
-      if (claimed) await backend.leases.release(claimed).catch(() => {});
-      throw error;
+  async function open(run: Run): Promise<void> {
+    // The claim comes first: a duplicate worker must fail before it can open a
+    // second socket on the account and diverge its Signal state.
+    const claim = await backend.leases.acquire(accountId, holderId, leaseTtlMs);
+    if (!claim.acquired) throw new AccountAlreadyClaimedError(accountId, claim.heldUntil);
+    if (!live(run)) {
+      await backend.leases.release(claim.lease).catch(() => {});
+      throw new Error(`runtime for "${accountId}" was stopped while starting`);
     }
+    run.lease = claim.lease;
+    // Announce the claim at the acceptance boundary before WhatsApp is opened,
+    // so a superseded worker's writes are refused from this moment rather than
+    // from whenever this one first writes (ADR-0009).
+    await backend.data.claim(accountId, claim.lease.fencingToken);
+    run.heartbeat = setInterval(
+      () => {
+        // ponytail: a timer has nowhere to report a failed teardown, and the
+        // claim is gone either way. Surfacing it needs the runtime fault
+        // channel that degraded state introduces.
+        void renew(run).catch(() => {});
+      },
+      Math.max(1, Math.floor(leaseTtlMs / 2)),
+    );
+    run.heartbeat.unref?.();
+
+    const opened = await config.openSession(backend.credentials);
+    // A stop() that ran while the session was opening has already released the
+    // claim, so subscribing now would consume WhatsApp with no claim at all —
+    // possibly alongside the worker that took the account over.
+    if (!live(run)) {
+      await opened.stop?.();
+      throw new Error(`runtime for "${accountId}" was stopped while starting`);
+    }
+    run.session = opened;
+    run.unsubscribe = opened.subscribe(handlers);
+    // A live session's start() resolves only once the session has ended, so it
+    // is supervised rather than awaited: startup returns when the account is
+    // being consumed, and the session's terminal failure surfaces from stop().
+    // Awaiting it here would hang every caller for the whole session.
+    run.supervisor = opened.start?.();
+    // A session that ends on its own takes the runtime with it, so a dead
+    // session never keeps holding the account.
+    const ended = (): void => {
+      if (live(run)) void teardown(run).catch(() => {});
+    };
+    void run.supervisor?.then(ended, ended);
+  }
+
+  function start(): Promise<void> {
+    const active = current;
+    if (active && !active.stopping) return active.starting ?? Promise.resolve();
+    return (async () => {
+      // A start during a teardown waits for it rather than racing its release.
+      await active?.stopping?.catch(() => {});
+      const run: Run = {
+        lease: undefined,
+        session: undefined,
+        unsubscribe: undefined,
+        heartbeat: undefined,
+        supervisor: undefined,
+        starting: undefined,
+        stopping: undefined,
+      };
+      current = run;
+      const starting = open(run).catch(async (error: unknown) => {
+        // Leaves nothing claimed or subscribed behind, so a later start() is a
+        // real retry rather than the same rejection.
+        await teardown(run).catch(() => {});
+        throw error;
+      });
+      run.starting = starting;
+      return starting;
+    })();
   }
 
   return {
     accountId,
-    // Idempotent while running; a failed start has already released its claim,
-    // so calling it again genuinely retries.
-    start: () => (running ??= open()),
+    start,
     stop,
     snapshot: () => backend.data.snapshot(accountId),
     onFrame(listener) {
@@ -301,6 +344,9 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     },
   };
 }
+
+/** Distinguishes "the watch was cancelled" from any snapshot a read returns. */
+const CANCELLED = Symbol("cancelled");
 
 /**
  * Create the client for a runtime living in this process.
@@ -321,23 +367,33 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
       // Subscribed before the snapshot is read, so a change committed while it
       // is being read is buffered rather than lost.
       const off = runtime.onFrame(push);
-      const onAbort = (): void => wake?.();
-      signal?.addEventListener("abort", onAbort, { once: true });
+      let onAbort = (): void => {};
+      // Cancellation has to be awaitable, not just observable: a snapshot read
+      // that never settles would otherwise keep the generator suspended past
+      // the abort, holding its subscription with no way to reach cleanup.
+      const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+        if (signal?.aborted) resolve(CANCELLED);
+        onAbort = (): void => {
+          wake?.();
+          resolve(CANCELLED);
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
 
       // The revision the consumer has been brought up to. Patches are applied
       // only from exactly here (ADR-0011), so it moves with what is yielded
       // rather than staying at the first snapshot's revision.
       let applied = -1;
-      const resnapshot = async (): Promise<WhatsAppSnapshot> => {
-        const snapshot = await runtime.snapshot();
+      const resnapshot = async (): Promise<WhatsAppSnapshot | typeof CANCELLED> => {
+        const snapshot = await Promise.race([runtime.snapshot(), cancelled]);
+        if (snapshot === CANCELLED) return CANCELLED;
         applied = snapshot.revision;
         return snapshot;
       };
 
       try {
-        if (signal?.aborted) return;
         const snapshot = await resnapshot();
-        if (signal?.aborted) return;
+        if (snapshot === CANCELLED || signal?.aborted) return;
         yield { type: "snapshot", snapshot };
         while (!signal?.aborted) {
           for (const frame of queued.splice(0)) {
@@ -348,7 +404,7 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
               // nothing may be silently skipped: replace state with a snapshot.
               if (frame.patch.fromRevision !== applied) {
                 const fresh = await resnapshot();
-                if (signal?.aborted) return;
+                if (fresh === CANCELLED || signal?.aborted) return;
                 yield { type: "snapshot", snapshot: fresh };
                 continue;
               }
