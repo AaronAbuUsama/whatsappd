@@ -94,16 +94,27 @@ export interface WhatsAppPatch {
 
 /**
  * One committed acceptance: the recorded source events, the projected patch,
- * and the revision they were stamped with — all from one operation (ADR-0014).
+ * and the revision the mirror ended at — all from one operation (ADR-0014).
  *
  * @remarks
- * A batch that changed nothing is not appended and does not consume a revision,
- * so `revision === fromRevision` means the observation was a replay.
- * `(accountId, revision)` is the batch's durable identity and a consumer's
- * cursor.
+ * Every accepted batch is appended, because a source observation is a fact
+ * whether or not it moved current state. Two numbers therefore exist and are
+ * not interchangeable:
+ *
+ * - `seq` is the append position and a source consumer's cursor. It advances
+ *   for every batch.
+ * - `revision` is the mirror version (ADR-0011) and advances only when the
+ *   projection actually changed a record, so `revision === fromRevision` means
+ *   the observation told the mirror nothing it did not already hold.
+ *
+ * Collapsing the two would force a choice between erasing distinct
+ * observations from the source log and publishing client updates that change
+ * nothing.
  */
 export interface AcceptedWhatsAppBatch {
   readonly accountId: string;
+  /** Append position in this account's source log; a source consumer's cursor. */
+  readonly seq: number;
   readonly fromRevision: number;
   readonly revision: number;
   readonly events: readonly WhatsAppDataEvent[];
@@ -114,18 +125,18 @@ export interface AcceptedWhatsAppBatch {
 export interface WhatsAppDataStore {
   /**
    * Append the source events, project them into the current mirror, and stamp
-   * the account's next revision as one operation.
+   * the resulting revision as one operation.
    *
    * @throws {@link UnsupportedDurableEventError} when an event has no
-   * projection yet — nothing is written and the revision does not move.
+   * projection yet — nothing is appended and the revision does not move.
    */
   accept(accountId: string, events: readonly WhatsAppDataEvent[]): Promise<AcceptedWhatsAppBatch>;
 
   /** Read the account's current mirror and its revision. */
   snapshot(accountId: string): Promise<WhatsAppSnapshot>;
 
-  /** Read accepted source batches strictly after a consumer's own revision. */
-  accepted(accountId: string, afterRevision: number): Promise<readonly AcceptedWhatsAppBatch[]>;
+  /** Read accepted source batches strictly after a consumer's own `seq`. */
+  accepted(accountId: string, afterSeq: number): Promise<readonly AcceptedWhatsAppBatch[]>;
 }
 
 /** A single-writer claim on one account (ADR-0009). */

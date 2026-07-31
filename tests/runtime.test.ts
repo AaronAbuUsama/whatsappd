@@ -158,6 +158,7 @@ test("one text message records the change, updates current state, and takes one 
   expect(accepted.length).toBe(1);
   expect(accepted[0]).toMatchObject({
     accountId: "personal",
+    seq: 1,
     fromRevision: 0,
     revision: 1,
     events: [{ accountId: "personal", event: { type: "message", message: { id: "m1" } } }],
@@ -225,7 +226,7 @@ test("a fresh client reconstructs the same message state and revision", async ()
 });
 
 test("replaying the same WhatsApp message creates no duplicate and no second update", async () => {
-  const { driver, runtime, client } = lane("personal");
+  const { driver, backend, runtime, client } = lane("personal");
   await runtime.start();
   const seen = watching(client);
   await tick();
@@ -248,6 +249,16 @@ test("replaying the same WhatsApp message creates no duplicate and no second upd
   const snapshot = await runtime.snapshot();
   expect(snapshot.revision).toBe(1);
   expect(snapshot.messages.length).toBe(1);
+
+  // The replays still happened, so the source log keeps all three
+  // observations; only the one that changed current state took a revision.
+  const accepted = await backend.data.accepted("personal", 0);
+  expect(accepted.map((batch) => [batch.seq, batch.fromRevision, batch.revision])).toEqual([
+    [1, 0, 1],
+    [2, 1, 1],
+    [3, 1, 1],
+  ]);
+  expect(accepted.slice(1).flatMap((batch) => batch.patch.upserts)).toEqual([]);
 
   await seen.close();
   await runtime.stop();
@@ -376,7 +387,7 @@ test("the account lease is a compare-and-swap claim with a fencing token", async
 });
 
 test("reconnecting with no new history preserves the existing current state", async () => {
-  const { driver, runtime, client } = lane("personal");
+  const { driver, backend, runtime, client } = lane("personal");
   await runtime.start();
   const seen = watching(client);
   await tick();
@@ -397,6 +408,10 @@ test("reconnecting with no new history preserves the existing current state", as
 
   expect(await runtime.snapshot()).toEqual(before);
   expect(patchesOf(seen.frames).length).toBe(1);
+  // The empty sync is still a real observation and is recorded as one.
+  const accepted = await backend.data.accepted("personal", 1);
+  expect(accepted.map((batch) => [batch.seq, batch.revision])).toEqual([[2, 1]]);
+  expect(accepted[0]?.events[0]?.event.type).toBe("conversation_sync");
 
   await seen.close();
   await runtime.stop();
@@ -429,7 +444,7 @@ test("unsupported durable events fail clearly instead of bypassing storage", asy
 });
 
 test("a batch that hits an unsupported event stores none of it", async () => {
-  const { driver, runtime } = lane("personal");
+  const { driver, backend, runtime } = lane("personal");
   await runtime.start();
 
   await assert.rejects(
@@ -453,6 +468,8 @@ test("a batch that hits an unsupported event stores none of it", async () => {
     chats: [],
     messages: [],
   });
+  // Rejected means nothing was accepted: the source log is untouched too.
+  expect(await backend.data.accepted("personal", 0)).toEqual([]);
 
   await runtime.stop();
 });
