@@ -199,9 +199,9 @@ function projectSyncedChat(
  * connection timestamps (ADR-0020).
  *
  * @remarks
- * A presence observation for an address nothing else has named creates the bare
- * contact it belongs to. Dropping it instead would lose the only last-seen a
- * chat with an unsaved contact ever gets.
+ * A last-seen lands on a contact that already exists and creates nothing —
+ * see the note inside, which is the reason one contact can never split into
+ * two records this slice would then have to merge away.
  */
 function projectObserved(
   pending: AccountMirror,
@@ -210,9 +210,24 @@ function projectObserved(
   observed: ObservedInstant,
 ): void {
   if (observed.type === "last_seen") {
+    // A presence observation updates a contact; it never invents one. It knows
+    // exactly one native form of an address and nothing that links it to the
+    // others, so letting it create records is what lets a PN ping and a LID
+    // ping open two records for one WhatsApp Address — and a later contact
+    // event naming both could then only reconcile them by *removing* one, which
+    // ADR-0019 does not allow a mirror to do. Contact and conversation-sync
+    // observations always carry the full `nativeIds` set, so a record created
+    // only by them can always be found again and never needs merging away.
+    //
+    // The cost is bounded and deliberate: an address WhatsApp has never named
+    // in a contact or sync batch keeps no last-seen. WhatsApp only sends
+    // presence for addresses a session subscribed to, which are the ones its
+    // own sync already delivered.
+    const contactId = pending.contactKeys.get(observed.contactId);
+    if (contactId === undefined) return;
     return projectContact(pending, upserts, {
       accountId,
-      contactId: observed.contactId,
+      contactId,
       nativeIds: [observed.contactId],
       lastSeenAt: observed.at,
     });
@@ -319,15 +334,30 @@ function projectEvent(
     case "group": {
       const { group } = event;
       const roster = pending.groups.get(group.id)?.participants ?? [];
-      return projectGroup(pending, upserts, {
+      const renamed = group.kind === "metadata" && group.subject !== undefined;
+      projectGroup(pending, upserts, {
         accountId,
         groupId: group.id,
-        ...(group.kind === "metadata" && group.subject !== undefined && { subject: group.subject }),
+        ...(renamed && { subject: group.subject }),
         participants:
           group.kind === "participants"
             ? rosterAfter(roster, group)
             : (group.participants ?? roster),
       });
+      // A rename reaches the chat summary too, exactly as a synced group's does.
+      // Updating only the group record would leave one Snapshot Window carrying
+      // two different names for the same group, and every consumer that renders
+      // chat summaries would never see the rename at all.
+      if (renamed)
+        projectChat(pending, upserts, {
+          accountId,
+          chatId: group.id,
+          isGroup: true,
+          subject: group.subject,
+          // Merged, so an existing chat keeps whatever newer message it holds.
+          lastMessageAt: 0,
+        });
+      return;
     }
     case "last_seen":
     case "account_connection":

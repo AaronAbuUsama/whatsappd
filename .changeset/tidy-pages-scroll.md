@@ -40,6 +40,12 @@ instants advance monotonically, so a replayed or late older observation takes no
 revision. Connection Freshness is unchanged — a live connection frame still
 expires and is never hydrated as startup truth.
 
+A last-seen updates a contact and never creates one, so a PN ping and a LID
+ping cannot open two records for one WhatsApp Address — a split that could only
+be reconciled by removing a record, which ADR-0019 forbids. A live group rename
+reaches the chat summary as well as the group record, so one Snapshot Window
+never carries two names for the same group.
+
 `unavailable` is deliberately the one presence kind that stamps nothing: it says
 the address is gone rather than present, and the mapping stamps its `at` with
 receipt time, so recording it would date a week-old last-seen to now and the

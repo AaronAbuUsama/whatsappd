@@ -1045,6 +1045,9 @@ test("connection and presence expire and never become stored truth", async () =>
   await tick();
   await driver.emit({ type: "message", message: hello() });
 
+  // The contact exists first: a presence observation updates one, never
+  // invents one (see `projectObserved`).
+  await driver.emit({ type: "contact", contact: { id: PERSON, nativeIds: [PERSON] } });
   await driver.emit({ type: "connection", status: { phase: "online" } });
   await driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
   await tick();
@@ -1082,6 +1085,7 @@ test("connection and presence expire and never become stored truth", async () =>
   const stored = (await backend.data.accepted("personal", 0)).flatMap((batch) => batch.events);
   expect(stored.map((observation) => observation.event.type).sort()).toEqual([
     "account_connection",
+    "contact",
     "last_seen",
     "message",
   ]);
@@ -1097,7 +1101,8 @@ test("historical last-seen survives a restart while expired presence does not", 
   const first = lane("personal", { backend: shared, freshnessMs: 1 });
   await first.runtime.start();
 
-  // The peer was typing a while ago, and the account was online then offline.
+  // The peer was present a while ago, and the account was online then offline.
+  await first.driver.emit({ type: "contact", contact: { id: PERSON, nativeIds: [PERSON] } });
   await first.driver.emit({
     type: "presence",
     presence: { chatId: PERSON, kind: "available", at: AT },
@@ -1138,7 +1143,24 @@ test("a last-seen only ever moves forward, and a repeat moves nothing", async ()
       1,
     );
 
-  expect((await seenAt(AT)).revision).toBe(1);
+  // A last-seen lands on a contact that exists; it never invents one, so an
+  // observation for an address nothing has named is recorded and moves nothing.
+  const unknown = await seenAt(AT);
+  expect(unknown.revision).toBe(unknown.fromRevision);
+  expect((await data.snapshot("personal")).contacts).toEqual([]);
+
+  await data.accept(
+    "personal",
+    [
+      {
+        observedAt: AT,
+        event: { type: "contact", contact: { id: PERSON, nativeIds: [PERSON] } },
+      },
+    ],
+    1,
+  );
+  const known = await seenAt(AT);
+  expect(known.revision).toBe(known.fromRevision + 1);
   // The same observation again changes nothing, so it takes no revision.
   const repeat = await seenAt(AT);
   expect(repeat.revision).toBe(repeat.fromRevision);
@@ -1148,14 +1170,48 @@ test("a last-seen only ever moves forward, and a repeat moves nothing", async ()
   expect(older.revision).toBe(older.fromRevision);
   expect((await data.snapshot("personal")).contacts[0]?.lastSeenAt).toBe(AT);
 
-  expect((await seenAt(AT + 1)).revision).toBe(2);
+  const newer = await seenAt(AT + 1);
+  expect(newer.revision).toBe(newer.fromRevision + 1);
   expect((await data.snapshot("personal")).contacts[0]?.lastSeenAt).toBe(AT + 1);
+});
+
+test("a contact reached by either native form stays one record", async () => {
+  const data = memoryDataStore();
+  const LID = "55555@lid";
+  const observe = (event: WhatsAppDataEvent["event"]): Promise<unknown> =>
+    data.accept("personal", [{ observedAt: AT, event }], 1);
+
+  // Known first by its phone-number form...
+  await observe({ type: "contact", contact: { id: PERSON, nativeIds: [PERSON] } });
+  // ...then delivered again keyed by its LID, naming the PN as equivalent.
+  await observe({
+    type: "contact",
+    contact: { id: LID, nativeIds: [LID, PERSON], displayName: "Someone" },
+  });
+
+  const { contacts } = await data.snapshot("personal");
+  expect(contacts.length).toBe(1);
+  expect(contacts[0]).toEqual({
+    accountId: "personal",
+    // Kept under the identity it was first stored at: a later form joins the
+    // record rather than renaming it out from under a consumer.
+    contactId: PERSON,
+    nativeIds: [PERSON, LID],
+    displayName: "Someone",
+  });
+
+  // A presence on either form reaches that one record.
+  await observe({ type: "last_seen", contactId: LID, at: AT });
+  const after = await data.snapshot("personal");
+  expect(after.contacts.length).toBe(1);
+  expect(after.contacts[0]?.lastSeenAt).toBe(AT);
 });
 
 test("a group's presence records the participant, not the chat it arrived on", async () => {
   const { driver, runtime } = lane("personal");
   await runtime.start();
 
+  await driver.emit({ type: "contact", contact: { id: PERSON, nativeIds: [PERSON] } });
   await driver.emit({
     type: "presence",
     presence: { chatId: ROOM, participant: PERSON, kind: "typing", at: AT },
@@ -1670,6 +1726,7 @@ test("going unavailable never dates a contact's last-seen to now", async () => {
 
   // The peer was genuinely seen a week ago.
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1_000;
+  await driver.emit({ type: "contact", contact: { id: PERSON, nativeIds: [PERSON] } });
   await driver.emit({
     type: "presence",
     presence: { chatId: PERSON, kind: "available", at: weekAgo },
@@ -1698,4 +1755,31 @@ test("a presence frame arriving without a claim is let go, not fatal", async () 
 
   await driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing", at: AT } });
   expect((await runtime.snapshot()).contacts).toEqual([]);
+});
+
+test("a live group rename reaches the chat summary, not just the group record", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+
+  // The sync names the group; a later live rename must not leave the Snapshot
+  // Window carrying two different names for it.
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [{ id: ROOM, isGroup: true, subject: "Old" }],
+      contacts: [],
+      messages: [],
+    },
+  });
+  await driver.emit({
+    type: "group",
+    group: { kind: "metadata", id: ROOM, subject: "New", at: AT },
+  });
+
+  const snapshot = await runtime.snapshot();
+  expect(snapshot.groups.map((group) => group.subject)).toEqual(["New"]);
+  expect(snapshot.chats.map((chat) => [chat.chatId, chat.subject])).toEqual([[ROOM, "New"]]);
+
+  await runtime.stop();
 });
