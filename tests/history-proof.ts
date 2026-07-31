@@ -127,12 +127,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     throw new Error("config.json requires an absolute credentialDb and an account");
   }
 
-  // One worker per live account. The sentinel lives NEXT TO the shared
-  // credential store so parallel lanes (e.g. issue #19) in other worktrees
-  // contend on the same path. mkdir is atomic; EEXIST means someone else owns
-  // it. Acquired only at connection time (below), so a setup crash can never
-  // strand it.
-  const lease = path.join(path.dirname(config.credentialDb), "live.lock");
+  // One worker per live ACCOUNT (ADR-0009 scope): the sentinel is keyed by
+  // the account name and lives NEXT TO the shared credential store, so
+  // parallel lanes (e.g. issue #19) contend per account, while unrelated
+  // accounts sharing a directory do not. mkdir is atomic; EEXIST means
+  // someone else owns it. Acquired only at connection time (below), so a
+  // setup crash can never strand it.
+  const accountKey = config.account.replace(/[^A-Za-z0-9_-]/g, "_");
+  const lease = path.join(path.dirname(config.credentialDb), `live-${accountKey}.lock`);
   let releaseLease = (): void => {}; // bound after the lease exists (below)
 
   const runId = new Date().toISOString().replace(/[:.]/g, "-");

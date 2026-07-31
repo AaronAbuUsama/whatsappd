@@ -91,12 +91,11 @@ request, and no answer was ever observed.** The full chain was observed on a
 real account (primary: iPhone) with Baileys 7.0.0-rc14, the newest release at
 the time (published 2026-07-29):
 
-| Step           | Signal                                                 | Observed                                                                       |
-| -------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| Submission     | `requestHistory` resolves with the request message id  | ✅ all 7 attempts across both runs (incl. with the phone fully offline, run 1) |
-| Server relay   | ack for the outgoing peer message                      | ✅ all 7 attempts                                                              |
-| Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ every online attempt; run 2 embeds them per request (`deliveryAcksAt`)      |
-| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **none observed** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)             |
+| Step           | Signal                                                 | Receipted evidence                                                                                                                                                                                                                                                                                                                                  |
+| -------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Submission     | `requestHistory` resolves with the request message id  | ✅ all 7 attempts — both receipts carry every request (incl. run 1's offline submission)                                                                                                                                                                                                                                                            |
+| Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ **receipted for run 2's 2 requests** (`deliveryAcksAt`, from the run's own transport log). Run 1 predates ack embedding: its receipt substantiates only the offline row's 4m16s-late ack (operator notes); the remaining run-1 delivery and server-relay acks were observed in that run's transport trace and are quoted, unreceipted, on PR #51 |
+| Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **none observed** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)                                                                                                                                                                                                                                                                                  |
 
 One seam caveat sharpens, rather than weakens, the verdict: whatsappd's
 normalization (`toMessagingHistoryEvents`, `src/baileys/socket.ts`) emits no
