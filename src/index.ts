@@ -62,6 +62,7 @@ export {
 } from "./runtime/memory.ts";
 export {
   AccountAlreadyClaimedError,
+  AccountNotHeldError,
   StaleAccountClaimError,
   UnsupportedDurableEventError,
 } from "./runtime/contracts.ts";

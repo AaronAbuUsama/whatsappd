@@ -15,6 +15,7 @@ import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import {
   AccountAlreadyClaimedError,
+  AccountNotHeldError,
   type AccountLease,
   type WhatsAppBackend,
   type WhatsAppClient,
@@ -153,12 +154,12 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     const claim = lease;
     // Writing without a claim is exactly what the lease exists to prevent, so
     // an event that outlives its claim fails rather than reaching the mirror.
-    if (!claim) throw new Error(`no account claim held for "${accountId}"`);
+    if (!claim) throw new AccountNotHeldError(accountId, "unclaimed");
     // The cached claim is only evidence until it expires: a loop that stalls
     // past the TTL can reach here before the heartbeat notices, and by then
     // another worker may hold the account.
     if (claim.expiresAt <= Date.now())
-      throw new Error(`the account claim for "${accountId}" expired at ${claim.expiresAt}`);
+      throw new AccountNotHeldError(accountId, "expired", `the claim lapsed at ${claim.expiresAt}`);
     const accepted = await backend.data.accept(
       accountId,
       [{ observedAt: Date.now(), event }],
@@ -172,24 +173,16 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * What this slice consumes from the session.
    *
    * @remarks
-   * Only what the mirror can project is subscribed at all. Updates, contacts
-   * and groups have no projection yet, and offering one to the store would
-   * rightly be refused — taking the runtime down on the first read receipt a
-   * real account delivers. Not observing them is not bypassing storage: nothing
-   * reaches the mirror by another route, and the store still refuses anything
-   * unsupported that any caller hands it.
+   * Only what the mirror can project is subscribed at all. Update, contact and
+   * group events have no projection yet and are not observed in this slice —
+   * which is a scope statement, not a bypass: nothing reaches the mirror by
+   * another route, and the store still refuses any unsupported event type a
+   * caller hands it. What is observed is accepted whole, never trimmed to what
+   * currently projects.
    */
   const handlers: WhatsAppSessionHandlers = {
     message: (message) => accept({ type: "message", message }),
-    conversationSync: (batch) =>
-      accept({
-        type: "conversation_sync",
-        // ponytail: a real history sync carries contacts, which have no
-        // projection here, and the store refuses a batch holding them. Dropping
-        // them keeps the chats and messages in the same sync instead of losing
-        // the lot. Projecting contacts is what makes this line unnecessary.
-        batch: batch.contacts.length === 0 ? batch : { ...batch, contacts: [] },
-      }),
+    conversationSync: (batch) => accept({ type: "conversation_sync", batch }),
     // Connection and presence are live signals with an expiry, never records:
     // a stored `online` or `typing` would be reported as current after it
     // stopped being true.
@@ -215,7 +208,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   };
 
   const stoppedWhileStarting = (): Error =>
-    new Error(`runtime for "${accountId}" was stopped while starting`);
+    new AccountNotHeldError(accountId, "stopped", "the runtime was stopped while starting");
 
   /**
    * Give back everything this runtime holds, retaining any failure to report.

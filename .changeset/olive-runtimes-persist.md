@@ -18,8 +18,17 @@ token is rejected at the acceptance boundary rather than reaching the mirror.
 
 A storage failure stops processing with the original failure instead of being
 skipped. This slice projects text messages and the chats they belong to; a
-store rejects any other durable event with `UnsupportedDurableEventError`
+store rejects any other durable event type with `UnsupportedDurableEventError`
 rather than dropping it, and the runtime does not observe what it cannot yet
-project. A watch ends with a `closed` frame when the runtime stops — carrying
-the failure when the session died rather than being stopped — so a consumer is
-never left waiting on an account nothing is consuming.
+project. What it does observe is accepted whole: a conversation sync's contacts
+are recorded in the source log even though nothing projects them yet, rather
+than being trimmed to what the mirror currently models. A watch ends with a
+`closed` frame when the runtime stops — carrying the failure when the session
+died rather than being stopped — so a consumer is never left waiting on an
+account nothing is consuming.
+
+`AccountNotHeldError` reports a runtime acting on an account whose claim it
+never took, has let lapse, or gave back to a stop; the store's
+`StaleAccountClaimError` remains the boundary that can see a newer claim.
+`createTestWhatsAppSession()` now offers `start()` and `stop()`, so a
+deterministic session ends on a handler failure exactly as a live one does.

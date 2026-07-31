@@ -118,12 +118,14 @@ function projectEvent(
     case "message":
       return projectMessage(pending, upserts, accountId, event.message);
     case "conversation_sync": {
-      const { context, chats, contacts, messages } = event.batch;
+      const { context, chats, messages } = event.batch;
       // Deleting on a sync needs explicit, scope-bounded replacement metadata
       // that no live protocol mapping has proven yet (ADR-0014).
       if (context.projection.mode !== "upsert")
         throw new UnsupportedDurableEventError("an authoritative conversation-sync replacement");
-      if (contacts.length > 0) throw new UnsupportedDurableEventError("conversation-sync contacts");
+      // The batch's contacts are recorded with it and simply move nothing: the
+      // mirror has no contact record yet. Refusing them here would only teach
+      // callers to strip them before accepting, which loses the observation.
       for (const chat of chats)
         projectChat(pending, upserts, {
           accountId,

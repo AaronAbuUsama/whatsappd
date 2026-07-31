@@ -294,9 +294,21 @@ test("the stored sender is the actual author, never the chat", async () => {
 
 test("a backend failure publishes nothing and stops processing with the original failure", async () => {
   const outage = new Error("storage unavailable");
+  const data = memoryDataStore();
+  // Fails once, then works: a store that failed for ever could not tell "stopped
+  // processing" apart from "processed and failed again".
+  let accepts = 0;
   const backend: WhatsAppBackend = {
     ...memoryBackend(),
-    data: { ...memoryDataStore(), accept: () => Promise.reject(outage) },
+    data: {
+      ...data,
+      accept: (accountId, events, fencingToken) => {
+        accepts += 1;
+        return accepts === 1
+          ? Promise.reject(outage)
+          : data.accept(accountId, events, fencingToken);
+      },
+    },
   };
   const { driver, runtime, client } = lane("personal", { backend });
   await runtime.start();
@@ -307,14 +319,24 @@ test("a backend failure publishes nothing and stops processing with the original
     error instanceof SubscriptionHandlerError && error.cause === outage;
 
   await assert.rejects(driver.emit({ type: "message", message: hello() }), isOutage);
-  // Not logged and skipped: the next event never gets processed either.
-  await assert.rejects(driver.emit({ type: "message", message: hello("m2") }), isOutage);
   await tick();
 
+  // Not logged and skipped: the runtime is down, and the next event never
+  // reaches the store even though the store would now accept it.
+  await assert.rejects(driver.emit({ type: "message", message: hello("m2") }), isOutage);
+  await tick();
+  expect(accepts).toBe(1);
+
   expect(patchesOf(seen.frames)).toEqual([]);
+  // A watcher learns the runtime died, and learns it from the original failure
+  // rather than waiting for ever on an update that cannot come.
+  const last = seen.frames.at(-1);
+  expect(last?.type).toBe("closed");
+  expect(last?.type === "closed" && isOutage(last.error)).toBe(true);
 
   await seen.close();
-  await runtime.stop();
+  // Reported once, to whoever stops it.
+  await assert.rejects(runtime.stop(), isOutage);
 });
 
 test("two accounts remain isolated in one backend", async () => {
@@ -521,6 +543,8 @@ test("a batch that hits an unsupported event stores none of it", async () => {
     data.accept(
       "personal",
       [
+        // Projects cleanly on its own; it must still leave nothing behind when
+        // the event after it is refused.
         {
           observedAt: AT,
           event: {
@@ -530,6 +554,17 @@ test("a batch that hits an unsupported event stores none of it", async () => {
               chats: [{ id: PERSON, isGroup: false }],
               contacts: [{ id: PERSON, displayName: "Someone" }],
               messages: [hello()],
+            },
+          },
+        },
+        {
+          observedAt: AT,
+          event: {
+            type: "update",
+            update: {
+              kind: "receipt",
+              ref: { id: "m1", chatId: PERSON, fromMe: false },
+              status: "read",
             },
           },
         },
@@ -550,7 +585,7 @@ test("a batch that hits an unsupported event stores none of it", async () => {
 });
 
 test("everything a live account delivers alongside a message keeps the runtime up", async () => {
-  const { driver, runtime, client } = lane("personal");
+  const { driver, backend, runtime, client } = lane("personal");
   await runtime.start();
   const seen = watching(client);
   await tick();
@@ -583,6 +618,13 @@ test("everything a live account delivers alongside a message keeps the runtime u
 
   // The message inside that sync was stored, and the account is still consumed.
   expect((await runtime.snapshot()).messages.map((message) => message.messageId)).toEqual(["m1"]);
+  // What was observed was accepted whole: the contacts riding that sync have no
+  // mirror record yet, but they are in the source log rather than trimmed away.
+  const [bootstrap] = await backend.data.accepted("personal", 0);
+  const synced = bootstrap?.events[0]?.event;
+  expect(synced?.type === "conversation_sync" && synced.batch.contacts).toEqual([
+    { id: PERSON, displayName: "Someone" },
+  ]);
   await driver.emit({ type: "message", message: hello("m2", "Still here") });
   await tick();
   expect((await runtime.snapshot()).messages.map((message) => message.messageId)).toEqual([

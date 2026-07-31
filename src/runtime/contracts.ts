@@ -88,8 +88,9 @@ export interface WhatsAppSnapshot {
  *
  * @remarks
  * A consumer applies a patch only when `fromRevision` equals its own revision.
- * There are no deletes in this slice: nothing removes a mirror record until
- * revocation and scope-bounded replacement exist.
+ * There are no deletes: nothing removes a mirror record until revocation and
+ * scope-bounded replacement exist, and the field arrives with the first thing
+ * that produces one (ADR-0019, amending ADR-0011).
  */
 export interface WhatsAppPatch {
   readonly accountId: string;
@@ -272,6 +273,33 @@ export class StaleAccountClaimError extends Error {
     this.accountId = accountId;
     this.fencingToken = fencingToken;
     this.currentToken = currentToken;
+  }
+}
+
+/**
+ * Thrown when a runtime acted on an account it does not hold a live claim on.
+ *
+ * @remarks
+ * Distinct from {@link StaleAccountClaimError}, which the store raises when it
+ * can see a newer claim. This one is what the holder itself can tell: the claim
+ * was never taken, has passed its TTL, or was given back by a stop. Whether
+ * someone else has taken the account over is unknown here — that answer lives at
+ * the acceptance boundary.
+ */
+export class AccountNotHeldError extends Error {
+  readonly accountId: string;
+  /** Why the claim is not held, in the runtime's own terms. */
+  readonly reason: "unclaimed" | "expired" | "stopped";
+
+  constructor(accountId: string, reason: "unclaimed" | "expired" | "stopped", detail?: string) {
+    super(
+      `WhatsApp account "${accountId}" is not held by this runtime (${reason})${
+        detail ? `: ${detail}` : ""
+      }`,
+    );
+    this.name = "AccountNotHeldError";
+    this.accountId = accountId;
+    this.reason = reason;
   }
 }
 

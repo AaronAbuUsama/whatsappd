@@ -285,7 +285,11 @@ The sketches below predate ADR-0018, which splits the source cursor from the
 mirror revision and passes the writer's fencing token into acceptance. They also
 show an `accountId` and an `eventId` on `WhatsAppDataEvent` that the shipped
 contract does not carry — the `accept()` call is the only scope, and no observation
-identity exists until something retries. Read `src/runtime/contracts.ts` for the
+identity exists until something retries. `AccountLease.fencingToken` is a
+`number`, not the `string` the lease sketch shows: a store deciding whether a
+writer has been superseded compares tokens, and string order ranks claim 10
+below claim 9 (ADR-0018). `WhatsAppPatch` carries upserts only until deletion
+has something to delete (ADR-0019). Read `src/runtime/contracts.ts` for the
 shipped shapes.
 
 ```ts
@@ -540,7 +544,10 @@ This is a semantic requirement:
 
 Failed acceptance is retried in place with capped exponential backoff and
 visible degraded state; exhaustion stops the socket rather than skipping the
-event. Once accepted, source batches survive process replacement and backend
+event. Retries and degraded state do not exist yet: today the first failure
+stops the runtime with the original error, and a `closed` frame carries it to
+every watcher. Retrying cannot be added before an observation identity exists to
+tell a retry from a genuine repeat delivery (ADR-0018). Once accepted, source batches survive process replacement and backend
 consumers resume from their own revision cursor. Fault injection must still
 define the narrow pre-acceptance boundary where the protocol has delivered an
 event but no backend transaction has begun.
