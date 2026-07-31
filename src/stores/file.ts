@@ -11,12 +11,6 @@ const fileName = (key: string): string => `${key.replace(/[^0-9A-Za-z._-]/g, "_"
 
 export function fileStore(dir: string): CredentialStore {
   const path = (key: string): string => join(dir, fileName(key));
-  let ensured = false;
-  const ensureDir = async (): Promise<void> => {
-    if (ensured) return;
-    await mkdir(dir, { recursive: true });
-    ensured = true;
-  };
 
   return {
     async read(key) {
@@ -27,7 +21,11 @@ export function fileStore(dir: string): CredentialStore {
       }
     },
     async write(entries) {
-      await ensureDir();
+      // Every write, not once at creation: the directory can disappear under a
+      // live store — a cleanup job, a tmpfs, an operator with `rm -rf` — and a
+      // credential save that ENOENTs there is the save that loses the session.
+      // `recursive: true` makes this a no-op when the directory already exists.
+      await mkdir(dir, { recursive: true });
       await Promise.all(
         Object.entries(entries).map(([key, value]) =>
           value === null ? rm(path(key), { force: true }) : writeFile(path(key), value),
@@ -35,7 +33,6 @@ export function fileStore(dir: string): CredentialStore {
       );
     },
     async clear() {
-      ensured = false;
       await rm(dir, { recursive: true, force: true });
     },
   };

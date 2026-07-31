@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "./_expect.ts";
@@ -11,6 +11,20 @@ import { libsqlStore } from "../src/stores/libsql.ts";
 conformsToStore("memory", () => memoryStore());
 conformsToStore("file", () => fileStore(mkdtempSync(join(tmpdir(), "wa-file-"))));
 conformsToStore("libsql", () => libsqlStore({ url: ":memory:" }));
+
+// file-specific: the store directory is not guaranteed to survive the process
+// that created it. A cleanup job or an operator can remove it under a live
+// store, and the next credential save must recreate it rather than ENOENT.
+test("[file] a write recreates a store directory that disappeared", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wa-file-gone-"));
+  const store = fileStore(dir);
+
+  await store.write({ creds: "before" });
+  rmSync(dir, { recursive: true, force: true });
+
+  await store.write({ creds: "after" });
+  expect(await store.read("creds")).toBe("after");
+});
 
 // libsql-specific: one database, many accounts, fully isolated row-spaces.
 test("[libsql] accounts are namespaced within a single database", async () => {
