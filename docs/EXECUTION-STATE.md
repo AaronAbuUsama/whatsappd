@@ -59,7 +59,7 @@ issues #16 through #41 are the approved dependency graph.
 | Conversation-sync deletion requires explicit, scope-bounded replacement metadata         | PR #12 review  |
 | Executing command claims expire to terminal `outcome_unknown`, never automatic retry     | PR #12 review  |
 | Actorless receipts use a non-null aggregate subject for idempotent projection            | PR #12 review  |
-| Acceptance has its own cursor, observation identity, and fencing token                   | 0018           |
+| Acceptance has its own cursor and the writer's fencing token                             | 0018           |
 
 ## Semantics that must not be collapsed
 

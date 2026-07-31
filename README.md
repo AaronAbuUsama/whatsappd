@@ -106,11 +106,19 @@ each one — `memoryDataStore()`, `memoryLeaseStore()`, `memoryMediaStore()` —
 be replaced individually. Starting a second runtime for an account another one
 holds rejects with `AccountAlreadyClaimedError` before any socket opens.
 
-This first slice stores text messages. Any other durable event rejects with
-`UnsupportedDurableEventError` rather than being dropped, and a storage failure
-stops processing instead of being logged and skipped. Connection and presence
-are live signals with an expiry: they are never stored and never replayed as
-current truth.
+This first slice projects text messages and the chats they belong to. A data
+store rejects any other durable event with `UnsupportedDurableEventError` rather
+than dropping it, so nothing reaches the mirror by a side route; the runtime
+correspondingly does not observe what it cannot yet project, so receipts,
+contact and group updates pass by without storing anything. A storage failure
+stops processing with the original failure instead of being logged and skipped.
+Connection and presence are live signals with an expiry: they are never stored
+and never replayed as current truth.
+
+A watch ends with a `closed` frame when the runtime stops consuming the account.
+It carries the `error` when the session died on its own, and none when it was
+stopped deliberately — so a runtime that failed is never mistaken for a quiet
+account.
 
 ## Deterministic application tests
 

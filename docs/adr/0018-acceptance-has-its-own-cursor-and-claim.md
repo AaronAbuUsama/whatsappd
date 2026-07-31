@@ -2,12 +2,14 @@
 status: accepted
 ---
 
-# Acceptance has its own cursor, identity, and claim
+# Acceptance has its own cursor and claim
 
 ADR-0014 established that one transaction appends the source batch, projects
 the current mirror, and stamps the account revision. Implementing it revealed
-that the batch was carrying one number and one identity too few. This decision
-amends that contract in three places; everything else in ADR-0014 stands.
+that the batch was carrying one number too few, and that the fencing token
+ADR-0009 requires never reached the boundary that could enforce it. This
+decision amends that contract in two places; everything else in ADR-0014
+stands.
 
 ## The source cursor and the mirror revision are separate numbers
 
@@ -27,21 +29,19 @@ _changed current state_ are different facts:
   client patch that changes nothing, and a returning session that re-sends
   known history walks the revision forward for no reason.
 
-## An observation is identified by its caller, not by its payload
+## An observation carries no account of its own
 
-Each `WhatsAppDataEvent` carries a caller-assigned `eventId`. Re-offering
-accepted events returns their original batch instead of appending a second
-copy.
+The account named in the `accept()` call is the only scope, so an event cannot
+disagree with the batch it arrives in and no implementation has a second
+identifier to prefer by mistake.
 
-Without it a store cannot tell a retry after an ambiguous backend result from
-WhatsApp genuinely delivering the same thing twice: an identical payload at an
-identical millisecond is evidence of neither. Payload equality answers a
-different question — whether the mirror needs changing — and answering both
-with it loses one of them.
-
-The event carries no account of its own. The account named in the `accept()`
-call is the only scope, so an event cannot disagree with the batch it arrives
-in and no implementation has a second identifier to prefer by mistake.
+An observation carries no caller-assigned identity either. Deduplicating a
+retry from a genuine repeat delivery needs one — an identical payload at an
+identical millisecond is evidence of neither — but nothing retries yet: an
+acceptance failure stops the runtime with the original error. Adding the
+identity before the retry that consumes it would fix a contract every backend
+must implement against a caller that cannot yet use it correctly. It arrives
+with the first component that retries.
 
 ## Durable acceptance carries the writer's fencing token
 
@@ -68,8 +68,8 @@ compare tokens, and string order ranks claim 10 below claim 9.
   primary key and a mirror version column rather than one shared sequence.
 - A source consumer's committed cursor is a `seq`, not a revision. A consumer
   written against the earlier wording resumes at the wrong place.
-- Idempotent ingestion becomes the caller's `eventId` contract, so a runtime
-  that regenerates ids per attempt loses retry safety. Retries must re-offer
-  the identifiers of the attempt they are retrying.
+- Until an observation identity exists, a retry of an ambiguous acceptance
+  would append a second copy of the same observation. Nothing may retry
+  acceptance without adding one.
 - The lease store must issue ordered numeric tokens, which a backend-side
   counter or sequence provides.

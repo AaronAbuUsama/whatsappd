@@ -42,7 +42,7 @@ const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve)
 /** One account worker: a deterministic session, a runtime, and its client. */
 function lane(
   accountId: string,
-  options: { backend?: WhatsAppBackend; freshnessMs?: number } = {},
+  options: { backend?: WhatsAppBackend; freshnessMs?: number; leaseTtlMs?: number } = {},
 ): {
   driver: ReturnType<typeof createTestWhatsAppSession>;
   backend: WhatsAppBackend;
@@ -61,6 +61,7 @@ function lane(
       return driver.session;
     },
     ...(options.freshnessMs !== undefined && { freshnessMs: options.freshnessMs }),
+    ...(options.leaseTtlMs !== undefined && { leaseTtlMs: options.leaseTtlMs }),
   });
   return {
     driver,
@@ -394,10 +395,9 @@ test("the account lease is a compare-and-swap claim with a fencing token", async
 
 test("a superseded claim cannot write, however long its event was buffered", async () => {
   const data = memoryDataStore();
-  const observation = (eventId: string): WhatsAppDataEvent => ({
-    eventId,
+  const observation = (id: string): WhatsAppDataEvent => ({
     observedAt: AT,
-    event: { type: "message", message: hello(eventId) },
+    event: { type: "message", message: hello(id) },
   });
 
   // Worker B, holding the newer claim, writes first.
@@ -416,10 +416,9 @@ test("a superseded claim cannot write, however long its event was buffered", asy
 
 test("a replacement's claim fences the previous writer before it writes anything", async () => {
   const data = memoryDataStore();
-  const observation = (eventId: string): WhatsAppDataEvent => ({
-    eventId,
+  const observation = (id: string): WhatsAppDataEvent => ({
     observedAt: AT,
-    event: { type: "message", message: hello(eventId) },
+    event: { type: "message", message: hello(id) },
   });
 
   await data.accept("personal", [observation("m1")], 1);
@@ -437,23 +436,21 @@ test("a replacement's claim fences the previous writer before it writes anything
   expect((await data.snapshot("personal")).messages.map((m) => m.messageId)).toEqual(["m1"]);
 });
 
-test("re-offering an accepted observation returns its batch instead of a second copy", async () => {
+test("a repeated observation is recorded but moves nothing", async () => {
   const data = memoryDataStore();
   const observation: WhatsAppDataEvent = {
-    eventId: "obs-1",
     observedAt: AT,
     event: { type: "message", message: hello() },
   };
 
   const first = await data.accept("personal", [observation], 1);
-  // The retry a caller makes after an ambiguous backend result.
-  expect(await data.accept("personal", [observation], 1)).toBe(first);
-  expect((await data.accepted("personal", 0)).length).toBe(1);
+  expect([first.seq, first.fromRevision, first.revision]).toEqual([1, 0, 1]);
 
-  // A genuinely distinct observation of the same thing is still recorded, and
-  // still moves nothing, because identity is the caller's, not the payload's.
-  const again = await data.accept("personal", [{ ...observation, eventId: "obs-2" }], 1);
+  // The same thing observed again happened, so it is appended — but the mirror
+  // already holds it, so no record changes and no revision is taken.
+  const again = await data.accept("personal", [observation], 1);
   expect([again.seq, again.fromRevision, again.revision]).toEqual([2, 1, 1]);
+  expect(again.patch.upserts).toEqual([]);
   expect((await data.snapshot("personal")).messages.length).toBe(1);
 });
 
@@ -488,60 +485,113 @@ test("reconnecting with no new history preserves the existing current state", as
   await runtime.stop();
 });
 
-test("unsupported durable events fail clearly instead of bypassing storage", async () => {
-  const { driver, runtime, client } = lane("personal");
-  await runtime.start();
-  const seen = watching(client);
-  await tick();
-  await driver.emit({ type: "message", message: hello() });
-  const before = await runtime.snapshot();
-
-  const isUnsupported = (error: unknown): boolean =>
-    error instanceof SubscriptionHandlerError &&
-    error.cause instanceof UnsupportedDurableEventError;
+test("the store refuses an event it cannot project instead of dropping it", async () => {
+  const data = memoryDataStore();
 
   await assert.rejects(
-    driver.emit({
-      type: "update",
-      update: { kind: "receipt", ref: { id: "m1", chatId: PERSON, fromMe: false }, status: "read" },
-    }),
-    isUnsupported,
+    data.accept(
+      "personal",
+      [
+        {
+          observedAt: AT,
+          event: {
+            type: "update",
+            update: {
+              kind: "receipt",
+              ref: { id: "m1", chatId: PERSON, fromMe: false },
+              status: "read",
+            },
+          },
+        },
+      ],
+      1,
+    ),
+    UnsupportedDurableEventError,
   );
-  expect(await runtime.snapshot()).toEqual(before);
-  expect(patchesOf(seen.frames).length).toBe(1);
 
-  await seen.close();
-  await runtime.stop();
+  // No caller can route an unprojectable event into the mirror by any path.
+  expect((await data.snapshot("personal")).revision).toBe(0);
+  expect(await data.accepted("personal", 0)).toEqual([]);
 });
 
 test("a batch that hits an unsupported event stores none of it", async () => {
-  const { driver, backend, runtime } = lane("personal");
-  await runtime.start();
+  const data = memoryDataStore();
 
   await assert.rejects(
-    driver.emit({
-      type: "conversation_sync",
-      batch: {
-        context: { source: "recent", projection: { mode: "upsert" } },
-        chats: [{ id: PERSON, isGroup: false }],
-        contacts: [{ id: PERSON, displayName: "Someone" }],
-        messages: [hello()],
-      },
-    }),
-    (error: unknown) =>
-      error instanceof SubscriptionHandlerError &&
-      error.cause instanceof UnsupportedDurableEventError,
+    data.accept(
+      "personal",
+      [
+        {
+          observedAt: AT,
+          event: {
+            type: "conversation_sync",
+            batch: {
+              context: { source: "recent", projection: { mode: "upsert" } },
+              chats: [{ id: PERSON, isGroup: false }],
+              contacts: [{ id: PERSON, displayName: "Someone" }],
+              messages: [hello()],
+            },
+          },
+        },
+      ],
+      1,
+    ),
+    UnsupportedDurableEventError,
   );
 
-  expect(await runtime.snapshot()).toEqual({
+  expect(await data.snapshot("personal")).toEqual({
     accountId: "personal",
     revision: 0,
     chats: [],
     messages: [],
   });
   // Rejected means nothing was accepted: the source log is untouched too.
-  expect(await backend.data.accepted("personal", 0)).toEqual([]);
+  expect(await data.accepted("personal", 0)).toEqual([]);
+});
 
+test("everything a live account delivers alongside a message keeps the runtime up", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  const seen = watching(client);
+  await tick();
+
+  // The bootstrap sync a real account opens with carries contacts, and the
+  // traffic around a chat is mostly receipts, contact and group updates. None
+  // of them projects in this slice; none of them may take the account down.
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", isLatest: true, projection: { mode: "upsert" } },
+      chats: [{ id: PERSON, isGroup: false }],
+      contacts: [{ id: PERSON, displayName: "Someone" }],
+      messages: [hello()],
+    },
+  });
+  await driver.emit({
+    type: "update",
+    update: { kind: "receipt", ref: { id: "m1", chatId: PERSON, fromMe: false }, status: "read" },
+  });
+  await driver.emit({
+    type: "contact",
+    contact: { id: PERSON, nativeIds: [PERSON], displayName: "Someone" },
+  });
+  await driver.emit({
+    type: "group",
+    group: { kind: "metadata", id: ROOM, subject: "The Room", at: AT },
+  });
+  await tick();
+
+  // The message inside that sync was stored, and the account is still consumed.
+  expect((await runtime.snapshot()).messages.map((message) => message.messageId)).toEqual(["m1"]);
+  await driver.emit({ type: "message", message: hello("m2", "Still here") });
+  await tick();
+  expect((await runtime.snapshot()).messages.map((message) => message.messageId)).toEqual([
+    "m1",
+    "m2",
+  ]);
+  expect(seen.frames.some((frame) => frame.type === "closed")).toBe(false);
+
+  await seen.close();
   await runtime.stop();
 });
 
@@ -699,6 +749,73 @@ test("a terminal session failure is reported by stop, not swallowed", async () =
 
   await assert.rejects(runtime.stop(), (error: unknown) => error === died);
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("a session that dies on its own closes the watch with the failure", async () => {
+  const driver = createTestWhatsAppSession();
+  const died = new Error("socket died");
+  let die!: (error: unknown) => void;
+  const dying = new Promise<void>((_, reject) => {
+    die = reject;
+  });
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend: memoryBackend(),
+    openSession: () => ({ ...driver.session, start: () => dying }),
+  });
+
+  await runtime.start();
+  const seen = watching(createInProcessWhatsAppClient(runtime));
+  await tick();
+
+  die(died);
+  await tick();
+
+  // The watch ends rather than suspending for ever on an account nothing is
+  // consuming any more.
+  await seen.close();
+  expect(seen.frames.at(-1)).toEqual({ type: "closed", error: died });
+  await assert.rejects(runtime.stop(), (error: unknown) => error === died);
+});
+
+test("a deliberate stop closes the watch with no failure", async () => {
+  const { runtime, client } = lane("personal");
+  await runtime.start();
+  const seen = watching(client);
+  await tick();
+
+  await runtime.stop();
+  await seen.close();
+
+  expect(seen.frames.at(-1)).toEqual({ type: "closed" });
+});
+
+test("losing the account lease stops the runtime without evicting its new holder", async () => {
+  const inner = memoryLeaseStore();
+  let released = 0;
+  const leases: AccountLeaseStore = {
+    ...inner,
+    // The account has been taken over: this holder's claim is simply gone.
+    renew: async () => ({ renewed: false, reason: "lost" }),
+    release: async (lease) => {
+      released += 1;
+      return inner.release(lease);
+    },
+  };
+  const { runtime, client } = lane("personal", {
+    backend: { ...memoryBackend(), leases },
+    leaseTtlMs: 2, // the heartbeat renews at half the TTL
+  });
+
+  await runtime.start();
+  // The watch ending is the signal the runtime stopped — no timed wait.
+  const frames: WhatsAppClientFrame[] = [];
+  for await (const frame of client.watch()) frames.push(frame);
+
+  expect(frames.at(-1)).toEqual({ type: "closed" });
+  // A claim this runtime no longer holds belongs to whoever took the account
+  // over, so releasing it would evict them.
+  expect(released).toBe(0);
 });
 
 test("a stop during an automatic teardown joins it instead of racing it", async () => {

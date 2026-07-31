@@ -11,13 +11,15 @@ revisioned patches, replacing state with a fresh snapshot when a revision gap
 appears. Credentials, WhatsApp data, the account lease, and media bytes are
 four separate capabilities grouped by `memoryBackend()`.
 
-Acceptance carries its own cursor, identity, and claim (ADR-0018): a source
-consumer follows `seq`, which advances for every batch, while `revision`
-advances only when current state actually changed; each observation carries a
-caller-assigned `eventId`, so a retry returns its original batch instead of
-appending a duplicate; and a write from a superseded fencing token is rejected
-at the acceptance boundary rather than reaching the mirror.
+Acceptance carries its own cursor and claim (ADR-0018): a source consumer
+follows `seq`, which advances for every batch, while `revision` advances only
+when current state actually changed; and a write from a superseded fencing
+token is rejected at the acceptance boundary rather than reaching the mirror.
 
 A storage failure stops processing with the original failure instead of being
-skipped, and durable events with no projection yet reject with
-`UnsupportedDurableEventError`.
+skipped. This slice projects text messages and the chats they belong to; a
+store rejects any other durable event with `UnsupportedDurableEventError`
+rather than dropping it, and the runtime does not observe what it cannot yet
+project. A watch ends with a `closed` frame when the runtime stops — carrying
+the failure when the session died rather than being stopped — so a consumer is
+never left waiting on an account nothing is consuming.

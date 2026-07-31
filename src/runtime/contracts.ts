@@ -35,17 +35,6 @@ export type WhatsAppDurableEvent = Exclude<WhatsAppEvent, { type: "connection" |
  * and no implementation has a second identifier to prefer by mistake.
  */
 export interface WhatsAppDataEvent {
-  /**
-   * A stable identity for this observation, assigned by the caller.
-   *
-   * @remarks
-   * It is what makes a retry after an ambiguous backend result distinguishable
-   * from WhatsApp genuinely delivering the same thing twice. Without it a store
-   * must either append a duplicate or discard a real repeated observation,
-   * because an identical payload at an identical millisecond is not evidence of
-   * either.
-   */
-  readonly eventId: string;
   /** When the runtime observed the event, as a millisecond epoch timestamp. */
   readonly observedAt: number;
   readonly event: WhatsAppDurableEvent;
@@ -147,9 +136,9 @@ export interface WhatsAppDataStore {
    * @param fencingToken - The writer's current {@link AccountLease} token. A
    * token below one this account has already accepted is a paused worker
    * resuming after its claim moved on, and is rejected (ADR-0009).
-   * @returns The committed batch. Re-offering events that were already accepted
-   * returns their original batch instead of appending a second copy, so a
-   * retry after an ambiguous failure is safe.
+   * @returns The committed batch. Offering an observation the mirror already
+   * holds appends it — it happened — but changes no record and takes no
+   * revision, so a replayed message produces no client update.
    *
    * @throws {@link UnsupportedDurableEventError} when an event has no
    * projection yet, and {@link StaleAccountClaimError} for a superseded token —
@@ -327,7 +316,20 @@ export type WhatsAppClientFrame =
       /** Presence is ephemeral; after this instant it means nothing. */
       readonly expiresAt: number;
     }
-  | { readonly type: "connection"; readonly state: WhatsAppClientConnectionState };
+  | { readonly type: "connection"; readonly state: WhatsAppClientConnectionState }
+  | {
+      /**
+       * The runtime has stopped consuming this account. No frame follows it.
+       *
+       * @remarks
+       * Without it a runtime that died — a dead socket, a storage failure that
+       * stopped processing — is indistinguishable from a quiet account, and a
+       * watch would suspend for ever waiting on an update that cannot come.
+       */
+      readonly type: "closed";
+      /** The failure that ended it, absent when it was stopped deliberately. */
+      readonly error?: unknown;
+    };
 
 /** The backend-independent contract applications and React bindings consume. */
 export interface WhatsAppClient {
