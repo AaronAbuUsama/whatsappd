@@ -35,6 +35,22 @@ export interface WhatsAppAddress {
   readonly alt?: string;
 }
 
+/**
+ * Name an address by the native form WhatsApp delivered.
+ *
+ * @remarks
+ * The suffix decides the scheme, so `mode` can never contradict `id` — the
+ * proto's own `addressingMode` describes the *chat*, and trusting it would let
+ * a phone-number address be labelled `lid` and corrupt any downstream join.
+ *
+ * @param id - The native address, e.g. `15551234567@s.whatsapp.net` or `55555@lid`.
+ * @param alt - The known equivalent native form, when WhatsApp supplied one.
+ * @returns The address, carrying `alt` only when it is present.
+ */
+export function addressOf(id: string, alt?: string): WhatsAppAddress {
+  return { id, mode: id.endsWith("@lid") ? "lid" : "pn", ...(alt && { alt }) };
+}
+
 /** Unwrapped wrapper flags — kept even though we detect on the inner content. */
 export interface MessageFlags {
   readonly viewOnce?: boolean;

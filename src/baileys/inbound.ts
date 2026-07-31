@@ -14,13 +14,14 @@ import {
   type WAMessage,
   type WAMessageContent,
 } from "baileys";
-import type {
-  InboundMessage,
-  MediaHandle,
-  MediaMeta,
-  MessageContext,
-  MessageFlags,
-  WhatsAppAddress,
+import {
+  addressOf,
+  type InboundMessage,
+  type MediaHandle,
+  type MediaMeta,
+  type MessageContext,
+  type MessageFlags,
+  type WhatsAppAddress,
 } from "../model/message.ts";
 import { noDownloader, type DownloadThunk } from "./download.ts";
 
@@ -161,37 +162,17 @@ function media(m: {
 }
 
 /**
- * Which identity scheme an address belongs to.
- *
- * @remarks
- * `key.addressingMode` is authoritative when WhatsApp sets it. It is absent on
- * plenty of real deliveries (older history rows, synthetic update stanzas), so
- * we fall back to the address suffix rather than assuming a scheme.
- */
-function modeOf(key: WAMessage["key"], id: string): "lid" | "pn" {
-  if (key.addressingMode === "lid") return "lid";
-  if (key.addressingMode === "pn") return "pn";
-  return id.endsWith("@lid") ? "lid" : "pn";
-}
-
-/** Restate the linked account's address in `mode`, using its known alternate form. */
-function inMode(self: WhatsAppAddress, mode: "lid" | "pn"): WhatsAppAddress {
-  if (self.mode === mode) return self;
-  if (!self.alt) return self; // only one form is known — never invent the other
-  return { id: self.alt, mode, alt: self.id };
-}
-
-/**
  * Resolve the actual author of a message (ADR-0001).
  *
  * @remarks
- * Own-sent messages name the linked account. WhatsApp leaves `key.participant`
- * empty on own DMs, so the peer-fallback below would otherwise attribute them
- * to the conversation counterpart — the misattribution this function exists to
- * prevent. Incoming messages keep the real participant, falling back to the
- * chat id for 1:1 chats, where `participant` is legitimately absent because the
- * chat *is* the sender. The chat's addressing mode decides which native form of
- * the linked account is used, so a LID chat stays a LID conversation.
+ * Own-sent messages name the linked account, always by the same address — the
+ * account's own, never a per-chat restatement of it, so one account is never
+ * two identities. WhatsApp leaves `key.participant` empty on own DMs, so the
+ * peer fallback below would otherwise attribute them to the conversation
+ * counterpart: the misattribution this function exists to prevent. Incoming
+ * messages keep the real participant, falling back to the chat id for 1:1
+ * chats, where `participant` is legitimately absent because the chat *is* the
+ * sender.
  *
  * @param raw - The raw proto message.
  * @param self - The linked account's own address, already normalized (no device suffix).
@@ -199,15 +180,13 @@ function inMode(self: WhatsAppAddress, mode: "lid" | "pn"): WhatsAppAddress {
  */
 function senderOf(raw: WAMessage, self: WhatsAppAddress): WhatsAppAddress {
   const key = raw.key;
+  if (key.fromMe) return self;
   // `||` not `??`: LID 1:1 DMs deliver participant as "" (empty), not undefined,
   // and the sender there IS the chat peer — fall back to chatId. (live-observed)
-  const id = key.participant || key.remoteJid || "";
-  // The chat's own addressing evidence decides the scheme for both branches, so
-  // an own message in a LID chat is named by the account's LID form.
-  const mode = modeOf(key, id);
-  if (key.fromMe) return inMode(self, mode);
-  const alt = key.participantAlt || key.remoteJidAlt || undefined;
-  return { id, mode, ...(alt && { alt }) };
+  return addressOf(
+    key.participant || key.remoteJid || "",
+    key.participantAlt || key.remoteJidAlt || undefined,
+  );
 }
 
 export function toInbound(

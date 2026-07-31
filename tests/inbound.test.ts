@@ -256,7 +256,9 @@ test("own group message → sender is the linked account, never the group chat",
   expect(m.sender.id).not.toBe("123-456@g.us");
 });
 
-test("own message in a LID chat is named by the account's LID form", () => {
+test("one account is one address: own messages name it identically in a LID chat", () => {
+  // Restating the account per-chat would give one account two identities — the
+  // join corruption ADR-0001 targets. The equivalent form travels in `alt`.
   const raw = baseMessage({
     remoteJid: "100000000000000@lid",
     participant: "",
@@ -264,16 +266,19 @@ test("own message in a LID chat is named by the account's LID form", () => {
     fromMe: true,
   });
   const m = toInbound(raw, true, SELF)!;
-  expect(m.sender.id).toBe(SELF.alt); // the account's own @lid
-  expect(m.sender.mode).toBe("lid");
-  expect(m.sender.alt).toBe(SELF.id); // the equivalent phone-number form is kept
+  expect(m.sender).toEqual(SELF);
 });
 
-test("own message keeps the only known form when no equivalent is known", () => {
-  const pnOnly = { id: "me@s.whatsapp.net", mode: "pn" } as const;
-  const raw = baseMessage({ remoteJid: "1000@lid", addressingMode: "lid", fromMe: true });
-  const m = toInbound(raw, true, pnOnly)!;
-  expect(m.sender.id).toBe("me@s.whatsapp.net"); // never invents a LID
+test("mode always describes the id, never the chat's addressing mode", () => {
+  // A phone-number participant in a LID-addressed chat must not be labelled lid.
+  const raw = baseMessage({
+    remoteJid: "123-456@g.us",
+    participant: "777@s.whatsapp.net",
+    addressingMode: "lid",
+  });
+  const m = toInbound(raw, true, SELF)!;
+  expect(m.sender.id).toBe("777@s.whatsapp.net");
+  expect(m.sender.mode).toBe("pn");
 });
 
 test("no remoteJid/id → dropped (not addressable)", () => {

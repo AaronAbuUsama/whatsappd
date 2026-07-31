@@ -1,4 +1,4 @@
-import type { InboundMessage } from "./model/message.ts";
+import { addressOf, type InboundMessage } from "./model/message.ts";
 import type { MessageRef, Outbound, SendOptions } from "./model/outbound.ts";
 import type { WhatsAppSession } from "./session.ts";
 import { createSubscriptionDispatcher, type WhatsAppEvent } from "./subscription.ts";
@@ -26,11 +26,10 @@ export function textMessage(input: TextMessageInput): InboundMessage {
   if (fromMe && !input.sender) {
     throw new TypeError("own messages require the linked account as sender");
   }
-  const sender = input.sender ?? input.chatId;
   return {
     id: input.id,
     chatId: input.chatId,
-    sender: { id: sender, mode: sender.endsWith("@lid") ? "lid" : "pn" },
+    sender: addressOf(input.sender ?? input.chatId),
     fromMe,
     timestamp: input.timestamp ?? 0,
     live: input.live ?? true,
