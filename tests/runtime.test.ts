@@ -161,7 +161,7 @@ test("one text message records the change, updates current state, and takes one 
     seq: 1,
     fromRevision: 0,
     revision: 1,
-    events: [{ accountId: "personal", event: { type: "message", message: { id: "m1" } } }],
+    events: [{ event: { type: "message", message: { id: "m1" } } }],
   });
 
   await seen.close();
@@ -342,6 +342,9 @@ test("two accounts remain isolated in one backend", async () => {
     revision: 1,
     messages: [{ accountId: "bob", text: "For Bob" }],
   });
+  // Chats are projected on their own path and are scoped by the same account.
+  expect((await alice.runtime.snapshot()).chats).toMatchObject([{ accountId: "alice" }]);
+  expect((await bob.runtime.snapshot()).chats).toMatchObject([{ accountId: "bob" }]);
 
   await alice.runtime.stop();
   await bob.runtime.stop();

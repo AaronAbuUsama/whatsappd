@@ -132,9 +132,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * client update.
    */
   const accept = async (event: WhatsAppDurableEvent): Promise<void> => {
-    const accepted = await backend.data.accept(accountId, [
-      { accountId, observedAt: Date.now(), event },
-    ]);
+    const accepted = await backend.data.accept(accountId, [{ observedAt: Date.now(), event }]);
     if (accepted.revision === accepted.fromRevision) return;
     publish({ type: "patch", patch: accepted.patch });
   };

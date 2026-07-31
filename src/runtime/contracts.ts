@@ -26,9 +26,15 @@ import type { WhatsAppEvent } from "../subscription.ts";
  */
 export type WhatsAppDurableEvent = Exclude<WhatsAppEvent, { type: "connection" | "presence" }>;
 
-/** One account-scoped observation offered to {@link WhatsAppDataStore.accept}. */
+/**
+ * One observation offered to {@link WhatsAppDataStore.accept}.
+ *
+ * @remarks
+ * It carries no account of its own. The account named in the `accept()` call is
+ * the only scope, so an event can never disagree with the batch it arrives in
+ * and no implementation has a second identifier to prefer by mistake.
+ */
 export interface WhatsAppDataEvent {
-  readonly accountId: string;
   /** When the runtime observed the event, as a millisecond epoch timestamp. */
   readonly observedAt: number;
   readonly event: WhatsAppDurableEvent;
