@@ -440,18 +440,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
   process.on("SIGINT", () => void quit());
 
-  // TTL heartbeat per ADR-0009: a holder refreshes a token-bearing heartbeat
-  // file; an acquirer may take over a lease whose heartbeat is stale (holder
-  // SIGKILLed / host died), so a crash never permanently strands the account.
-  // Ownership is fenced by the token: a holder that resumes after a takeover
-  // sees a foreign token, closes its socket (close-on-loss), and never
-  // touches the successor's lease. ponytail: token check is read-then-write,
-  // not atomic — fine for one host with 15s beats vs 60s staleness; use a
-  // real lock service if proof runs ever span machines.
+  // Operator sentinel, deliberately NOT a self-healing lease: acquisition
+  // always refuses an existing lock and never steals it — automatic stale
+  // takeover is what creates clobbering/TOCTOU races between a stalled holder
+  // and its successor, and a REPL harness has an operator present by
+  // definition. Recovery from a SIGKILLed holder is one manual rmdir, guided
+  // by the heartbeat age printed on refusal. If an operator removes a lease
+  // whose holder was actually alive, both processes fail CLOSED: the resumed
+  // holder sees a foreign token and quits; in the worst suspension-timed
+  // interleaving the successor quits instead — either way at most one socket
+  // survives. The product-grade lease with real fencing tokens is backend
+  // store work (ADR-0009, issue #20), not this harness.
   const heartbeatFile = path.join(lease, "heartbeat");
   const leaseToken = `${process.pid}:${runId}`;
   const HEARTBEAT_MS = 15_000;
-  const STALE_MS = 60_000;
+  const STALE_HINT_MS = 60_000;
   const ownsLease = (): boolean => {
     try {
       return readFileSync(heartbeatFile, "utf8") === leaseToken;
@@ -472,21 +475,22 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       mkdirSync(lease);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      let stale = false;
+      let ageMs: number | undefined;
       try {
-        stale = Date.now() - statSync(heartbeatFile).mtimeMs > STALE_MS;
+        ageMs = Date.now() - statSync(heartbeatFile).mtimeMs;
       } catch {
-        stale = true; // lease dir with no heartbeat: a holder that died mid-acquire
+        /* no heartbeat file — holder died mid-acquire, or pre-heartbeat era */
       }
-      if (!stale) {
-        console.error(
-          `⛔ lease held: ${lease} has a live heartbeat — another worker owns the live account.`,
-        );
-        process.exit(2);
-      }
-      console.error(`⚠ taking over stale lease (heartbeat older than ${STALE_MS / 1000}s)`);
-      rmSync(lease, { recursive: true, force: true });
-      mkdirSync(lease);
+      const age =
+        ageMs == null ? "no heartbeat file" : `heartbeat ${Math.round(ageMs / 1000)}s old`;
+      const hint =
+        ageMs != null && ageMs > STALE_HINT_MS
+          ? " (likely a crashed holder — verify no proof runner is alive, then remove the directory manually)"
+          : "";
+      console.error(
+        `⛔ lease held: ${lease} (${age}) — another worker owns the live account${hint}.`,
+      );
+      process.exit(2);
     }
     writeFileSync(heartbeatFile, leaseToken);
   };
