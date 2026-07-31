@@ -202,10 +202,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   // In-memory only (never persisted): real chat jids and oldest-known anchors.
   const chats = new Map<string, { count: number; oldest?: Anchor & { hash: string } }>();
-  // Wall-clock of first observation per message identity, so "newly stored"
-  // is judged against each request's own submission time — not a baseline
-  // frozen at the first request.
-  const firstSeen = new Map<string, number>();
+  // Every message identity observed so far. Each request snapshots this set
+  // synchronously before submission, so "newly stored" is exact membership —
+  // no timestamp comparison, no same-millisecond ties in either direction.
+  const seenIds = new Set<string>();
+  const seenAtSubmit = new Map<string, ReadonlySet<string>>();
   // Set when a store write fails after a transport action succeeded: the
   // observations no longer reflect the run, so it must never finalize.
   let observationsIncomplete = false;
@@ -218,7 +219,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
     chats.set(m.chatId, entry);
     const hash = hashMsg(m);
-    if (!firstSeen.has(hash)) firstSeen.set(hash, Date.now());
+    seenIds.add(hash);
   }
 
   function recordBatch(batch: ConversationSyncBatch): void {
@@ -321,12 +322,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             WHERE b.request_session_id = ? AND m.timestamp > 0`,
         )
         .all(id) as unknown as BoundaryRow[];
-      const submittedAt = r.submitted_at as number;
-      // >= : a message first seen in the submission millisecond is credited
-      // to the request, not to the pre-existing set.
-      const fresh = msgs.filter(
-        (m) => (firstSeen.get(m.msgHash) ?? Infinity) >= submittedAt,
-      ).length;
+      const baseline = seenAtSubmit.get(id);
+      const fresh = baseline
+        ? `${msgs.filter((m) => !baseline.has(m.msgHash)).length}/${msgs.length}`
+        : "unknown (no submission snapshot)";
       const verdict = boundaryVerdict(
         r.anchor_timestamp as number,
         r.anchor_msg_hash as string,
@@ -336,9 +335,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.log(
         `  correlated batches: ${rows.length} ${JSON.stringify(rows.map((b) => ({ seq: b.seq, chunk: b.chunk_order, progress: b.progress, latest: b.is_latest, msgs: b.message_count })))}`,
       );
-      console.log(
-        `  newly stored (first seen after this request's submission): ${fresh}/${msgs.length}`,
-      );
+      console.log(`  newly stored (absent from the pre-submission snapshot): ${fresh}`);
       console.log(`  boundary: ${JSON.stringify(verdict)}`);
     }
     const orphan = db
@@ -467,10 +464,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           // lands while the submit promise is pending is request-triggered
           // and must not be classified as pre-existing.
           const submittedAt = Date.now();
+          // Synchronous snapshot BEFORE the await: exact membership baseline
+          // for "newly stored", immune to same-millisecond ordering.
+          const baseline: ReadonlySet<string> = new Set(seenIds);
           const { requestId } = await session.requestHistory(
             { ref: c.oldest.ref, timestamp: c.oldest.timestamp },
             { count },
           );
+          seenAtSubmit.set(requestId, baseline);
           try {
             insertRequest.run(
               requestId,
