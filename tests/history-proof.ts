@@ -13,8 +13,9 @@
  *                    message (default count 50); prints the receipt id
  *   status           per request: correlated batches, chunk orders, newly
  *                    stored counts, boundary verdict
- *   oracle           P2 cross-check: counts/order of accepted identities
- *                    around each requested boundary, straight from sqlite
+ *   oracle           database-oracle cross-check (supporting evidence):
+ *                    counts/order of accepted identities around each
+ *                    requested boundary, straight from sqlite
  *   note <text>      timestamp a free-form operator note (e.g. "phone offline")
  *   quit             stop the session, release the lease, write the matrix
  *
@@ -25,7 +26,7 @@
  * ADR-0009: a mkdir lease next to the shared credential store guards the one
  * live test account; the lease is held only while this process is connected.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, rmdirSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -94,10 +95,18 @@ export function boundaryVerdict(
   };
 }
 
+// Per-run random salt, never persisted: an unsalted hash of a jid is
+// reversible by hashing candidate phone numbers against a committed receipt.
+// Identities stay stable within a run — all the oracle needs.
+const hashSalt = randomBytes(16);
 const hashChat = (jid: string): string =>
-  createHash("sha256").update(jid).digest("hex").slice(0, 12);
+  createHash("sha256").update(hashSalt).update(jid).digest("hex").slice(0, 12);
 const hashMsg = (m: { chatId: string; id: string; fromMe: boolean }): string =>
-  createHash("sha256").update(`${m.chatId}|${m.id}|${m.fromMe}`).digest("hex").slice(0, 16);
+  createHash("sha256")
+    .update(hashSalt)
+    .update(`${m.chatId}|${m.id}|${m.fromMe}`)
+    .digest("hex")
+    .slice(0, 16);
 
 // Only run the live harness when executed directly, so the pure helpers above
 // stay importable from unit tests without opening a socket.
@@ -114,17 +123,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   // ADR-0009: one worker per live account. The lease lives NEXT TO the shared
   // credential store so parallel lanes (e.g. issue #19) in other worktrees
-  // contend on the same path. mkdir is atomic; EEXIST means someone else owns it.
+  // contend on the same path. mkdir is atomic; EEXIST means someone else owns
+  // it. Acquired only at connection time (below), so a setup crash can never
+  // strand it.
   const lease = path.join(path.dirname(config.credentialDb), "live.lock");
-  try {
-    mkdirSync(lease);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      console.error(`⛔ lease held: ${lease} exists — another worker owns the live account.`);
-      process.exit(2);
-    }
-    throw err;
-  }
   const releaseLease = (): void => {
     try {
       rmdirSync(lease);
@@ -268,7 +270,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         .prepare(
           `SELECT m.msg_hash AS msgHash, m.timestamp
              FROM message m JOIN batch b ON b.seq = m.batch_seq
-            WHERE b.request_session_id = ?`,
+            WHERE b.request_session_id = ? AND m.timestamp > 0`,
         )
         .all(id) as unknown as BoundaryRow[];
       const submittedAt = r.submitted_at as number;
@@ -282,7 +284,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.log(
         `  correlated batches: ${rows.length} ${JSON.stringify(rows.map((b) => ({ seq: b.seq, chunk: b.chunk_order, progress: b.progress, latest: b.is_latest, msgs: b.message_count })))}`,
       );
-      console.log(`  newly stored (unseen before first request): ${fresh}/${msgs.length}`);
+      console.log(
+        `  newly stored (first seen after this request's submission): ${fresh}/${msgs.length}`,
+      );
       console.log(`  boundary: ${JSON.stringify(verdict)}`);
     }
     const orphan = db
@@ -295,8 +299,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
 
   function showOracle(): void {
-    // P2 oracle: only counts and order of accepted stable identities around
-    // each requested boundary — the phone response remains the source of truth.
+    // Database-oracle cross-check (supporting evidence, ADR-0017): counts and
+    // order of accepted stable identities around each requested boundary —
+    // the phone response remains the source of truth. Zero-timestamp rows are
+    // excluded, matching the receipt writer's oracle.
     const rows = db
       .prepare(
         `SELECT r.request_id,
@@ -307,31 +313,44 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
                 COUNT(DISTINCT m.msg_hash) AS distinct_ids
            FROM request r
            LEFT JOIN batch b ON b.request_session_id = r.request_id
-           LEFT JOIN message m ON m.batch_seq = b.seq
+           LEFT JOIN message m ON m.batch_seq = b.seq AND m.timestamp > 0
           GROUP BY r.request_id ORDER BY r.submitted_at`,
       )
       .all();
     console.log(JSON.stringify(rows, null, 2));
   }
 
+  let quitting = false;
   async function quit(): Promise<void> {
+    if (quitting) return; // a second quit/SIGINT must not race the first
+    quitting = true;
     console.log("…stopping");
+    let stopFailed = false;
     try {
       await session.stop();
+    } catch (err) {
+      stopFailed = true;
+      console.error("session stop failed:", err);
     } finally {
       releaseLease();
     }
-    const matrix = {
-      runId,
-      gitHead: process.env.GIT_HEAD ?? null,
-      batches: db.prepare("SELECT * FROM batch ORDER BY seq").all(),
-      requests: db.prepare("SELECT * FROM request ORDER BY submitted_at").all(),
-      notes: db.prepare("SELECT * FROM note ORDER BY at").all(),
-    };
-    const out = path.join(privateDir, `matrix-${runId}.json`);
-    await writeFile(out, `${JSON.stringify(matrix, null, 2)}\n`);
-    console.log(`📄 matrix → ${out}\n🗄 observations → ${dbPath}`);
-    process.exit(0);
+    // The matrix is written even when teardown failed — observations are the
+    // point of the run and must survive a bad stop.
+    try {
+      const matrix = {
+        runId,
+        gitHead: process.env.GIT_HEAD ?? null,
+        batches: db.prepare("SELECT * FROM batch ORDER BY seq").all(),
+        requests: db.prepare("SELECT * FROM request ORDER BY submitted_at").all(),
+        notes: db.prepare("SELECT * FROM note ORDER BY at").all(),
+      };
+      const out = path.join(privateDir, `matrix-${runId}.json`);
+      await writeFile(out, `${JSON.stringify(matrix, null, 2)}\n`);
+      console.log(`📄 matrix → ${out}\n🗄 observations → ${dbPath}`);
+    } catch (err) {
+      console.error("matrix write failed:", err);
+    }
+    process.exit(stopFailed ? 1 : 0);
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: "history> " });
@@ -416,6 +435,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
   process.on("SIGINT", () => void quit());
 
+  try {
+    mkdirSync(lease);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      console.error(`⛔ lease held: ${lease} exists — another worker owns the live account.`);
+      process.exit(2);
+    }
+    throw err;
+  }
   console.log(`lease acquired: ${lease}\nconnecting account "${config.account}"…`);
   rl.prompt();
   try {

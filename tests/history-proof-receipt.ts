@@ -37,7 +37,15 @@ const root = path.join(here, "..");
 
 const [dbFile, runLog] = process.argv.slice(2);
 
-const redact = (text: string): string => text.replace(/\+?\d{7,15}/g, "<redacted>");
+/**
+ * Redact anything shaped like a native address: any run of digits (allowing
+ * common separators) totalling 7+ digits. Over-redaction of e.g. dates in
+ * free-form notes is accepted — privacy beats note fidelity.
+ */
+export const redact = (text: string): string =>
+  text.replace(/\+?\d[\d\s\-().]{4,28}\d/g, (m) =>
+    m.replace(/\D/g, "").length >= 7 ? "<redacted>" : m,
+  );
 
 interface Oracle {
   recordCount: number;
@@ -84,11 +92,13 @@ function oracle(db: DatabaseSync): Oracle {
  */
 export function deliveryAcksFor(log: string, requestId: string): string[] {
   const acks: string[] = [];
-  const stanzas = log.split(/"tag": "receipt"/).slice(1);
-  for (const stanza of stanzas) {
-    const head = stanza.slice(0, 400);
-    if (!head.includes('"type": "peer_msg"') || !head.includes(`"id": "${requestId}"`)) continue;
-    const t = /"t": "(\d+)"/.exec(head)?.[1];
+  // One stanza per split segment. Judge only the stanza's own attrs block so
+  // a neighboring stanza's fields can never be credited to this request.
+  for (const segment of log.split(/"tag": "receipt"/).slice(1)) {
+    const attrs = /"attrs": \{([\s\S]{0,400}?)\}/.exec(segment)?.[1];
+    if (!attrs) continue;
+    if (!attrs.includes('"type": "peer_msg"') || !attrs.includes(`"id": "${requestId}"`)) continue;
+    const t = /"t": "(\d+)"/.exec(attrs)?.[1];
     if (t) acks.push(new Date(Number(t) * 1000).toISOString());
   }
   return acks;
@@ -111,6 +121,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       WHERE b.request_session_id = ?`,
   );
   const log = readFileSync(runLog, "utf8");
+  // An empty or wrong log would make every ack list [] — indistinguishable
+  // from "checked and found none". Refuse to assert evidence from it.
+  if (!log.includes('"tag": "receipt"')) {
+    throw new Error(
+      "run log contains no receipt stanzas (wrong file or LOG_LEVEL != debug) — refusing to assert delivery-ack evidence",
+    );
+  }
   const perRequest = requests.map((r) => {
     const correlated = correlatedStmt.get(String(r.request_id)) as {
       batches: number;
