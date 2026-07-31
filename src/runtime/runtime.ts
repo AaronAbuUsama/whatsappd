@@ -160,6 +160,11 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // Writing without a claim is exactly what the lease exists to prevent, so
     // an event that outlives its claim fails rather than reaching the mirror.
     if (!claim) throw new Error(`no account claim held for "${accountId}"`);
+    // The cached claim is only evidence until it expires: a loop that stalls
+    // past the TTL can reach here before the heartbeat notices, and by then
+    // another worker may hold the account.
+    if (claim.expiresAt <= Date.now())
+      throw new Error(`the account claim for "${accountId}" expired at ${claim.expiresAt}`);
     const accepted = await backend.data.accept(
       accountId,
       [{ eventId: crypto.randomUUID(), observedAt: Date.now(), event }],
@@ -337,35 +342,41 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   function start(): Promise<void> {
     const active = current;
     if (active && !active.stopping) return active.starting ?? Promise.resolve();
-    // Callers that arrive before a run exists — or while one is being torn
-    // down — share this one startup. Letting each build its own would have them
-    // race for the account, and the loser's failure would leave the runtime
-    // stopped despite everyone having asked for it to start.
-    pendingStart ??= (async () => {
-      // A start during a teardown waits for it rather than racing its release.
+    const previous = pendingStart;
+    const run: Run = {
+      lease: undefined,
+      session: undefined,
+      unsubscribe: undefined,
+      heartbeat: undefined,
+      supervisor: undefined,
+      starting: undefined,
+      stopping: undefined,
+    };
+    // Published before anything is awaited, so a `stop()` on the next line can
+    // see the run it is meant to cancel. Yielding first would leave `stop()`
+    // finding nothing to stop and the startup running on past it.
+    current = run;
+    const startup = (async () => {
+      // Whatever this run replaces finishes first: an earlier startup, then the
+      // teardown that made room for this one.
+      await previous?.catch(() => {});
       await active?.stopping?.catch(() => {});
-      const run: Run = {
-        lease: undefined,
-        session: undefined,
-        unsubscribe: undefined,
-        heartbeat: undefined,
-        supervisor: undefined,
-        starting: undefined,
-        stopping: undefined,
-      };
-      current = run;
-      const starting = open(run).catch(async (error: unknown) => {
+      if (!live(run)) throw new Error(`runtime for "${accountId}" was stopped while starting`);
+      try {
+        await open(run);
+      } catch (error) {
         // Leaves nothing claimed or subscribed behind, so a later start() is a
         // real retry rather than the same rejection.
         await teardown(run).catch(() => {});
         throw error;
-      });
-      run.starting = starting;
-      await starting;
-    })().finally(() => {
-      pendingStart = undefined;
-    });
-    return pendingStart;
+      }
+    })();
+    // Callers arriving while this is in flight share it rather than building a
+    // second run and racing this one for the account.
+    run.starting = startup;
+    pendingStart = startup;
+    void startup.catch(() => {});
+    return startup;
   }
 
   return {

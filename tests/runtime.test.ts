@@ -8,6 +8,7 @@ import { expect, test } from "./_expect.ts";
 import {
   StaleAccountClaimError,
   UnsupportedDurableEventError,
+  type AccountLeaseStore,
   type WhatsAppBackend,
   type WhatsAppClient,
   type WhatsAppClientFrame,
@@ -645,6 +646,42 @@ test("concurrent starts share one startup instead of racing for the account", as
   expect(opened()).toBe(1);
 
   await runtime.stop();
+});
+
+test("a stop right after start cancels it instead of missing it", async () => {
+  const { runtime, backend, opened } = lane("personal");
+
+  const starting = runtime.start();
+  await runtime.stop();
+
+  await assert.rejects(starting, /stopped while starting/);
+  expect(opened()).toBe(0);
+  expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("a write is refused once its claim has expired", async () => {
+  const inner = memoryLeaseStore();
+  const leases: AccountLeaseStore = {
+    ...inner,
+    async acquire(accountId, holderId, ttlMs) {
+      const result = await inner.acquire(accountId, holderId, ttlMs);
+      // The claim the runtime caches is already past its expiry, as it would be
+      // for a worker whose loop stalled past the TTL.
+      return result.acquired
+        ? { acquired: true, lease: { ...result.lease, expiresAt: Date.now() - 1 } }
+        : result;
+    },
+  };
+  const { driver, runtime } = lane("personal", {
+    backend: { ...memoryBackend(), leases },
+  });
+  await runtime.start();
+
+  await assert.rejects(
+    driver.emit({ type: "message", message: hello() }),
+    (error: unknown) => error instanceof SubscriptionHandlerError && /expired/.test(error.message),
+  );
+  expect((await runtime.snapshot()).revision).toBe(0);
 });
 
 test("a terminal session failure is reported by stop, not swallowed", async () => {
