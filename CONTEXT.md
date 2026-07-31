@@ -45,8 +45,9 @@ _Avoid_: Event archive, application database, observation log
 A durable, account-scoped, revisioned batch of normalized WhatsApp events,
 appended at the same acceptance boundary that projects the Current Mirror.
 Backend consumers follow these batches from their own cursor when they require
-source history rather than current state. Ephemeral connection and presence
-signals are excluded.
+source history rather than current state. An ephemeral connection or presence
+status is excluded; the instant it was observed at is a derived observation and
+is included.
 _Avoid_: Client patch, live callback, application observation
 
 **Backend Capability**:
@@ -104,6 +105,12 @@ short expiry. Clients treat an expired state or lease mismatch as unavailable;
 they never hydrate a previously stored `online` or pairing status as current.
 _Avoid_: Durable online event, last known connection, startup truth
 
+**Observed Instant**:
+When an address was last seen present, or when an account last connected or
+disconnected — derived from an ephemeral signal, durable, and carrying no
+status. It is history a restart restores; it never says anything about now.
+_Avoid_: Stored presence, last known status, cached online state
+
 **Command Attempt**:
 A leased claim on one durable command. An expired claim may return to pending
 only before execution begins; an expired executing attempt becomes terminal
@@ -120,7 +127,7 @@ _Avoid_: Timestamp ordering, heuristic deduplication
 The bounded first frame of a client watch — the account, chat summaries,
 contacts, and groups. An active conversation loads Stored Message Pages
 separately.
-_Avoid_: Full-mirror dump, event replay
+_Avoid_: Full-mirror dump, event replay, per-chat message window
 
 **Lifecycle Operation**:
 An account-scoped command that changes link state rather than chat state —

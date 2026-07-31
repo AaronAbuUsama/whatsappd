@@ -11,18 +11,43 @@
  *
  * @packageDocumentation
  */
+import { isOnline, isTerminal, type Status } from "../model/status.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import {
   AccountAlreadyClaimedError,
   AccountNotHeldError,
   type AccountLease,
+  type StoredMessagePage,
+  type StoredMessagePageOptions,
   type WhatsAppBackend,
   type WhatsAppClient,
   type WhatsAppClientFrame,
   type WhatsAppDurableEvent,
   type WhatsAppSnapshot,
 } from "./contracts.ts";
+
+/**
+ * What a connection status durably says about *when*, if anything.
+ *
+ * @remarks
+ * Only the two ends of the lifecycle are facts worth keeping: the account was
+ * online at this instant, or it had gone. `connecting`, `pairing` and
+ * `authenticated` are transitions — the account is neither reachable nor known
+ * to be gone — and stamping either timestamp from one would misreport a
+ * reconnect attempt as a disconnection (ADR-0020).
+ *
+ * `backing_off` counts as gone, and has to: a dropped socket goes straight
+ * there rather than through `disconnected` (`src/machine.ts`, `onClose`), so
+ * reading only the literal phase would leave the commonest disconnection of all
+ * unrecorded and last-disconnected reflecting nothing but deliberate stops.
+ */
+const connectionInstant = (status: Status): "connected" | "disconnected" | undefined =>
+  isOnline(status)
+    ? "connected"
+    : status.phase === "disconnected" || status.phase === "backing_off" || isTerminal(status)
+      ? "disconnected"
+      : undefined;
 
 /**
  * The part of a live session the runtime uses.
@@ -80,8 +105,10 @@ export interface WhatsAppRuntime {
   start(): Promise<void>;
   /** Stop consuming, close the session, and release the account lease. */
   stop(): Promise<void>;
-  /** The account's current mirror and revision. */
+  /** The account's current Snapshot Window and revision. */
   snapshot(): Promise<WhatsAppSnapshot>;
+  /** One chat's stored messages, newest first. Reads storage, never WhatsApp. */
+  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
   /** Observe published frames. The client seam; applications use a client. */
   onFrame(listener: (frame: WhatsAppClientFrame) => void): Unsubscribe;
 }
@@ -144,17 +171,15 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   };
 
   /**
-   * Persist one observation, then publish what it changed.
+   * Persist one observation under a named claim, then publish what it changed.
    *
    * @remarks
-   * A replay changes nothing, takes no revision, and therefore produces no
-   * client update.
+   * The claim is a parameter rather than a read of `lease`, because teardown
+   * has to write its final observation *after* clearing that field — see
+   * {@link release}. Every other caller passes the live one through
+   * {@link accept}.
    */
-  const accept = async (event: WhatsAppDurableEvent): Promise<void> => {
-    const claim = lease;
-    // Writing without a claim is exactly what the lease exists to prevent, so
-    // an event that outlives its claim fails rather than reaching the mirror.
-    if (!claim) throw new AccountNotHeldError(accountId, "unclaimed");
+  const acceptUnder = async (claim: AccountLease, event: WhatsAppDurableEvent): Promise<void> => {
     // The cached claim is only evidence until it expires: a loop that stalls
     // past the TTL can reach here before the heartbeat notices, and by then
     // another worker may hold the account.
@@ -170,23 +195,40 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   };
 
   /**
+   * Persist one observation, then publish what it changed.
+   *
+   * @remarks
+   * A replay changes nothing, takes no revision, and therefore produces no
+   * client update.
+   */
+  const accept = (event: WhatsAppDurableEvent): Promise<void> => {
+    const claim = lease;
+    // Writing without a claim is exactly what the lease exists to prevent, so
+    // an event that outlives its claim fails rather than reaching the mirror.
+    if (!claim) throw new AccountNotHeldError(accountId, "unclaimed");
+    return acceptUnder(claim, event);
+  };
+
+  /**
    * What this slice consumes from the session.
    *
    * @remarks
-   * Only what the mirror can project is subscribed at all. Update, contact and
-   * group events have no projection yet and are not observed in this slice —
-   * which is a scope statement, not a bypass: nothing reaches the mirror by
-   * another route, and the store still refuses any unsupported event type a
-   * caller hands it. What is observed is accepted whole, never trimmed to what
-   * currently projects.
+   * Only what the mirror can project is subscribed at all. `update` events have
+   * no projection yet and are not observed — which is a scope statement, not a
+   * bypass: nothing reaches the mirror by another route, and the store still
+   * refuses any unsupported event type a caller hands it. What is observed is
+   * accepted whole, never trimmed to what currently projects.
    */
   const handlers: WhatsAppSessionHandlers = {
     message: (message) => accept({ type: "message", message }),
     conversationSync: (batch) => accept({ type: "conversation_sync", batch }),
+    contact: (contact) => accept({ type: "contact", contact }),
+    group: (group) => accept({ type: "group", group }),
     // Connection and presence are live signals with an expiry, never records:
     // a stored `online` or `typing` would be reported as current after it
-    // stopped being true.
-    connection: (status) => {
+    // stopped being true. Only the instant each was observed at is durable, and
+    // an instant restores as history rather than as current state (ADR-0020).
+    connection: async (status) => {
       const claim = lease;
       // Connection truth is only ever this claim's; without one there is
       // nothing a client could treat as current.
@@ -201,9 +243,34 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
           fencingToken: claim.fencingToken,
         },
       });
+      const kind = connectionInstant(status);
+      if (kind) await accept({ type: "account_connection", kind, at: observedAt });
     },
-    presence: (presence) => {
-      publish({ type: "presence", presence, expiresAt: Date.now() + freshnessMs });
+    presence: async (presence) => {
+      const observedAt = Date.now();
+      publish({ type: "presence", presence, expiresAt: observedAt + freshnessMs });
+      // An ephemeral signal must not be able to take the account down. Unlike a
+      // message, a dropped last-seen loses nothing that cannot be observed
+      // again, so a frame arriving without a claim is let go exactly as the
+      // connection handler lets one go.
+      if (!lease) return;
+      // `unavailable` is the one kind that is not evidence of presence: it says
+      // the address is gone, and `src/baileys/presence.ts` stamps `at` with
+      // *receipt* time rather than WhatsApp's own last-seen. Recording it would
+      // therefore date a peer offline for a week to right now — and `advance()`
+      // would make that permanent, destroying the very history this exists to
+      // keep (ADR-0020).
+      if (presence.kind === "unavailable") return;
+      // What remains — typing, recording, available, idle — all mean the
+      // address was there at that instant, and none of them stores what it was
+      // doing. In a group WhatsApp names the participant and in a 1:1 the chat
+      // is the peer; the address that was present is recorded either way, never
+      // the chat a group's typing arrived on.
+      await accept({
+        type: "last_seen",
+        contactId: presence.participant ?? presence.chatId,
+        at: presence.at ?? observedAt,
+      });
     },
   };
 
@@ -234,6 +301,29 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
 
     if (timer) clearInterval(timer);
     off?.();
+    // The final disconnection is stamped here rather than from the connection
+    // handler, and it has to be: teardown unsubscribes and gives the claim back
+    // before the session reaches `disconnected` (`src/machine.ts`), so that
+    // handler can never see the instant this runtime stopped consuming the
+    // account and `lastDisconnectedAt` would stay stale through every shutdown.
+    // A crash is a disconnection too, so this is not conditional on stopping
+    // cleanly — a field that only recorded deliberate stops would miss the
+    // commonest way an account goes offline. `off` is the evidence there was a
+    // session at all: a startup that failed before subscribing never connected,
+    // so it has no disconnection to record.
+    let unstamped: unknown;
+    if (off && claim) {
+      // Held rather than thrown, and folded in only below: a store that cannot
+      // take this last write must not overwrite the failure that killed the
+      // session, which is the one the caller needs to see.
+      await acceptUnder(claim, {
+        type: "account_connection",
+        kind: "disconnected",
+        at: Date.now(),
+      }).catch((error: unknown) => {
+        unstamped = error;
+      });
+    }
     try {
       await open?.stop?.();
       // Nothing awaited the supervisor while the session ran, so its terminal
@@ -242,6 +332,9 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     } catch (error) {
       failure ??= { error };
     } finally {
+      // Reported only when nothing worse happened: the session's own death
+      // outranks a teardown that could not write its last timestamp.
+      if (unstamped !== undefined) failure ??= { error: unstamped };
       // A claim outliving a failed close would lock the account out until its
       // TTL expired, so the release does not depend on the close working.
       if (claim) await backend.leases.release(claim);
@@ -386,6 +479,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     start,
     stop,
     snapshot: () => backend.data.snapshot(accountId),
+    messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
     onFrame(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -404,6 +498,10 @@ const CANCELLED = Symbol("cancelled");
  */
 export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAppClient {
   return {
+    // Straight to the mirror, deliberately independent of any watch: paging is
+    // a read, and nothing about it asks WhatsApp for anything (ADR-0010).
+    messages: (chatId, options) => runtime.messages(chatId, options),
+
     async *watch(options) {
       const signal = options?.signal;
       const queued: WhatsAppClientFrame[] = [];

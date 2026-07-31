@@ -86,10 +86,22 @@ const runtime = createWhatsAppRuntime({
 // Returns once the account is being consumed; the session keeps running.
 await runtime.start();
 
-for await (const frame of createInProcessWhatsAppClient(runtime).watch()) {
-  if (frame.type === "snapshot") console.log(frame.snapshot.revision, frame.snapshot.messages);
+const client = createInProcessWhatsAppClient(runtime);
+
+for await (const frame of client.watch()) {
+  // The snapshot is account state, chat summaries, contacts, and groups - never
+  // a message window per chat.
+  if (frame.type === "snapshot") console.log(frame.snapshot.revision, frame.snapshot.chats);
   if (frame.type === "patch") console.log(frame.patch.revision, frame.patch.upserts);
 }
+
+// Opening a conversation reads its stored messages, newest first, then scrolls
+// back through `nextBefore`. This reads the backend only - it never asks
+// WhatsApp for anything.
+const page = await client.messages("15551234567@s.whatsapp.net", { limit: 25 });
+const older = page.nextBefore
+  ? await client.messages("15551234567@s.whatsapp.net", { before: page.nextBefore })
+  : undefined;
 
 // Releases the account lease, and reports a session that died on its own.
 await runtime.stop();
@@ -100,20 +112,32 @@ change as a patch whose `fromRevision` is the revision it applies to; a gap
 replaces state with a fresh snapshot rather than applying over it. Replaying a
 message the mirror already holds produces no patch.
 
+A conversation is fed by `messages()` and by the message upserts on `watch()`,
+and the two are reconciled on `(chatId, messageId)` rather than appended. That
+is what makes paging safe alongside live traffic: a backdated message can arrive
+as a patch _and_ appear in the older page that now contains it, and applying
+both by identity leaves one message. An exhausted cursor means nothing older is
+**stored** — never that WhatsApp has no more.
+
 Credentials, WhatsApp data, the account lease, and media bytes are four separate
 capabilities. `memoryBackend()` groups in-memory implementations of all four;
 each one — `memoryDataStore()`, `memoryLeaseStore()`, `memoryMediaStore()` — can
 be replaced individually. Starting a second runtime for an account another one
 holds rejects with `AccountAlreadyClaimedError` before any socket opens.
 
-This first slice projects text messages and the chats they belong to. A data
-store rejects any other durable event with `UnsupportedDurableEventError` rather
-than dropping it, so nothing reaches the mirror by a side route; the runtime
-correspondingly does not observe what it cannot yet project, so receipts,
-contact and group updates pass by without storing anything. A storage failure
-stops processing with the original failure instead of being logged and skipped.
-Connection and presence are live signals with an expiry: they are never stored
-and never replayed as current truth.
+This slice projects text messages, the chats they belong to, contacts, and
+groups. A data store rejects any other durable event with
+`UnsupportedDurableEventError` rather than dropping it, so nothing reaches the
+mirror by a side route; the runtime correspondingly does not observe what it
+cannot yet project, so receipts pass by without storing anything. A storage
+failure stops processing with the original failure instead of being logged and
+skipped.
+
+Connection and presence are live signals with an expiry: no status is ever
+stored, and none is replayed as current truth. The _instant_ each was observed
+at is durable, so `lastSeenAt` on a contact and `lastConnectedAt` /
+`lastDisconnectedAt` on the account survive a restart as history — a timestamp
+never claims anyone is online now.
 
 A watch ends with a `closed` frame when the runtime stops consuming the account.
 It carries the `error` when the session died on its own, and none when it was
