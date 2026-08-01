@@ -60,6 +60,8 @@ export {
   memoryLeaseStore,
   memoryMediaStore,
 } from "./runtime/memory.ts";
+export { libsqlBackend } from "./runtime/libsql.ts";
+export type { LibsqlBackend, LibsqlBackendOptions } from "./runtime/libsql.ts";
 export {
   AccountAlreadyClaimedError,
   AccountNotHeldError,

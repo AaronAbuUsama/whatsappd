@@ -73,6 +73,14 @@ try {
       assert.equal(typeof root.createWhatsAppRuntime, "function");
       assert.equal(typeof root.createInProcessWhatsAppClient, "function");
       assert.equal(typeof root.memoryBackend, "function");
+      assert.equal(typeof root.libsqlBackend, "function");
+      const backend = root.libsqlBackend({
+        url: "file:./not-opened.db",
+        accountId: "personal",
+        media: root.memoryMediaStore(),
+      });
+      assert.equal(typeof backend.close, "function");
+      await backend.close();
       for (const removed of ["createChannelAdapter", "bindTools"]) {
         assert.equal(removed in root, false);
       }

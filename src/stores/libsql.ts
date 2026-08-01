@@ -33,48 +33,83 @@ function safeTable(name: string): string {
   return name;
 }
 
-export function libsqlStore(options: LibsqlStoreOptions): CredentialStore {
-  const account = options.account ?? "default";
-  const table = safeTable(options.table ?? "wa_auth");
+/** One lazily opened libSQL client shared by several backend capabilities. */
+export interface LazyLibsqlClient {
+  get(): Promise<Client>;
+  close(): Promise<void>;
+}
 
-  // Lazily create the client + schema once, on first use. Memoized so concurrent
-  // first calls share a single init.
+export function lazyLibsqlClient(
+  options: Pick<LibsqlStoreOptions, "url" | "authToken">,
+  initialize: (client: Client) => Promise<void>,
+): LazyLibsqlClient {
   let ready: Promise<Client> | undefined;
-  const connect = (): Promise<Client> =>
-    (ready ??= (async () => {
-      let createClient: typeof import("@libsql/client").createClient;
-      try {
-        ({ createClient } = await import("@libsql/client"));
-      } catch {
-        throw new Error(
-          "libsqlStore requires the optional peer dependency '@libsql/client'. Install it: npm i @libsql/client",
-        );
-      }
-      const client = createClient({
-        url: options.url,
-        ...(options.authToken != null && { authToken: options.authToken }),
-      });
-      await client.execute(
-        `CREATE TABLE IF NOT EXISTS ${table} (account TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (account, key))`,
-      );
-      return client;
-    })());
+  let closed = false;
+  let closing: Promise<void> | undefined;
 
   return {
+    get() {
+      if (closed) return Promise.reject(new Error("libSQL client is closed"));
+      return (ready ??= (async () => {
+        let createClient: typeof import("@libsql/client").createClient;
+        try {
+          ({ createClient } = await import("@libsql/client"));
+        } catch {
+          throw new Error(
+            "libSQL requires the optional peer dependency '@libsql/client'. Install it: npm i @libsql/client",
+          );
+        }
+        const client = createClient({
+          url: options.url,
+          ...(options.authToken != null && { authToken: options.authToken }),
+        });
+        try {
+          await initialize(client);
+          return client;
+        } catch (error) {
+          client.close();
+          throw error;
+        }
+      })());
+    },
+    close() {
+      return (closing ??= (async () => {
+        closed = true;
+        if (ready)
+          await ready.then(
+            (client) => client.close(),
+            () => {},
+          );
+      })());
+    },
+  };
+}
+
+export function libsqlCredentialStore(
+  client: LazyLibsqlClient,
+  account: string,
+  tableName = "wa_auth",
+): CredentialStore {
+  const table = safeTable(tableName);
+  return {
     async read(key) {
-      const client = await connect();
-      const result = await client.execute({
+      const result = await (
+        await client.get()
+      ).execute({
         sql: `SELECT value FROM ${table} WHERE account = ? AND key = ?`,
         args: [account, key],
       });
       const value = result.rows[0]?.value;
-      return value == null ? null : String(value as string | number | bigint | Uint8Array);
+      if (value == null) return null;
+      if (typeof value !== "string") throw new Error("invalid libSQL credential value");
+      return value;
     },
     async write(entries) {
       const pairs = Object.entries(entries);
       if (pairs.length === 0) return;
-      const client = await connect();
-      await client.batch(
+      await (
+        await client.get()
+      ).batch(
         pairs.map(([key, value]) =>
           value === null
             ? { sql: `DELETE FROM ${table} WHERE account = ? AND key = ?`, args: [account, key] }
@@ -87,9 +122,20 @@ export function libsqlStore(options: LibsqlStoreOptions): CredentialStore {
       );
     },
     async clear() {
-      const client = await connect();
-      // Scope the wipe to THIS account — a shared db keeps other accounts intact.
-      await client.execute({ sql: `DELETE FROM ${table} WHERE account = ?`, args: [account] });
+      await (
+        await client.get()
+      ).execute({ sql: `DELETE FROM ${table} WHERE account = ?`, args: [account] });
     },
   };
+}
+
+export function libsqlStore(options: LibsqlStoreOptions): CredentialStore {
+  const account = options.account ?? "default";
+  const table = safeTable(options.table ?? "wa_auth");
+  const client = lazyLibsqlClient(options, async (opened) => {
+    await opened.execute(
+      `CREATE TABLE IF NOT EXISTS ${table} (account TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (account, key))`,
+    );
+  });
+  return libsqlCredentialStore(client, account, table);
 }
