@@ -15,7 +15,9 @@ export interface TextMessageInput {
   readonly isGroup?: boolean;
 }
 
-export function textMessage(input: TextMessageInput): InboundMessage {
+export function textMessage(
+  input: TextMessageInput,
+): InboundMessage & { readonly kind: "text"; readonly text: string } {
   const isGroup = input.isGroup ?? input.chatId.endsWith("@g.us");
   const fromMe = input.fromMe ?? false;
   if (isGroup && (!input.sender || input.sender === input.chatId)) {

@@ -124,15 +124,15 @@ pnpm add whatsappd @libsql/client
 import {
   createSession,
   createWhatsAppRuntime,
+  fileMediaStore,
   libsqlBackend,
-  memoryMediaStore,
   qrAuth,
 } from "whatsappd";
 
 const backend = libsqlBackend({
   url: "file:./whatsapp.db",
   accountId: "personal",
-  media: memoryMediaStore(),
+  media: fileMediaStore({ directory: "./whatsapp-media" }),
 });
 
 const runtime = createWhatsAppRuntime({
@@ -143,11 +143,18 @@ const runtime = createWhatsAppRuntime({
 await runtime.start();
 
 // A replacement backend opened on the same URL reconstructs the accepted
-// source, mirror, and stored pages.
+// source, mirror, stored pages, and attachment bytes.
 
 await runtime.stop(); // releases the account; does not close a shared backend
 await backend.close(); // the application owns the libSQL client's lifetime
 ```
+
+Images, videos, audio and voice notes, documents, and stickers are downloaded
+while the live WhatsApp handle is usable. `fileMediaStore()` writes their bytes
+as private immutable local objects; libSQL stores only the message's opaque
+media reference and its `stored` or typed `failed` state. Read bytes explicitly
+with `backend.media.read({ accountId, ref })`. The package does not invent a
+filesystem URL or browser delivery policy.
 
 A watch begins with the current snapshot and its revision, then delivers each
 change as a patch whose `fromRevision` is the revision it applies to; a gap
@@ -168,12 +175,15 @@ each one — `memoryDataStore()`, `memoryLeaseStore()`, `memoryMediaStore()` —
 be replaced individually. Starting a second runtime for an account another one
 holds rejects with `AccountAlreadyClaimedError` before any socket opens.
 
-This slice projects text messages, the chats they belong to, contacts, and
-groups. Normalized updates such as receipts are retained in the accepted-source
-feed even before they gain a current-mirror projection. A media edit retains its
-metadata there, never the live `download()` closure. Accepted-source reads are
-bounded and resume from their own `seq`; a storage failure stops processing with
-the original failure instead of being logged and skipped.
+The Current Mirror projects text and durable media messages, the chats they
+belong to, contacts, and groups. Normalized updates such as receipts are retained
+in the accepted-source feed even before they gain a current-mirror projection.
+Media edits capture a new immutable object instead of retaining a live
+`download()` closure or mutating bytes behind an older reference. A download or
+media-store error becomes a visible typed media failure and later messages keep
+processing; a structured data-store failure still stops the session and
+publishes no patch. Accepted-source reads are bounded and resume from their own
+`seq`.
 
 Snapshots expose `contactAliases`, mapping every WhatsApp-delivered PN or LID
 form to its owning contact record. When later evidence explicitly links two

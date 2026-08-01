@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
 import {
   StaleAccountClaimError,
+  type DurableInboundMessage,
+  type DurableMedia,
   type WhatsAppDataEvent,
   type WhatsAppDataStore,
   type WhatsAppDurableEvent,
@@ -25,6 +27,37 @@ type DataStoreFactory = () => Promise<DataStoreResource>;
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,
   event,
+});
+
+const durableMediaMessage = (
+  kind: "image" | "video" | "audio" | "document" | "sticker",
+  index: number,
+): DurableInboundMessage & {
+  readonly kind: "image" | "video" | "audio" | "document" | "sticker";
+  readonly media: DurableMedia;
+} => ({
+  id: `${kind}-${index}`,
+  chatId: PN,
+  sender: { id: PN, mode: "pn" },
+  fromMe: false,
+  timestamp: AT + index,
+  live: true,
+  isGroup: false,
+  kind,
+  media:
+    index % 2 === 0
+      ? {
+          state: "stored",
+          ref: `media:v1:${String(index).padStart(64, "0")}`,
+          byteLength: index + 10,
+          mimetype: `${kind}/test`,
+          ...(kind === "audio" && { ptt: true }),
+        }
+      : {
+          state: "failed",
+          reason: index === 1 ? "download_failed" : "store_failed",
+          mimetype: `${kind}/test`,
+        },
 });
 
 export function dataStoreConformance(name: string, create: DataStoreFactory): void {
@@ -88,6 +121,37 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       expect(
         (await resource.data.messages(ACCOUNT, PN)).messages.map(({ messageId }) => messageId),
       ).toEqual(["live", "synced"]);
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] every durable media kind and outcome crosses source and current codecs`, async () => {
+    const resource = await create();
+    try {
+      const messages = (["image", "video", "audio", "document", "sticker"] as const).map(
+        durableMediaMessage,
+      );
+      const accepted = await resource.data.accept(
+        ACCOUNT,
+        messages.map((message) => observed({ type: "message", message })),
+        1,
+      );
+      assert.equal(accepted.events.length, messages.length);
+
+      const page = await resource.data.messages(ACCOUNT, PN);
+      assert.equal(page.messages.length, messages.length);
+      for (const source of messages) {
+        const current = page.messages.find(({ messageId }) => messageId === source.id);
+        assert.equal(current?.kind, source.kind);
+        assert.ok(current);
+        assert.deepEqual(current.media, source.media);
+      }
+      const source = (await resource.data.accepted(ACCOUNT, 0))[0]?.events;
+      assert.deepEqual(
+        source?.map(({ event }) => event.type === "message" && event.message),
+        messages,
+      );
     } finally {
       await resource.close();
     }

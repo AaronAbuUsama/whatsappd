@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { GroupParticipant, GroupUpdate } from "../model/group.ts";
 import type { HistoryChat } from "../model/history.ts";
-import type { InboundMessage } from "../model/message.ts";
 import {
   UnsupportedDurableEventError,
   type AccountRecord,
   type ChatRecord,
   type ContactRecord,
+  type DurableInboundMessage,
   type GroupRecord,
   type MessageRecord,
   type MirrorDelete,
@@ -231,9 +231,16 @@ async function projectObserved(
 async function projectMessage(
   state: ProjectionState,
   accountId: string,
-  message: InboundMessage,
+  message: DurableInboundMessage,
 ): Promise<void> {
-  if (message.kind !== "text")
+  if (
+    message.kind !== "text" &&
+    message.kind !== "image" &&
+    message.kind !== "video" &&
+    message.kind !== "audio" &&
+    message.kind !== "document" &&
+    message.kind !== "sticker"
+  )
     throw new UnsupportedDurableEventError(`a "${message.kind}" message`);
 
   if (message.sender.alt !== undefined)
@@ -243,16 +250,23 @@ async function projectMessage(
       nativeIds: [message.sender.id, message.sender.alt],
     });
 
-  const record: MessageRecord = {
+  const base = {
     accountId,
     chatId: message.chatId,
     messageId: message.id,
     sender: message.sender,
     fromMe: message.fromMe,
     timestamp: message.timestamp,
-    kind: "text",
-    text: message.text,
   };
+  const record: MessageRecord =
+    message.kind === "text"
+      ? { ...base, kind: "text", text: message.text }
+      : {
+          ...base,
+          kind: message.kind,
+          media: message.media,
+          ...(message.text !== undefined && { text: message.text }),
+        };
   const existing = await state.message(record.chatId, record.messageId);
   if (!existing || !isDeepStrictEqual(existing, record))
     state.upsert({ type: "message", message: record });
@@ -272,8 +286,19 @@ async function projectEvent(
   switch (event.type) {
     case "message":
       return projectMessage(state, accountId, event.message);
-    case "update":
-      return;
+    case "update": {
+      if (event.update.kind !== "edit") return;
+      switch (event.update.message.kind) {
+        case "image":
+        case "video":
+        case "audio":
+        case "document":
+        case "sticker":
+          return projectMessage(state, accountId, event.update.message);
+        default:
+          return;
+      }
+    }
     case "conversation_sync": {
       const { context, chats, contacts, messages } = event.batch;
       if (context.projection.mode !== "upsert")

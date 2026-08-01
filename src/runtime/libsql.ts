@@ -1,4 +1,9 @@
 import type { Client, Row, Transaction } from "@libsql/client";
+import type { ContactUpdate } from "../model/contact.ts";
+import type { GroupUpdate } from "../model/group.ts";
+import type { ConversationSyncSource } from "../model/history.ts";
+import type { MessageContext, MessageFlags } from "../model/message.ts";
+import type { MessageRef } from "../model/outbound.ts";
 import {
   libsqlCredentialStore,
   lazyLibsqlClient,
@@ -12,6 +17,10 @@ import {
   type AccountRecord,
   type ChatRecord,
   type ContactRecord,
+  type DurableConversationSyncBatch,
+  type DurableInboundMessage,
+  type DurableMedia,
+  type DurableUpdate,
   type GroupRecord,
   type MediaStore,
   type MessageRecord,
@@ -315,222 +324,467 @@ function address(value: unknown, label: string): MessageRecord["sender"] {
 
 function messageRecord(value: unknown): MessageRecord {
   const record = object(value, "message record");
-  if (record.kind !== "text") throw new Error("invalid libSQL message.kind");
-  return {
+  const base = {
     accountId: string(record.accountId, "message.accountId"),
     chatId: string(record.chatId, "message.chatId"),
     messageId: string(record.messageId, "message.messageId"),
     sender: address(record.sender, "message.sender"),
     fromMe: boolean(record.fromMe, "message.fromMe"),
     timestamp: number(record.timestamp, "message.timestamp"),
-    kind: "text",
-    text: string(record.text, "message.text"),
+  };
+  switch (record.kind) {
+    case "text":
+      return { ...base, kind: "text", text: string(record.text, "message.text") };
+    case "image":
+    case "video":
+    case "audio":
+    case "document":
+    case "sticker": {
+      const text = optionalString(record.text, "message.text");
+      return {
+        ...base,
+        kind: record.kind,
+        media: durableMedia(record.media, "message.media"),
+        ...(text !== undefined && { text }),
+      };
+    }
+    default:
+      throw new Error("invalid libSQL message.kind");
+  }
+}
+
+function durableMedia(value: unknown, label: string, allowLegacyMetadata = false): DurableMedia {
+  const media = object(value, label);
+  if ("download" in media) throw new Error(`invalid libSQL ${label}.download`);
+  const metadata = {
+    ...(optionalString(media.mimetype, `${label}.mimetype`) !== undefined && {
+      mimetype: string(media.mimetype, `${label}.mimetype`),
+    }),
+    ...(optionalNumber(media.fileLength, `${label}.fileLength`) !== undefined && {
+      fileLength: number(media.fileLength, `${label}.fileLength`),
+    }),
+    ...(optionalString(media.fileName, `${label}.fileName`) !== undefined && {
+      fileName: string(media.fileName, `${label}.fileName`),
+    }),
+    ...(optionalNumber(media.seconds, `${label}.seconds`) !== undefined && {
+      seconds: number(media.seconds, `${label}.seconds`),
+    }),
+    ...(media.ptt !== undefined && { ptt: boolean(media.ptt, `${label}.ptt`) }),
+    ...(optionalNumber(media.width, `${label}.width`) !== undefined && {
+      width: number(media.width, `${label}.width`),
+    }),
+    ...(optionalNumber(media.height, `${label}.height`) !== undefined && {
+      height: number(media.height, `${label}.height`),
+    }),
+    ...(optionalString(media.caption, `${label}.caption`) !== undefined && {
+      caption: string(media.caption, `${label}.caption`),
+    }),
+  };
+  if (media.state === "stored") {
+    if ("reason" in media) throw new Error(`invalid libSQL ${label}.reason`);
+    const byteLength = integer(media.byteLength, `${label}.byteLength`);
+    if (byteLength < 0) throw new Error(`invalid libSQL ${label}.byteLength`);
+    return { ...metadata, state: "stored", ref: string(media.ref, `${label}.ref`), byteLength };
+  }
+  if (media.state === "failed") {
+    if ("ref" in media || "byteLength" in media) throw new Error(`invalid libSQL ${label}.ref`);
+    const reason = string(media.reason, `${label}.reason`);
+    if (reason !== "download_failed" && reason !== "store_failed")
+      throw new Error(`invalid libSQL ${label}.reason`);
+    return { ...metadata, state: "failed", reason };
+  }
+  if (
+    allowLegacyMetadata &&
+    media.state === undefined &&
+    !("ref" in media) &&
+    !("byteLength" in media) &&
+    !("reason" in media)
+  )
+    return { ...metadata, state: "failed", reason: "download_failed" };
+  throw new Error(`invalid libSQL ${label}.state`);
+}
+
+function messageContext(value: unknown, label: string): MessageContext {
+  const context = object(value, label);
+  const quoted =
+    context.quoted === undefined ? undefined : object(context.quoted, `${label}.quoted`);
+  return {
+    ...(quoted !== undefined && {
+      quoted: {
+        id: string(quoted.id, `${label}.quoted.id`),
+        from: string(quoted.from, `${label}.quoted.from`),
+      },
+    }),
+    ...(context.mentions !== undefined && {
+      mentions: strings(context.mentions, `${label}.mentions`),
+    }),
   };
 }
 
-function validateMessage(value: unknown, label: string): void {
+function messageFlags(value: unknown, label: string): MessageFlags {
+  const flags = object(value, label);
+  return {
+    ...(flags.viewOnce !== undefined && {
+      viewOnce: boolean(flags.viewOnce, `${label}.viewOnce`),
+    }),
+    ...(flags.ephemeral !== undefined && {
+      ephemeral: boolean(flags.ephemeral, `${label}.ephemeral`),
+    }),
+    ...(flags.edited !== undefined && { edited: boolean(flags.edited, `${label}.edited`) }),
+  };
+}
+
+function durableMessage(value: unknown, label: string): DurableInboundMessage {
   const message = object(value, label);
-  string(message.id, `${label}.id`);
-  string(message.chatId, `${label}.chatId`);
-  address(message.sender, `${label}.sender`);
-  boolean(message.fromMe, `${label}.fromMe`);
-  number(message.timestamp, `${label}.timestamp`);
-  boolean(message.live, `${label}.live`);
-  boolean(message.isGroup, `${label}.isGroup`);
-  optionalString(message.keyParticipant, `${label}.keyParticipant`);
-  optionalString(message.pushName, `${label}.pushName`);
-  if (message.context !== undefined) {
-    const context = object(message.context, `${label}.context`);
-    if (context.quoted !== undefined) {
-      const quoted = object(context.quoted, `${label}.context.quoted`);
-      string(quoted.id, `${label}.context.quoted.id`);
-      string(quoted.from, `${label}.context.quoted.from`);
-    }
-    if (context.mentions !== undefined) strings(context.mentions, `${label}.context.mentions`);
-  }
-  if (message.flags !== undefined) {
-    const flags = object(message.flags, `${label}.flags`);
-    for (const field of ["viewOnce", "ephemeral", "edited"])
-      if (flags[field] !== undefined) boolean(flags[field], `${label}.flags.${field}`);
-  }
+  const keyParticipant = optionalString(message.keyParticipant, `${label}.keyParticipant`);
+  const pushName = optionalString(message.pushName, `${label}.pushName`);
+  const base = {
+    id: string(message.id, `${label}.id`),
+    chatId: string(message.chatId, `${label}.chatId`),
+    sender: address(message.sender, `${label}.sender`),
+    ...(keyParticipant !== undefined && { keyParticipant }),
+    ...(pushName !== undefined && { pushName }),
+    fromMe: boolean(message.fromMe, `${label}.fromMe`),
+    timestamp: number(message.timestamp, `${label}.timestamp`),
+    live: boolean(message.live, `${label}.live`),
+    isGroup: boolean(message.isGroup, `${label}.isGroup`),
+    ...(message.context !== undefined && {
+      context: messageContext(message.context, `${label}.context`),
+    }),
+    ...(message.flags !== undefined && {
+      flags: messageFlags(message.flags, `${label}.flags`),
+    }),
+  };
   const kind = string(message.kind, `${label}.kind`);
-  if (kind === "text") string(message.text, `${label}.text`);
-  else if (["image", "video", "audio", "document", "sticker"].includes(kind)) {
-    const media = object(message.media, `${label}.media`);
-    if ("download" in media) throw new Error(`invalid libSQL ${label}.media.download`);
-    for (const field of ["mimetype", "fileName", "caption"])
-      optionalString(media[field], `${label}.media.${field}`);
-    for (const field of ["fileLength", "seconds", "width", "height"])
-      optionalNumber(media[field], `${label}.media.${field}`);
-    if (media.ptt !== undefined) boolean(media.ptt, `${label}.media.ptt`);
-    optionalString(message.text, `${label}.text`);
-  } else if (kind === "location") {
-    number(message.lat, `${label}.lat`);
-    number(message.lng, `${label}.lng`);
-    optionalString(message.name, `${label}.name`);
-    optionalString(message.address, `${label}.address`);
-  } else if (kind === "contacts") {
-    if (!Array.isArray(message.contacts)) throw new Error(`invalid libSQL ${label}.contacts`);
-    for (const [index, value] of message.contacts.entries()) {
-      const contact = object(value, `${label}.contacts[${index}]`);
-      optionalString(contact.name, `${label}.contacts[${index}].name`);
-      string(contact.vcard, `${label}.contacts[${index}].vcard`);
+  switch (kind) {
+    case "text":
+      return { ...base, kind, text: string(message.text, `${label}.text`) };
+    case "image":
+    case "video":
+    case "audio":
+    case "document":
+    case "sticker": {
+      const text = optionalString(message.text, `${label}.text`);
+      return {
+        ...base,
+        kind,
+        // Before durable capture, accepted source retained metadata only. It
+        // remains readable as an explicit failure; current mirror rows stay
+        // strict through messageRecord().
+        media: durableMedia(message.media, `${label}.media`, true),
+        ...(text !== undefined && { text }),
+      };
     }
-  } else if (kind === "poll") {
-    string(message.name, `${label}.name`);
-    strings(message.options, `${label}.options`);
-    number(message.selectableCount, `${label}.selectableCount`);
-  } else if (kind === "unsupported") string(message.rawType, `${label}.rawType`);
-  else throw new Error(`invalid libSQL ${label}.kind`);
-}
-
-function validateRef(value: unknown, label: string): void {
-  const ref = object(value, label);
-  string(ref.id, `${label}.id`);
-  string(ref.chatId, `${label}.chatId`);
-  boolean(ref.fromMe, `${label}.fromMe`);
-  optionalString(ref.participant, `${label}.participant`);
-}
-
-function validateUpdate(value: unknown, label: string): void {
-  const update = object(value, label);
-  validateRef(update.ref, `${label}.ref`);
-  optionalNumber(update.at, `${label}.at`);
-  switch (update.kind) {
-    case "receipt":
-      if (
-        !["pending", "server_ack", "delivered", "read", "played", "error"].includes(
-          string(update.status, `${label}.status`),
-        )
-      )
-        throw new Error(`invalid libSQL ${label}.status`);
-      optionalString(update.by, `${label}.by`);
-      return;
-    case "reaction":
-      optionalString(update.emoji, `${label}.emoji`);
-      optionalString(update.by, `${label}.by`);
-      boolean(update.removed, `${label}.removed`);
-      return;
-    case "edit":
-      validateMessage(update.message, `${label}.message`);
-      return;
-    case "revoke":
-      optionalString(update.by, `${label}.by`);
-      return;
+    case "location": {
+      const name = optionalString(message.name, `${label}.name`);
+      const locationAddress = optionalString(message.address, `${label}.address`);
+      return {
+        ...base,
+        kind,
+        lat: number(message.lat, `${label}.lat`),
+        lng: number(message.lng, `${label}.lng`),
+        ...(name !== undefined && { name }),
+        ...(locationAddress !== undefined && { address: locationAddress }),
+      };
+    }
+    case "contacts":
+      if (!Array.isArray(message.contacts)) throw new Error(`invalid libSQL ${label}.contacts`);
+      return {
+        ...base,
+        kind,
+        contacts: message.contacts.map((value, index) => {
+          const contact = object(value, `${label}.contacts[${index}]`);
+          const name = optionalString(contact.name, `${label}.contacts[${index}].name`);
+          return {
+            ...(name !== undefined && { name }),
+            vcard: string(contact.vcard, `${label}.contacts[${index}].vcard`),
+          };
+        }),
+      };
+    case "poll":
+      return {
+        ...base,
+        kind,
+        name: string(message.name, `${label}.name`),
+        options: strings(message.options, `${label}.options`),
+        selectableCount: number(message.selectableCount, `${label}.selectableCount`),
+      };
+    case "unsupported":
+      return { ...base, kind, rawType: string(message.rawType, `${label}.rawType`) };
     default:
       throw new Error(`invalid libSQL ${label}.kind`);
   }
 }
 
-function validateContact(value: unknown, label: string): void {
+function messageRef(value: unknown, label: string): MessageRef {
+  const ref = object(value, label);
+  const participant = optionalString(ref.participant, `${label}.participant`);
+  return {
+    id: string(ref.id, `${label}.id`),
+    chatId: string(ref.chatId, `${label}.chatId`),
+    fromMe: boolean(ref.fromMe, `${label}.fromMe`),
+    ...(participant !== undefined && { participant }),
+  };
+}
+
+function durableUpdate(value: unknown, label: string): DurableUpdate {
+  const update = object(value, label);
+  const at = optionalNumber(update.at, `${label}.at`);
+  const base = { ref: messageRef(update.ref, `${label}.ref`), ...(at !== undefined && { at }) };
+  switch (update.kind) {
+    case "receipt": {
+      const status = string(update.status, `${label}.status`);
+      const by = optionalString(update.by, `${label}.by`);
+      switch (status) {
+        case "pending":
+        case "server_ack":
+        case "delivered":
+        case "read":
+        case "played":
+        case "error":
+          return { ...base, kind: "receipt", status, ...(by !== undefined && { by }) };
+        default:
+          throw new Error(`invalid libSQL ${label}.status`);
+      }
+    }
+    case "reaction": {
+      const emoji = optionalString(update.emoji, `${label}.emoji`);
+      const by = optionalString(update.by, `${label}.by`);
+      return {
+        ...base,
+        kind: "reaction",
+        ...(emoji !== undefined && { emoji }),
+        ...(by !== undefined && { by }),
+        removed: boolean(update.removed, `${label}.removed`),
+      };
+    }
+    case "edit":
+      return { ...base, kind: "edit", message: durableMessage(update.message, `${label}.message`) };
+    case "revoke": {
+      const by = optionalString(update.by, `${label}.by`);
+      return { ...base, kind: "revoke", ...(by !== undefined && { by }) };
+    }
+    default:
+      throw new Error(`invalid libSQL ${label}.kind`);
+  }
+}
+
+function contactUpdate(value: unknown, label: string): ContactUpdate {
   const contact = object(value, label);
-  string(contact.id, `${label}.id`);
-  strings(contact.nativeIds, `${label}.nativeIds`);
-  for (const field of ["displayName", "profileName", "verifiedName", "username", "status"])
-    optionalString(contact[field], `${label}.${field}`);
   if (contact.imgUrl !== undefined && contact.imgUrl !== null && typeof contact.imgUrl !== "string")
     throw new Error(`invalid libSQL ${label}.imgUrl`);
-  optionalNumber(contact.at, `${label}.at`);
+  const displayName = optionalString(contact.displayName, `${label}.displayName`);
+  const profileName = optionalString(contact.profileName, `${label}.profileName`);
+  const verifiedName = optionalString(contact.verifiedName, `${label}.verifiedName`);
+  const username = optionalString(contact.username, `${label}.username`);
+  const status = optionalString(contact.status, `${label}.status`);
+  const at = optionalNumber(contact.at, `${label}.at`);
+  return {
+    id: string(contact.id, `${label}.id`),
+    nativeIds: strings(contact.nativeIds, `${label}.nativeIds`),
+    ...(displayName !== undefined && { displayName }),
+    ...(profileName !== undefined && { profileName }),
+    ...(verifiedName !== undefined && { verifiedName }),
+    ...(username !== undefined && { username }),
+    ...(contact.imgUrl !== undefined && { imgUrl: contact.imgUrl }),
+    ...(status !== undefined && { status }),
+    ...(at !== undefined && { at }),
+  };
 }
 
-function validateGroup(value: unknown, label: string): void {
+function groupUpdate(value: unknown, label: string): GroupUpdate {
   const group = object(value, label);
-  string(group.id, `${label}.id`);
-  number(group.at, `${label}.at`);
+  const base = {
+    id: string(group.id, `${label}.id`),
+    at: number(group.at, `${label}.at`),
+  };
   if (group.kind === "metadata") {
-    optionalString(group.subject, `${label}.subject`);
-    if (group.participants !== undefined) participants(group.participants);
-  } else if (group.kind === "participants") {
-    if (
-      !["add", "remove", "promote", "demote", "modify"].includes(
-        string(group.action, `${label}.action`),
-      )
-    )
+    const subject = optionalString(group.subject, `${label}.subject`);
+    return {
+      ...base,
+      kind: "metadata",
+      ...(subject !== undefined && { subject }),
+      ...(group.participants !== undefined && { participants: participants(group.participants) }),
+    };
+  }
+  if (group.kind !== "participants") throw new Error(`invalid libSQL ${label}.kind`);
+  const action = string(group.action, `${label}.action`);
+  switch (action) {
+    case "add":
+    case "remove":
+    case "promote":
+    case "demote":
+    case "modify":
+      return {
+        ...base,
+        kind: "participants",
+        action,
+        participants: participants(group.participants),
+      };
+    default:
       throw new Error(`invalid libSQL ${label}.action`);
-    participants(group.participants);
-  } else throw new Error(`invalid libSQL ${label}.kind`);
+  }
 }
 
-function validateConversationSync(value: unknown, label: string): void {
+function conversationSource(value: unknown, label: string): ConversationSyncSource {
+  const source = string(value, label);
+  switch (source) {
+    case "initial_bootstrap":
+    case "recent":
+    case "on_demand":
+    case "full":
+    case "unknown":
+      return source;
+    default:
+      throw new Error(`invalid libSQL ${label}`);
+  }
+}
+
+function conversationSync(value: unknown, label: string): DurableConversationSyncBatch {
   const batch = object(value, label);
   const context = object(batch.context, `${label}.context`);
-  if (
-    !["initial_bootstrap", "recent", "on_demand", "full", "unknown"].includes(
-      string(context.source, `${label}.context.source`),
-    )
-  )
-    throw new Error(`invalid libSQL ${label}.context.source`);
   const projection = object(context.projection, `${label}.context.projection`);
   const mode = string(projection.mode, `${label}.context.projection.mode`);
   if (mode !== "upsert" && mode !== "authoritative_replacement")
     throw new Error(`invalid libSQL ${label}.context.projection.mode`);
-  if (context.isLatest !== undefined) boolean(context.isLatest, `${label}.context.isLatest`);
-  optionalNumber(context.chunkOrder, `${label}.context.chunkOrder`);
-  optionalNumber(context.progress, `${label}.context.progress`);
-  optionalString(context.requestSessionId, `${label}.context.requestSessionId`);
-  if (mode === "authoritative_replacement") {
-    const scope = projection.scope;
-    if (scope !== "account")
-      string(
-        object(scope, `${label}.context.projection.scope`).chatId,
-        `${label}.context.projection.scope.chatId`,
-      );
-  }
   if (
     !Array.isArray(batch.chats) ||
     !Array.isArray(batch.contacts) ||
     !Array.isArray(batch.messages)
   )
     throw new Error(`invalid libSQL ${label}`);
-  for (const [index, value] of batch.chats.entries()) {
-    const chat = object(value, `${label}.chats[${index}]`);
-    string(chat.id, `${label}.chats[${index}].id`);
-    boolean(chat.isGroup, `${label}.chats[${index}].isGroup`);
-    optionalString(chat.subject, `${label}.chats[${index}].subject`);
-    optionalNumber(chat.lastMessageAt, `${label}.chats[${index}].lastMessageAt`);
-    if (chat.participants !== undefined) participants(chat.participants);
-  }
-  for (const [index, value] of batch.contacts.entries())
-    validateContact(value, `${label}.contacts[${index}]`);
-  for (const [index, value] of batch.messages.entries())
-    validateMessage(value, `${label}.messages[${index}]`);
+  const isLatest =
+    context.isLatest === undefined
+      ? undefined
+      : boolean(context.isLatest, `${label}.context.isLatest`);
+  const chunkOrder = optionalNumber(context.chunkOrder, `${label}.context.chunkOrder`);
+  const progress = optionalNumber(context.progress, `${label}.context.progress`);
+  const requestSessionId = optionalString(
+    context.requestSessionId,
+    `${label}.context.requestSessionId`,
+  );
+  const projectionValue: DurableConversationSyncBatch["context"]["projection"] =
+    mode === "upsert"
+      ? { mode: "upsert" }
+      : {
+          mode: "authoritative_replacement",
+          scope:
+            projection.scope === "account"
+              ? "account"
+              : {
+                  chatId: string(
+                    object(projection.scope, `${label}.context.projection.scope`).chatId,
+                    `${label}.context.projection.scope.chatId`,
+                  ),
+                },
+        };
+  return {
+    context: {
+      source: conversationSource(context.source, `${label}.context.source`),
+      ...(isLatest !== undefined && { isLatest }),
+      ...(chunkOrder !== undefined && { chunkOrder }),
+      ...(progress !== undefined && { progress }),
+      ...(requestSessionId !== undefined && { requestSessionId }),
+      projection: projectionValue,
+    },
+    chats: batch.chats.map((value, index) => {
+      const chat = object(value, `${label}.chats[${index}]`);
+      const subject = optionalString(chat.subject, `${label}.chats[${index}].subject`);
+      const lastMessageAt = optionalNumber(
+        chat.lastMessageAt,
+        `${label}.chats[${index}].lastMessageAt`,
+      );
+      return {
+        id: string(chat.id, `${label}.chats[${index}].id`),
+        isGroup: boolean(chat.isGroup, `${label}.chats[${index}].isGroup`),
+        ...(subject !== undefined && { subject }),
+        ...(lastMessageAt !== undefined && { lastMessageAt }),
+        ...(chat.participants !== undefined && { participants: participants(chat.participants) }),
+      };
+    }),
+    contacts: batch.contacts.map((value, index) => {
+      const contact = object(value, `${label}.contacts[${index}]`);
+      const displayName = optionalString(
+        contact.displayName,
+        `${label}.contacts[${index}].displayName`,
+      );
+      return {
+        id: string(contact.id, `${label}.contacts[${index}].id`),
+        nativeIds: strings(contact.nativeIds, `${label}.contacts[${index}].nativeIds`),
+        ...(displayName !== undefined && { displayName }),
+      };
+    }),
+    messages: batch.messages.map((message, index) =>
+      durableMessage(message, `${label}.messages[${index}]`),
+    ),
+  };
 }
 
 function dataEvents(value: unknown): readonly WhatsAppDataEvent[] {
   if (!Array.isArray(value)) throw new Error("invalid libSQL accepted events");
-  return value.map((entry, index) => {
-    const observation = object(entry, `accepted events[${index}]`);
-    number(observation.observedAt, `accepted events[${index}].observedAt`);
-    const event = object(observation.event, `accepted events[${index}].event`);
+  return value.map((entry, index): WhatsAppDataEvent => {
+    const label = `accepted events[${index}]`;
+    const observation = object(entry, label);
+    const observedAt = number(observation.observedAt, `${label}.observedAt`);
+    const event = object(observation.event, `${label}.event`);
     switch (event.type) {
       case "message":
-        validateMessage(event.message, `accepted events[${index}].event.message`);
-        break;
+        return {
+          observedAt,
+          event: {
+            type: "message",
+            message: durableMessage(event.message, `${label}.event.message`),
+          },
+        };
       case "update":
-        validateUpdate(event.update, `accepted events[${index}].event.update`);
-        break;
+        return {
+          observedAt,
+          event: { type: "update", update: durableUpdate(event.update, `${label}.event.update`) },
+        };
       case "conversation_sync":
-        validateConversationSync(event.batch, `accepted events[${index}].event.batch`);
-        break;
+        return {
+          observedAt,
+          event: {
+            type: "conversation_sync",
+            batch: conversationSync(event.batch, `${label}.event.batch`),
+          },
+        };
       case "contact":
-        validateContact(event.contact, `accepted events[${index}].event.contact`);
-        break;
+        return {
+          observedAt,
+          event: {
+            type: "contact",
+            contact: contactUpdate(event.contact, `${label}.event.contact`),
+          },
+        };
       case "group":
-        validateGroup(event.group, `accepted events[${index}].event.group`);
-        break;
+        return {
+          observedAt,
+          event: { type: "group", group: groupUpdate(event.group, `${label}.event.group`) },
+        };
       case "last_seen":
-        string(event.contactId, `accepted events[${index}].event.contactId`);
-        number(event.at, `accepted events[${index}].event.at`);
-        break;
+        return {
+          observedAt,
+          event: {
+            type: "last_seen",
+            contactId: string(event.contactId, `${label}.event.contactId`),
+            at: number(event.at, `${label}.event.at`),
+          },
+        };
       case "account_connection":
         if (event.kind !== "connected" && event.kind !== "disconnected")
-          throw new Error(`invalid libSQL accepted events[${index}].event.kind`);
-        number(event.at, `accepted events[${index}].event.at`);
-        break;
+          throw new Error(`invalid libSQL ${label}.event.kind`);
+        return {
+          observedAt,
+          event: {
+            type: "account_connection",
+            kind: event.kind,
+            at: number(event.at, `${label}.event.at`),
+          },
+        };
       default:
-        throw new Error(`invalid libSQL accepted events[${index}].event.type`);
+        throw new Error(`invalid libSQL ${label}.event.type`);
     }
-    return entry as WhatsAppDataEvent;
   });
 }
 

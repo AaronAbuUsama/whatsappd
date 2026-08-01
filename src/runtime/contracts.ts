@@ -12,8 +12,10 @@
  * @packageDocumentation
  */
 import type {
+  ConversationSyncBatch,
   GroupParticipant,
   InboundMessage,
+  MediaHandle,
   MediaMeta,
   PresenceUpdate,
   Status,
@@ -47,19 +49,33 @@ export type ObservedInstant =
       readonly at: number;
     };
 
-type MediaInboundMessage = Extract<
-  InboundMessage,
-  { kind: "image" | "video" | "audio" | "document" | "sticker" }
->;
+/** Durable outcome of consuming a live media handle while it was usable. */
+export type DurableMedia =
+  | (MediaMeta & {
+      readonly state: "stored";
+      readonly ref: string;
+      readonly byteLength: number;
+    })
+  | (MediaMeta & {
+      readonly state: "failed";
+      readonly reason: "download_failed" | "store_failed";
+    });
+
+type WithDurableMedia<Message> = Message extends { readonly media: MediaHandle }
+  ? Omit<Message, "media"> & { readonly media: DurableMedia }
+  : Message;
 
 /** A normalized message safe to retain after its live media handle expires. */
-export type DurableInboundMessage =
-  | Exclude<InboundMessage, MediaInboundMessage>
-  | (Omit<MediaInboundMessage, "media"> & { readonly media: MediaMeta });
+export type DurableInboundMessage = WithDurableMedia<InboundMessage>;
+
+/** A conversation-sync batch whose media handles have all been consumed. */
+export type DurableConversationSyncBatch = Omit<ConversationSyncBatch, "messages"> & {
+  readonly messages: readonly DurableInboundMessage[];
+};
 
 type EditUpdate = Extract<Update, { kind: "edit" }>;
 
-/** A source update whose edited media carries metadata, never a live closure. */
+/** A source update whose edited media carries durable state, never a live closure. */
 export type DurableUpdate =
   | Exclude<Update, EditUpdate>
   | (Omit<EditUpdate, "message"> & { readonly message: DurableInboundMessage });
@@ -75,7 +91,9 @@ export type DurableUpdate =
  * and is durable (ADR-0020).
  */
 export type WhatsAppDurableEvent =
-  | Exclude<WhatsAppEvent, { type: "connection" | "presence" | "update" }>
+  | Extract<WhatsAppEvent, { type: "contact" | "group" }>
+  | { readonly type: "message"; readonly message: DurableInboundMessage }
+  | { readonly type: "conversation_sync"; readonly batch: DurableConversationSyncBatch }
   | { readonly type: "update"; readonly update: DurableUpdate }
   | ObservedInstant;
 
@@ -93,8 +111,7 @@ export interface WhatsAppDataEvent {
   readonly event: WhatsAppDurableEvent;
 }
 
-/** One message in the current mirror. Identity is `(accountId, chatId, messageId)`. */
-export interface MessageRecord {
+interface MessageRecordBase {
   readonly accountId: string;
   readonly chatId: string;
   readonly messageId: string;
@@ -102,9 +119,18 @@ export interface MessageRecord {
   readonly sender: WhatsAppAddress;
   readonly fromMe: boolean;
   readonly timestamp: number;
-  readonly kind: "text";
-  readonly text: string;
 }
+
+/** One message in the current mirror. Identity is `(accountId, chatId, messageId)`. */
+export type MessageRecord = MessageRecordBase &
+  (
+    | { readonly kind: "text"; readonly text: string }
+    | {
+        readonly kind: "image" | "video" | "audio" | "document" | "sticker";
+        readonly media: DurableMedia;
+        readonly text?: string;
+      }
+  );
 
 /** One chat summary in the current mirror. Identity is `(accountId, chatId)`. */
 export interface ChatRecord {
@@ -425,7 +451,7 @@ export interface AccountLeaseStore {
   release(lease: AccountLease): Promise<boolean>;
 }
 
-/** Durable media bytes, keyed idempotently by account and message (ADR-0015). */
+/** Durable media bytes, keyed idempotently by account, message, kind, and content (ADR-0015). */
 export interface MediaStore {
   put(input: {
     accountId: string;
@@ -434,6 +460,8 @@ export interface MediaStore {
     bytes: Uint8Array;
     mimetype?: string;
   }): Promise<{ ref: string; byteLength: number }>;
+
+  read(input: { accountId: string; ref: string }): Promise<Uint8Array | null>;
 }
 
 /**
