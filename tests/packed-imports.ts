@@ -74,6 +74,18 @@ try {
       assert.equal(typeof root.createInProcessWhatsAppClient, "function");
       assert.equal(typeof root.memoryBackend, "function");
       assert.equal(typeof root.libsqlBackend, "function");
+      assert.equal(typeof root.fileMediaStore, "function");
+      const media = root.fileMediaStore({ directory: "./media" });
+      const stored = await media.put({
+        accountId: "personal",
+        message: { id: "packed", chatId: "person@s.whatsapp.net", fromMe: false },
+        kind: "document",
+        bytes: Uint8Array.from([1, 2, 3]),
+      });
+      assert.deepEqual(
+        await media.read({ accountId: "personal", ref: stored.ref }),
+        Uint8Array.from([1, 2, 3]),
+      );
       const backend = root.libsqlBackend({
         url: "file:./not-opened.db",
         accountId: "personal",

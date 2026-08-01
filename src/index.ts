@@ -62,6 +62,8 @@ export {
 } from "./runtime/memory.ts";
 export { libsqlBackend } from "./runtime/libsql.ts";
 export type { LibsqlBackend, LibsqlBackendOptions } from "./runtime/libsql.ts";
+export { fileMediaStore } from "./runtime/file-media.ts";
+export type { FileMediaStoreOptions } from "./runtime/file-media.ts";
 export {
   AccountAlreadyClaimedError,
   AccountNotHeldError,
@@ -75,6 +77,7 @@ export type {
   AccountRecord,
   ChatRecord,
   ContactRecord,
+  DurableMedia,
   DurableInboundMessage,
   DurableUpdate,
   GroupRecord,

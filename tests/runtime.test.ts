@@ -29,6 +29,7 @@ import {
   type WhatsAppRuntime,
 } from "../src/runtime/runtime.ts";
 import { memoryStore } from "../src/stores/memory.ts";
+import type { InboundMessage } from "../src/model/message.ts";
 import { SubscriptionHandlerError } from "../src/subscription.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 
@@ -88,6 +89,21 @@ function lane(
   };
 }
 
+const fixedLeaseStore = (fencingToken: number): AccountLeaseStore => ({
+  async acquire(accountId, holderId, ttlMs) {
+    return {
+      acquired: true,
+      lease: { accountId, holderId, fencingToken, expiresAt: Date.now() + ttlMs },
+    };
+  },
+  async renew(lease, ttlMs) {
+    return { renewed: true, lease: { ...lease, expiresAt: Date.now() + ttlMs } };
+  },
+  async release() {
+    return true;
+  },
+});
+
 /** Drain a client watch in the background so frame arrival is observable. */
 function watching(client: WhatsAppClient): {
   frames: WhatsAppClientFrame[];
@@ -124,6 +140,60 @@ const snapshotsOf = (frames: readonly WhatsAppClientFrame[]): WhatsAppSnapshot[]
 
 const hello = (id = "m1", text = "Hello"): ReturnType<typeof textMessage> =>
   textMessage({ id, chatId: PERSON, text, timestamp: AT });
+
+const image = (download: () => Promise<Buffer>): InboundMessage => ({
+  id: "image-1",
+  chatId: PERSON,
+  sender: { id: PERSON, mode: "pn" },
+  fromMe: false,
+  timestamp: AT,
+  live: true,
+  isGroup: false,
+  kind: "image",
+  media: {
+    mimetype: "image/png",
+    fileLength: 4,
+    width: 2,
+    height: 2,
+    caption: "proof",
+    download,
+  },
+});
+
+const voiceNote = (download: () => Promise<Buffer>): InboundMessage => ({
+  id: "voice-1",
+  chatId: PERSON,
+  sender: { id: PERSON, mode: "pn" },
+  fromMe: false,
+  timestamp: AT,
+  live: true,
+  isGroup: false,
+  kind: "audio",
+  media: {
+    mimetype: "audio/ogg; codecs=opus",
+    fileLength: 5,
+    seconds: 2,
+    ptt: true,
+    download,
+  },
+});
+
+const attachment = (
+  kind: "video" | "document" | "sticker",
+  id: string,
+  mimetype: string,
+  download: () => Promise<Buffer>,
+): InboundMessage => ({
+  id,
+  chatId: PERSON,
+  sender: { id: PERSON, mode: "pn" },
+  fromMe: false,
+  timestamp: AT,
+  live: true,
+  isGroup: false,
+  kind,
+  media: { mimetype, download },
+});
 
 /** The Snapshot Window of an account nothing has been observed for yet. */
 const empty = (accountId: string): WhatsAppSnapshot => ({
@@ -216,6 +286,145 @@ test("one text message records the change, updates current state, and takes one 
   });
 
   await seen.close();
+  await runtime.stop();
+});
+
+test("an image is stored before one accepted state reaches the Client, page, and source", async () => {
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+  let downloaded = false;
+  const data = memoryDataStore();
+  const backend: WhatsAppBackend = {
+    ...memoryBackend(),
+    media: memoryMediaStore(),
+    data: {
+      ...data,
+      async accept(accountId, events, fencingToken) {
+        assert.equal(downloaded, true, "media download must finish before data acceptance starts");
+        return data.accept(accountId, events, fencingToken);
+      },
+    },
+  };
+  const { driver, runtime, client } = lane("personal", { backend });
+  await runtime.start();
+  const seen = watching(client);
+  await tick();
+
+  await driver.emit({
+    type: "message",
+    message: image(async () => {
+      await tick();
+      downloaded = true;
+      return bytes;
+    }),
+  });
+  await tick();
+
+  const page = await client.messages(PERSON);
+  assert.equal(page.messages.length, 1);
+  const message = page.messages[0]!;
+  assert.equal(message.kind, "image");
+  assert.equal(message.media.state, "stored");
+  assert.equal(message.media.byteLength, bytes.byteLength);
+  assert.deepEqual(
+    await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+    Uint8Array.from(bytes),
+  );
+
+  const expected = {
+    accountId: "personal",
+    chatId: PERSON,
+    messageId: "image-1",
+    sender: { id: PERSON, mode: "pn" },
+    fromMe: false,
+    timestamp: AT,
+    kind: "image",
+    media: {
+      state: "stored",
+      ref: message.media.ref,
+      byteLength: 4,
+      mimetype: "image/png",
+      fileLength: 4,
+      width: 2,
+      height: 2,
+      caption: "proof",
+    },
+  };
+  const messageUpsert = patchesOf(seen.frames)[0]?.upserts.find(
+    (record) => record.type === "message",
+  );
+  assert.deepEqual(messageUpsert, { type: "message", message: expected });
+
+  const accepted = await backend.data.accepted("personal", 0);
+  expect(accepted[0]?.events).toEqual([
+    {
+      observedAt: accepted[0]?.events[0]?.observedAt,
+      event: {
+        type: "message",
+        message: {
+          id: "image-1",
+          chatId: PERSON,
+          sender: { id: PERSON, mode: "pn" },
+          fromMe: false,
+          timestamp: AT,
+          live: true,
+          isGroup: false,
+          kind: "image",
+          media: expected.media,
+        },
+      },
+    },
+  ]);
+
+  await seen.close();
+  await runtime.stop();
+});
+
+test("a voice note keeps its original audio bytes without a transcription dependency", async () => {
+  const bytes = Buffer.from([0x4f, 0x70, 0x75, 0x73, 0x21]);
+  const { driver, backend, runtime, client } = lane("personal");
+  await runtime.start();
+
+  await driver.emit({ type: "message", message: voiceNote(async () => bytes) });
+
+  const [message] = (await client.messages(PERSON)).messages;
+  assert.equal(message?.kind, "audio");
+  assert.equal(message.media.state, "stored");
+  assert.equal(message.media.ptt, true);
+  assert.deepEqual(
+    await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+    Uint8Array.from(bytes),
+  );
+
+  await runtime.stop();
+});
+
+test("video, document, and sticker bytes use the same durable media contract", async () => {
+  const cases = [
+    ["video", "video/mp4"],
+    ["document", "application/pdf"],
+    ["sticker", "image/webp"],
+  ] as const;
+  const { driver, backend, runtime, client } = lane("personal");
+  await runtime.start();
+
+  for (const [kind, mimetype] of cases) {
+    const bytes = Buffer.from(`${kind}-bytes`);
+    const id = `${kind}-1`;
+    await driver.emit({
+      type: "message",
+      message: attachment(kind, id, mimetype, async () => bytes),
+    });
+    const message = (await client.messages(PERSON)).messages.find(
+      (candidate) => candidate.messageId === id,
+    );
+    assert.equal(message?.kind, kind);
+    assert.equal(message.media.state, "stored");
+    assert.deepEqual(
+      await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+      Uint8Array.from(bytes),
+    );
+  }
+
   await runtime.stop();
 });
 
@@ -662,10 +871,69 @@ test("an update is retained in accepted source without inventing a projection", 
   expect((await data.accepted("personal", 0))[0]?.events[0]?.event.type).toBe("update");
 });
 
-test("a media edit retains cloneable metadata without its live download handle", async () => {
-  const { driver, backend, runtime } = lane("personal");
+test("conversation sync captures media in source order and accepts one durable batch", async () => {
+  const { driver, backend, runtime, client } = lane("personal");
   await runtime.start();
-  let downloads = 0;
+  const order: string[] = [];
+
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "recent", projection: { mode: "upsert" } },
+      chats: [{ id: PERSON, isGroup: false }],
+      contacts: [],
+      messages: [
+        {
+          ...image(async () => {
+            order.push("image");
+            return Buffer.from("sync-image");
+          }),
+          id: "sync-image",
+          live: false,
+        },
+        {
+          ...voiceNote(async () => {
+            order.push("voice");
+            return Buffer.from("sync-voice");
+          }),
+          id: "sync-voice",
+          live: false,
+        },
+      ],
+    },
+  });
+
+  expect(order).toEqual(["image", "voice"]);
+  const accepted = await backend.data.accepted("personal", 0);
+  assert.equal(accepted.length, 1);
+  const event = accepted[0]?.events[0]?.event;
+  assert.ok(event?.type === "conversation_sync");
+  assert.equal(event.batch.messages.length, 2);
+  for (const message of event.batch.messages) {
+    assert.ok(
+      message.kind === "image" ||
+        message.kind === "video" ||
+        message.kind === "audio" ||
+        message.kind === "document" ||
+        message.kind === "sticker",
+    );
+    assert.equal(message.media.state, "stored");
+    assert.equal("download" in message.media, false);
+  }
+  expect(
+    (await client.messages(PERSON)).messages.map((message) => message.messageId).sort(),
+  ).toEqual(["sync-image", "sync-voice"]);
+
+  await runtime.stop();
+});
+
+test("a media edit captures bytes and replaces the Client-visible durable record", async () => {
+  const { driver, backend, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({
+    type: "message",
+    message: { ...image(async () => Buffer.from("old")), id: "m1" },
+  });
 
   await driver.emit({
     type: "update",
@@ -686,28 +954,240 @@ test("a media edit retains cloneable metadata without its live download handle",
           width: 640,
           height: 480,
           async download() {
-            downloads++;
-            return Buffer.from("image");
+            return Buffer.from("edited-image");
           },
         },
       },
     },
   });
 
-  const event = (await backend.data.accepted("personal", 0))[0]?.events[0]?.event;
+  const event = (await backend.data.accepted("personal", 1))[0]?.events[0]?.event;
   assert.ok(event?.type === "update" && event.update.kind === "edit");
   assert.equal(event.update.message.kind, "image");
   if (event.update.message.kind === "image") {
-    expect(event.update.message.media).toEqual({
+    expect(event.update.message.media).toMatchObject({
       mimetype: "image/jpeg",
       width: 640,
       height: 480,
+      state: "stored",
+      byteLength: 12,
     });
     expect("download" in event.update.message.media).toBe(false);
   }
-  expect(downloads).toBe(0);
+  const [message] = (await client.messages(PERSON)).messages;
+  assert.equal(message?.kind, "image");
+  assert.equal(message.media.state, "stored");
+  assert.deepEqual(
+    await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+    Uint8Array.from(Buffer.from("edited-image")),
+  );
 
   await runtime.stop();
+});
+
+test("typed download and store failures reach the Client while later messages continue", async () => {
+  const stored = memoryMediaStore();
+  const backend: WhatsAppBackend = {
+    ...memoryBackend(),
+    media: {
+      async put(input) {
+        if (input.message.id === "store-failed") throw new Error("disk unavailable");
+        return stored.put(input);
+      },
+      read: (input) => stored.read(input),
+    },
+  };
+  const { driver, runtime, client } = lane("personal", { backend });
+  await runtime.start();
+
+  await driver.emit({
+    type: "message",
+    message: {
+      ...image(async () => {
+        throw new Error("expired media handle");
+      }),
+      id: "download-failed",
+    },
+  });
+  await driver.emit({
+    type: "message",
+    message: { ...image(async () => Buffer.from("downloaded")), id: "store-failed" },
+  });
+  await driver.emit({ type: "message", message: hello("after-failures", "Still running") });
+
+  const messages = (await client.messages(PERSON)).messages;
+  const downloadFailure = messages.find((message) => message.messageId === "download-failed");
+  const storeFailure = messages.find((message) => message.messageId === "store-failed");
+  const later = messages.find((message) => message.messageId === "after-failures");
+  assert.equal(downloadFailure?.kind, "image");
+  assert.deepEqual(downloadFailure.media, {
+    mimetype: "image/png",
+    fileLength: 4,
+    width: 2,
+    height: 2,
+    caption: "proof",
+    state: "failed",
+    reason: "download_failed",
+  });
+  assert.equal(storeFailure?.kind, "image");
+  assert.equal(storeFailure.media.state, "failed");
+  assert.equal(storeFailure.media.reason, "store_failed");
+  assert.equal(later?.kind, "text");
+  assert.equal(later.text, "Still running");
+
+  await runtime.stop();
+});
+
+test("repeated media reuses its ref while changed edit bytes preserve the old object", async () => {
+  const firstBytes = Buffer.from("same-image");
+  const editedBytes = Buffer.from("changed-image");
+  const { driver, backend, runtime, client } = lane("personal");
+  await runtime.start();
+
+  const original = { ...image(async () => firstBytes), id: "repeat-image" };
+  await driver.emit({ type: "message", message: original });
+  const [first] = (await client.messages(PERSON)).messages;
+  assert.equal(first?.kind, "image");
+  assert.equal(first.media.state, "stored");
+  const firstRef = first.media.ref;
+
+  await driver.emit({ type: "message", message: original });
+  const [repeated] = (await client.messages(PERSON)).messages;
+  assert.equal(repeated?.kind, "image");
+  assert.equal(repeated.media.state, "stored");
+  assert.equal(repeated.media.ref, firstRef);
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "edit",
+      ref: { id: "repeat-image", chatId: PERSON, fromMe: false },
+      message: { ...image(async () => editedBytes), id: "repeat-image" },
+    },
+  });
+  const [edited] = (await client.messages(PERSON)).messages;
+  assert.equal(edited?.kind, "image");
+  assert.equal(edited.media.state, "stored");
+  assert.notEqual(edited.media.ref, firstRef);
+  assert.deepEqual(
+    await backend.media.read({ accountId: "personal", ref: firstRef }),
+    Uint8Array.from(firstBytes),
+  );
+  assert.deepEqual(
+    await backend.media.read({ accountId: "personal", ref: edited.media.ref }),
+    Uint8Array.from(editedBytes),
+  );
+
+  await runtime.stop();
+});
+
+test("failed structured acceptance publishes nothing and leaves the canonical media orphan readable", async () => {
+  const data = memoryDataStore();
+  const media = memoryMediaStore();
+  let storedRef: string | undefined;
+  const backend: WhatsAppBackend = {
+    ...memoryBackend(),
+    media: {
+      async put(input) {
+        const result = await media.put(input);
+        storedRef = result.ref;
+        return result;
+      },
+      read: (input) => media.read(input),
+    },
+    data: {
+      ...data,
+      async accept() {
+        throw new Error("injected acceptance failure");
+      },
+    },
+  };
+  const { driver, runtime, client } = lane("personal", { backend });
+  await runtime.start();
+  const seen = watching(client);
+  await tick();
+  const bytes = Buffer.from("orphaned-but-complete");
+
+  await assert.rejects(
+    driver.emit({ type: "message", message: image(async () => bytes) }),
+    SubscriptionHandlerError,
+  );
+  await tick();
+
+  expect(patchesOf(seen.frames)).toEqual([]);
+  expect(await runtime.snapshot()).toEqual(empty("personal"));
+  expect(await data.accepted("personal", 0)).toEqual([]);
+  expect((await data.messages("personal", PERSON)).messages).toEqual([]);
+  assert.ok(storedRef);
+  assert.deepEqual(
+    await media.read({ accountId: "personal", ref: storedRef }),
+    Uint8Array.from(bytes),
+  );
+
+  await seen.close();
+  await assert.rejects(runtime.stop(), /injected acceptance failure/);
+});
+
+test("a stale holder cannot remove media already accepted by its replacement", async () => {
+  const data = memoryDataStore();
+  const media = memoryMediaStore();
+  let oldAcceptEntered!: () => void;
+  let releaseOldAccept!: () => void;
+  const oldAtBoundary = new Promise<void>((resolve) => {
+    oldAcceptEntered = resolve;
+  });
+  const oldMayContinue = new Promise<void>((resolve) => {
+    releaseOldAccept = resolve;
+  });
+  const oldBackend: WhatsAppBackend = {
+    credentials: memoryStore(),
+    leases: fixedLeaseStore(1),
+    media,
+    data: {
+      ...data,
+      async accept(accountId, events, fencingToken) {
+        if (events[0]?.event.type === "message") {
+          oldAcceptEntered();
+          await oldMayContinue;
+        }
+        return data.accept(accountId, events, fencingToken);
+      },
+    },
+  };
+  const replacementBackend: WhatsAppBackend = {
+    credentials: memoryStore(),
+    leases: fixedLeaseStore(2),
+    media,
+    data,
+  };
+  const old = lane("personal", { backend: oldBackend });
+  const replacement = lane("personal", { backend: replacementBackend });
+  const bytes = Buffer.from("shared-canonical-image");
+
+  await old.runtime.start();
+  const staleWrite = old.driver.emit({ type: "message", message: image(async () => bytes) });
+  await oldAtBoundary;
+
+  await replacement.runtime.start();
+  await replacement.driver.emit({ type: "message", message: image(async () => bytes) });
+  const [accepted] = (await replacement.client.messages(PERSON)).messages;
+  assert.equal(accepted?.kind, "image");
+  assert.equal(accepted.media.state, "stored");
+
+  releaseOldAccept();
+  await assert.rejects(staleWrite, SubscriptionHandlerError);
+  assert.deepEqual(
+    await media.read({ accountId: "personal", ref: accepted.media.ref }),
+    Uint8Array.from(bytes),
+  );
+  assert.equal((await data.accepted("personal", 0)).length, 1);
+
+  await assert.rejects(
+    old.runtime.stop(),
+    (error) =>
+      error instanceof SubscriptionHandlerError && error.cause instanceof StaleAccountClaimError,
+  );
+  await replacement.runtime.stop();
 });
 
 test("projected and source-only observations commit in one batch", async () => {

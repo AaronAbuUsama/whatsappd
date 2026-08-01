@@ -8,6 +8,7 @@ import { expect, test } from "./_expect.ts";
 import {
   createInProcessWhatsAppClient,
   createWhatsAppRuntime,
+  fileMediaStore,
   libsqlBackend,
   memoryMediaStore,
   AccountAlreadyClaimedError,
@@ -15,6 +16,7 @@ import {
   type WhatsAppClient,
   type WhatsAppSnapshot,
 } from "../src/index.ts";
+import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
 
@@ -53,6 +55,26 @@ async function firstSnapshot(client: WhatsAppClient): Promise<WhatsAppSnapshot> 
   assert.equal(first.value.type, "snapshot");
   return first.value.snapshot;
 }
+
+const mediaMessage = (
+  kind: "image" | "audio",
+  id: string,
+  bytes: Uint8Array,
+): InboundMessage & { readonly kind: "image" | "audio"; readonly media: MediaHandle } => ({
+  id,
+  chatId: CHAT,
+  sender: { id: CHAT, mode: "pn" },
+  fromMe: false,
+  timestamp: AT,
+  live: true,
+  isGroup: false,
+  kind,
+  media: {
+    mimetype: kind === "image" ? "image/png" : "audio/ogg; codecs=opus",
+    ...(kind === "audio" && { ptt: true }),
+    download: async () => Buffer.from(bytes),
+  },
+});
 
 test("a new libSQL backend reconstructs one account through Runtime, DataStore, and Client", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-backend-"));
@@ -98,6 +120,92 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
     expect(await replacementClient.messages(CHAT)).toEqual(expectedPage);
     expect(await replacementBackend.data.accepted(ACCOUNT, 0)).toEqual(expectedSource);
     expect(await replacementBackend.credentials.read("registration")).toBe("durable");
+
+    await replacementRuntime.stop();
+    await replacementBackend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("new libSQL, file media, Runtime, and Client instances reconstruct image and voice bytes", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-replacement-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const mediaDirectory = path.join(directory, "media");
+  const imageBytes = Uint8Array.from([1, 3, 5, 7]);
+  const voiceBytes = Uint8Array.from([2, 4, 6, 8]);
+
+  try {
+    const firstMedia = fileMediaStore({ directory: mediaDirectory });
+    const firstBackend = libsqlBackend({ url, accountId: ACCOUNT, media: firstMedia });
+    const firstSession = createTestWhatsAppSession();
+    const firstRuntime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: firstBackend,
+      openSession: () => firstSession.session,
+    });
+    await firstRuntime.start();
+    await firstSession.emit({
+      type: "message",
+      message: mediaMessage("image", "image-1", imageBytes),
+    });
+    await firstSession.emit({
+      type: "message",
+      message: mediaMessage("audio", "voice-1", voiceBytes),
+    });
+    await firstSession.emit({
+      type: "message",
+      message: {
+        ...mediaMessage("image", "failed-1", Uint8Array.from([])),
+        media: {
+          mimetype: "image/png",
+          async download() {
+            throw new Error("expired media handle");
+          },
+        },
+      },
+    });
+    await firstRuntime.stop();
+
+    const expectedSnapshot = await firstBackend.data.snapshot(ACCOUNT);
+    const expectedPage = await firstRuntime.messages(CHAT);
+    const expectedSource = await firstBackend.data.accepted(ACCOUNT, 0);
+    await firstBackend.close();
+
+    const replacementMedia = fileMediaStore({ directory: mediaDirectory });
+    const replacementBackend = libsqlBackend({
+      url,
+      accountId: ACCOUNT,
+      media: replacementMedia,
+    });
+    const replacementSession = createTestWhatsAppSession();
+    const replacementRuntime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: replacementBackend,
+      openSession: () => replacementSession.session,
+    });
+    const replacementClient = createInProcessWhatsAppClient(replacementRuntime);
+    await replacementRuntime.start();
+
+    expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);
+    expect(await replacementClient.messages(CHAT)).toEqual(expectedPage);
+    expect(await replacementBackend.data.accepted(ACCOUNT, 0)).toEqual(expectedSource);
+    for (const message of expectedPage.messages) {
+      assert.ok(message.kind === "image" || message.kind === "audio");
+      if (message.messageId === "failed-1") {
+        assert.deepEqual(message.media, {
+          state: "failed",
+          reason: "download_failed",
+          mimetype: "image/png",
+        });
+        continue;
+      }
+      assert.equal(message.media.state, "stored");
+      assert.deepEqual(
+        await replacementMedia.read({ accountId: ACCOUNT, ref: message.media.ref }),
+        message.kind === "image" ? imageBytes : voiceBytes,
+      );
+    }
 
     await replacementRuntime.stop();
     await replacementBackend.close();
@@ -258,7 +366,8 @@ test("migrations preserve wa_auth and credential clear cannot reach mirror data 
 test("a failed SQL record write rolls back source, projection, and revision together", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-rollback-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
-  const backend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  const media = memoryMediaStore();
+  const backend = libsqlBackend({ url, accountId: ACCOUNT, media });
   const oracle = createClient({ url });
 
   try {
@@ -282,6 +391,14 @@ test("a failed SQL record write rolls back source, projection, and revision toge
     await oracle.execute(`CREATE TRIGGER fail_record_write
       BEFORE INSERT ON wa_messages WHEN NEW.message_id = 'fail'
       BEGIN SELECT RAISE(ABORT, 'injected record failure'); END`);
+    const bytes = Uint8Array.from([9, 8, 7, 6]);
+    const orphan = await media.put({
+      accountId: ACCOUNT,
+      message: { id: "fail", chatId: CHAT, fromMe: false },
+      kind: "image",
+      bytes,
+      mimetype: "image/png",
+    });
     await assert.rejects(
       backend.data.accept(
         ACCOUNT,
@@ -297,7 +414,17 @@ test("a failed SQL record write rolls back source, projection, and revision toge
             observedAt: AT + 1,
             event: {
               type: "message",
-              message: textMessage({ id: "fail", chatId: CHAT, text: "fail", timestamp: AT + 1 }),
+              message: {
+                id: "fail",
+                chatId: CHAT,
+                sender: { id: CHAT, mode: "pn" },
+                fromMe: false,
+                timestamp: AT + 1,
+                live: true,
+                isGroup: false,
+                kind: "image",
+                media: { state: "stored", ...orphan, mimetype: "image/png" },
+              },
             },
           },
         ],
@@ -309,6 +436,7 @@ test("a failed SQL record write rolls back source, projection, and revision toge
     expect(await backend.data.snapshot(ACCOUNT)).toEqual(beforeSnapshot);
     expect(await backend.data.accepted(ACCOUNT, 0)).toEqual(beforeSource);
     expect(await backend.data.messages(ACCOUNT, CHAT)).toEqual(beforePage);
+    assert.deepEqual(await media.read({ accountId: ACCOUNT, ref: orphan.ref }), bytes);
 
     const state = await oracle.execute({
       sql: "SELECT revision, source_seq FROM wa_accounts WHERE account_id = ?",

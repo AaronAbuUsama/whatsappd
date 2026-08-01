@@ -5,14 +5,15 @@
  * @remarks
  * It claims the account lease before WhatsApp is opened at all, forwards every
  * durable event to the data store, and only then publishes the resulting patch.
- * A storage failure is not caught here: the awaited subscription carries it
- * back and stops processing, because a skipped write would leave a client
- * reading a mirror that silently lost a change.
+ * A structured data-store failure is not caught here: the awaited subscription
+ * carries it back and stops processing, because a skipped acceptance would
+ * leave a client reading a mirror that silently lost a change. Media capture
+ * failures are different durable outcomes and are accepted as typed state.
  *
  * @packageDocumentation
  */
 import { isOnline, isTerminal, type Status } from "../model/status.ts";
-import type { MediaMeta } from "../model/message.ts";
+import { refOf } from "../model/outbound.ts";
 import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
@@ -22,6 +23,7 @@ import {
   AccountNotHeldError,
   type AccountLease,
   type AccountLeaseStore,
+  type DurableInboundMessage,
   type DurableUpdate,
   type StoredMessagePage,
   type StoredMessagePageOptions,
@@ -32,16 +34,19 @@ import {
   type WhatsAppSnapshot,
 } from "./contracts.ts";
 
-const durableUpdate = (update: Update): DurableUpdate => {
-  if (update.kind !== "edit") return update;
-  switch (update.message.kind) {
+const captureMessage = async (
+  accountId: string,
+  mediaStore: WhatsAppBackend["media"],
+  message: Parameters<NonNullable<WhatsAppSessionHandlers["message"]>>[0],
+): Promise<DurableInboundMessage> => {
+  switch (message.kind) {
     case "image":
     case "video":
     case "audio":
     case "document":
     case "sticker": {
-      const source = update.message.media;
-      const media: MediaMeta = {
+      const source = message.media;
+      const metadata = {
         ...(source.mimetype !== undefined && { mimetype: source.mimetype }),
         ...(source.fileLength !== undefined && { fileLength: source.fileLength }),
         ...(source.fileName !== undefined && { fileName: source.fileName }),
@@ -51,11 +56,37 @@ const durableUpdate = (update: Update): DurableUpdate => {
         ...(source.height !== undefined && { height: source.height }),
         ...(source.caption !== undefined && { caption: source.caption }),
       };
-      return { ...update, message: { ...update.message, media } };
+      let bytes: Uint8Array;
+      try {
+        bytes = await source.download();
+      } catch {
+        return { ...message, media: { ...metadata, state: "failed", reason: "download_failed" } };
+      }
+      try {
+        const stored = await mediaStore.put({
+          accountId,
+          message: refOf(message),
+          kind: message.kind,
+          bytes,
+          ...(metadata.mimetype !== undefined && { mimetype: metadata.mimetype }),
+        });
+        return { ...message, media: { ...metadata, state: "stored", ...stored } };
+      } catch {
+        return { ...message, media: { ...metadata, state: "failed", reason: "store_failed" } };
+      }
     }
     default:
-      return update;
+      return message;
   }
+};
+
+const durableUpdate = async (
+  accountId: string,
+  mediaStore: WhatsAppBackend["media"],
+  update: Update,
+): Promise<DurableUpdate> => {
+  if (update.kind !== "edit") return update;
+  return { ...update, message: await captureMessage(accountId, mediaStore, update.message) };
 };
 
 /**
@@ -262,9 +293,19 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * belongs to a later slice.
    */
   const handlers: WhatsAppSessionHandlers = {
-    message: (message) => accept({ type: "message", message }),
-    update: (update) => accept({ type: "update", update: durableUpdate(update) }),
-    conversationSync: (batch) => accept({ type: "conversation_sync", batch }),
+    message: async (message) =>
+      accept({ type: "message", message: await captureMessage(accountId, backend.media, message) }),
+    update: async (update) =>
+      accept({
+        type: "update",
+        update: await durableUpdate(accountId, backend.media, update),
+      }),
+    conversationSync: async (batch) => {
+      const messages: DurableInboundMessage[] = [];
+      for (const message of batch.messages)
+        messages.push(await captureMessage(accountId, backend.media, message));
+      return accept({ type: "conversation_sync", batch: { ...batch, messages } });
+    },
     contact: (contact) => accept({ type: "contact", contact }),
     group: (group) => accept({ type: "group", group }),
     // Connection and presence are live signals with an expiry, never records:
