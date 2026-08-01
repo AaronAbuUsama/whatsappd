@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileMediaStore, memoryMediaStore, type MediaStore } from "../src/index.ts";
@@ -75,6 +77,40 @@ test("file media survives a new store, keeps private opaque paths, and owns byte
       assert.equal(mode, entry.endsWith(".bin") ? 0o600 : 0o700);
     }
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("file media syncs created directories and the canonical publication before returning", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-sync-"));
+  const originalOpen = fs.promises.open;
+  const synced: string[] = [];
+  fs.promises.open = (async (...args: Parameters<typeof originalOpen>) => {
+    const handle = await originalOpen(...args);
+    return {
+      async sync() {
+        synced.push(String(args[0]));
+        await handle.sync();
+      },
+      close: () => handle.close(),
+    } as Awaited<ReturnType<typeof originalOpen>>;
+  }) as typeof originalOpen;
+  syncBuiltinESMExports();
+
+  try {
+    await put(fileMediaStore({ directory }), Uint8Array.from([1, 2, 3]), "personal");
+    const namespace = path.join(directory, ".whatsappd-media");
+    const entries = await readdir(namespace, { recursive: true });
+    const object = entries.find((entry) => entry.endsWith(".bin"));
+    assert.ok(object);
+    const accountDirectory = path.dirname(path.join(namespace, object));
+
+    assert.ok(synced.includes(directory));
+    assert.ok(synced.includes(namespace));
+    assert.ok(synced.includes(accountDirectory));
+  } finally {
+    fs.promises.open = originalOpen;
+    syncBuiltinESMExports();
     await rm(directory, { recursive: true, force: true });
   }
 });

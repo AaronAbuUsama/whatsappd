@@ -363,6 +363,97 @@ test("migrations preserve wa_auth and credential clear cannot reach mirror data 
   }
 });
 
+test("accepted source decodes pre-upgrade metadata-only media as an explicit failure", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-legacy-media-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const migrated = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+
+  try {
+    await migrated.data.snapshot(ACCOUNT);
+    await migrated.close();
+
+    const legacyMessage = (id: string) => ({
+      id,
+      chatId: CHAT,
+      sender: { id: CHAT, mode: "pn" },
+      fromMe: false,
+      timestamp: AT,
+      live: true,
+      isGroup: false,
+      kind: "image",
+      media: { mimetype: "image/png", width: 32, height: 24 },
+    });
+    const events = [
+      { observedAt: AT, event: { type: "message", message: legacyMessage("direct") } },
+      {
+        observedAt: AT + 1,
+        event: {
+          type: "conversation_sync",
+          batch: {
+            context: { source: "recent", projection: { mode: "upsert" } },
+            chats: [],
+            contacts: [],
+            messages: [legacyMessage("sync")],
+          },
+        },
+      },
+      {
+        observedAt: AT + 2,
+        event: {
+          type: "update",
+          update: {
+            kind: "edit",
+            ref: { id: "edit", chatId: CHAT, fromMe: false },
+            message: legacyMessage("edit"),
+          },
+        },
+      },
+    ];
+    const legacy = createClient({ url });
+    await legacy.execute({
+      sql: `INSERT INTO wa_accepted_batches
+        (account_id, seq, from_revision, revision, events_json, patch_json)
+        VALUES (?, 1, 0, 0, ?, ?)`,
+      args: [
+        ACCOUNT,
+        JSON.stringify(events),
+        JSON.stringify({ accountId: ACCOUNT, fromRevision: 0, revision: 0, upserts: [] }),
+      ],
+    });
+    legacy.close();
+
+    const replacement = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    try {
+      const accepted = await replacement.data.accepted(ACCOUNT, 0);
+      const direct = accepted[0]?.events[0]?.event;
+      const sync = accepted[0]?.events[1]?.event;
+      const edit = accepted[0]?.events[2]?.event;
+      assert.ok(direct?.type === "message" && direct.message.kind === "image");
+      assert.ok(sync?.type === "conversation_sync" && sync.batch.messages[0]?.kind === "image");
+      assert.ok(edit?.type === "update" && edit.update.kind === "edit");
+      assert.equal(edit.update.message.kind, "image");
+      for (const media of [
+        direct.message.media,
+        sync.batch.messages[0].media,
+        edit.update.message.media,
+      ]) {
+        assert.deepEqual(media, {
+          state: "failed",
+          reason: "download_failed",
+          mimetype: "image/png",
+          width: 32,
+          height: 24,
+        });
+      }
+    } finally {
+      await replacement.close();
+    }
+  } finally {
+    await migrated.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a failed SQL record write rolls back source, projection, and revision together", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-rollback-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;

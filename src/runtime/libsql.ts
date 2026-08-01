@@ -353,7 +353,7 @@ function messageRecord(value: unknown): MessageRecord {
   }
 }
 
-function durableMedia(value: unknown, label: string): DurableMedia {
+function durableMedia(value: unknown, label: string, allowLegacyMetadata = false): DurableMedia {
   const media = object(value, label);
   if ("download" in media) throw new Error(`invalid libSQL ${label}.download`);
   const metadata = {
@@ -393,6 +393,14 @@ function durableMedia(value: unknown, label: string): DurableMedia {
       throw new Error(`invalid libSQL ${label}.reason`);
     return { ...metadata, state: "failed", reason };
   }
+  if (
+    allowLegacyMetadata &&
+    media.state === undefined &&
+    !("ref" in media) &&
+    !("byteLength" in media) &&
+    !("reason" in media)
+  )
+    return { ...metadata, state: "failed", reason: "download_failed" };
   throw new Error(`invalid libSQL ${label}.state`);
 }
 
@@ -460,7 +468,10 @@ function durableMessage(value: unknown, label: string): DurableInboundMessage {
       return {
         ...base,
         kind,
-        media: durableMedia(message.media, `${label}.media`),
+        // Before durable capture, accepted source retained metadata only. It
+        // remains readable as an explicit failure; current mirror rows stay
+        // strict through messageRecord().
+        media: durableMedia(message.media, `${label}.media`, true),
         ...(text !== undefined && { text }),
       };
     }
