@@ -1,5 +1,9 @@
 # whatsappd
 
+The [SDK capability catalogue](docs/sdk-capabilities.md) distinguishes the
+implemented-and-proven product from target, deferred, upstream-only, internal,
+and application-owned capabilities. This README documents the shipped surface.
+
 A typed WhatsApp session engine for Node.js. It normalizes Baileys events,
 awaits application handlers in source order, and keeps credentials behind an
 opaque replaceable store.
@@ -54,8 +58,7 @@ await session.markRead([messageRef]);
 await session.setTyping(chatId, true);
 ```
 
-The session also exposes `groupMetadata()`, `profilePictureUrl()`, `identity()`,
-and `stop()`.
+Use `session.stop()` for intentional teardown.
 
 ## Credentials
 

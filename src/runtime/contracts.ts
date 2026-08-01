@@ -552,8 +552,9 @@ export class AccountNotHeldError extends Error {
  *
  * @remarks
  * Modeled source-only updates are accepted without moving the mirror revision.
- * Non-text messages, authoritative sync replacement, and unknown event kinds
- * still fail loudly rather than being dropped or falsely reported as current.
+ * Unprojected message kinds, authoritative sync replacement, and unknown event
+ * kinds still fail loudly rather than being dropped or falsely reported as
+ * current.
  */
 export class UnsupportedDurableEventError extends Error {
   constructor(what: string) {

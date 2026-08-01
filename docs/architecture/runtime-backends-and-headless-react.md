@@ -1,16 +1,16 @@
 # WhatsApp application runtime, pluggable backends, and headless React
 
-Status: proposed target architecture
+Status: historical target, superseded in part by accepted ADRs
 
 Date: 2026-07-29
 
-This document consolidates the broader WhatsApp UI/runtime design with the
-separate PocketBase/libSQL plan from
-`docs/feature-requests/pluggable-credential-and-data-backends.md` in the
-`c1f3/whatsappd` worktree. It is the single design to carry forward.
-
-It describes a target, not code that already exists. The current package still
-exports the Eve-era channel adapter, sidecar, and agent tools.
+This document preserves the broader design that produced the accepted ADRs and
+issue graph. It is not the current execution source of truth. The
+[SDK capability catalogue](../sdk-capabilities.md) records the shipped and
+target product surface; accepted ADRs govern conflicts. In particular,
+ADR-0023 moves synchronized application state from React into the
+framework-independent Client. The package has already completed the hard cut
+away from the Eve-era adapter, sidecar, and agent tools.
 
 ## Decision
 
@@ -939,18 +939,19 @@ useComposer(chatId);
 useWhatsAppCommand();
 ```
 
-The provider owns:
+The framework-independent Client owns:
 
-- one client subscription per provider;
 - snapshot hydration and patch application;
 - gap detection and fresh-snapshot recovery;
 - active-chat stored paging and explicit WhatsApp backfill state;
-- selectors and structural sharing;
 - optimistic command state and reconciliation;
 - typing expiry;
 - read-receipt batching with real message references;
-- reconnect and stale-state handling;
-- stable callbacks and aborting work on unmount.
+- reconnect and stale-state handling.
+
+The React provider owns one Client subscription, React selectors and structural
+sharing, stable callbacks, and aborting React work on unmount. It does not
+implement a second synchronization state machine.
 
 The provider does not render a `div`, ship CSS, require Tailwind, assume a
 component library, or imitate WhatsApp’s visual design. Open Coworker can donate
@@ -1402,9 +1403,11 @@ Exit proof:
 - send one command and reconcile its outbound echo;
 - prove another authenticated user cannot read or command the account.
 
-### Slice 3: headless React vertical slice
+### Slice 3: friendly Client and headless React vertical slice
 
-- Implement `WhatsAppProvider`, core hooks, and the conversation render slots.
+- Implement the framework-independent synchronized Client first, then
+  `WhatsAppProvider`, core hooks, and justified conversation render slots as
+  thin bindings over it.
 - Build one AI-drivable proof application against deterministic and PocketBase
   clients using shadcn MessageScroller, Message, Bubble, Attachment, and Marker
   presentation.

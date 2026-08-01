@@ -34,5 +34,7 @@ not enter published evidence.
   released without the corresponding rung.
 - The private live-account harness keeps one canonical database-backed
   credential store and never clones credentials with disposable corpus data.
-- React tickets require deterministic behavior and real-browser proof; backend
-  tickets additionally require the native and durability rungs they claim.
+- React tickets require deterministic behavior through their claimed renderer.
+  A browser claim additionally requires P5 real-browser proof; an OpenTUI proof
+  establishes terminal React behavior only. Backend tickets additionally
+  require the native and durability rungs they claim.
