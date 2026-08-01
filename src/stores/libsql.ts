@@ -12,6 +12,8 @@
  * app passes one `account` per supervised number.
  */
 import type { Client } from "@libsql/client";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CredentialStore } from "../ports.ts";
 
 export interface LibsqlStoreOptions {
@@ -41,6 +43,19 @@ export interface LazyLibsqlClient {
 
 const fileOperations = new Map<string, Promise<void>>();
 
+function fileOperationKey(url: string): string | undefined {
+  if (!url.startsWith("file:")) return undefined;
+  if (url.startsWith("file::memory:")) return url;
+  if (url.startsWith("file://")) {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    return fileURLToPath(parsed);
+  }
+  const path = url.slice("file:".length).split(/[?#]/, 1)[0] ?? "";
+  return resolve(decodeURIComponent(path));
+}
+
 export function lazyLibsqlClient(
   options: Pick<LibsqlStoreOptions, "url" | "authToken">,
   initialize: (client: Client) => Promise<void>,
@@ -49,7 +64,7 @@ export function lazyLibsqlClient(
   let operations: Promise<void> = Promise.resolve();
   let closed = false;
   let closing: Promise<void> | undefined;
-  const fileKey = options.url.startsWith("file:") ? options.url : undefined;
+  const fileKey = fileOperationKey(options.url);
   const connect = (): Promise<Client> =>
     (ready ??= (async () => {
       let createClient: typeof import("@libsql/client").createClient;

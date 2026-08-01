@@ -143,11 +143,17 @@ test("independent libSQL backends contend on database time without resetting fen
   }
 });
 
-test("independent libSQL clients resolve a simultaneous first lease as one winner", async () => {
+test("equivalent libSQL file URLs resolve a simultaneous first lease as one winner", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-concurrent-"));
-  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const databasePath = path.join(directory, "whatsapp.db");
+  const url = pathToFileURL(databasePath).href;
+  const relativeUrl = `file:${path.relative(process.cwd(), databasePath)}`;
   const first = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
-  const second = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  const second = libsqlBackend({
+    url: relativeUrl,
+    accountId: ACCOUNT,
+    media: memoryMediaStore(),
+  });
 
   try {
     const attempts = await Promise.all([
