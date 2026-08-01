@@ -1,9 +1,10 @@
 # Execution state — WhatsApp application substrate
 
-Last updated: 2026-07-31. The rescue Batch Grill, Grill-with-Docs, specification,
-and tracer-bullet planning frontier is settled through ADR-0017. The product
-path is now being built: issue #20 delivered the first complete text-message
-runtime. Only the unblocked ticket frontier may start.
+Last updated: 2026-08-01. Issue #61 is the sole stabilization integration lane
+after the board/code audit found runtime, credential, session, and WhatsApp
+Address defects beneath the product frontier. Product dispatch remains held
+until #61 merges with its exact-head proof gate; only then may #21 and #38
+reopen.
 
 ## Where everything lives
 
@@ -11,12 +12,13 @@ runtime. Only the unblocked ticket frontier may start.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0019`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0022`                                   |
 | Published build specification    | GitHub issue #15                                           |
 | Locked executable graph          | Issue #15, comment of 2026-07-31                           |
 | Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
 | Shipped product path             | `src/runtime/`, merged to `master` by PR #54               |
+| Stabilization integration lane   | GitHub issue #61 / `agent/stabilization-integration`       |
 
 The architecture document is grill output: a single coherent target with code
 sketches, consequences, implementation slices, and proof boundaries. The
@@ -62,6 +64,9 @@ issues #16 through #41 are the approved dependency graph.
 | Actorless receipts use a non-null aggregate subject for idempotent projection            | PR #12 review  |
 | Acceptance has its own cursor and the writer's fencing token                             | 0018           |
 | A patch carries only upserts until something produces a delete                           | 0019           |
+| Observed instants are durable; live statuses are not                                     | 0020           |
+| Session failures rank subscriber, teardown, then ordinary run                            | 0021           |
+| Delivered PN/LID equivalence may consolidate redundant current contacts                  | 0022           |
 
 ## Semantics that must not be collapsed
 
@@ -131,38 +136,30 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Known implementation inputs
 
-- `src/session.ts:269` still swallows a failed credential wipe
-  (`await store.clear().catch(() => {})`), breaking the stated terminal-clear
-  guarantee: `logged_out` is announced whether or not the credentials went. No
-  open ticket names it; #49 (session failure-precedence contract) is the nearest
-  home, and it is deferred.
-- The hard-cut landed: handlers are awaited with backpressure (#17), the channel
-  adapter is gone, and the memory-only channels and multi-stream fakes it
-  described no longer exist. `tests/session.test.ts:140` is the last remaining
-  timed wait in the suite.
-- The Ambient Agent v3 PocketBase spike remains pinned to the old whatsappd
-  package as fixture evidence. Its production integration must wait for a
-  published release containing the accepted-source reader, durable media, final
-  subscription API, and official test driver.
+- #61 closes #49's residual session defects, including credential-clear
+  failures, detached starts, startup-stop state, and falsy-safe precedence.
+- Accepted updates are retained and page by source `seq`; their receipt/edit/
+  revocation current-mirror projection remains a later product slice.
+- `fileStore()` is restart-safe and migration-safe, but libSQL remains the first
+  backend intended to persist the whole runtime (#38).
+- The Ambient Agent v3 PocketBase spike remains fixture evidence on the old
+  package. Production integration still waits for a published release with
+  durable media and a persistent runtime backend.
 
 ## Next step
 
-Issues #16, #17, #18, #10, and #20 are closed; #19 and #52 are closed `wontfix`
-by the product-first grill (issue #15 re-plan receipt, 2026-07-31). #20 shipped
-the first complete product path — runtime, backend capabilities, memory
-implementations, and the in-process client for one text message — as PR #54.
-
-The executable graph is:
+The executable graph is temporarily held at the stabilization gate:
 
 ```text
-#20 ✅ ─┬─→ #21 media capture ─────────────────┐
-        └─→ #24 stored paging ─┬─→ #25 backfill┼─→ #39
-                               └─→ #38 libSQL ─┘
+#61 stabilization ─┬─→ #21 durable media
+                   └─→ #38 persistent libSQL runtime ─→ #25 background history
+                                                        (also blocked by #50)
 ```
 
-**The frontier is #21 and #24**, opened by #20 and dispatchable in parallel;
-their paths barely overlap. #24 is the bottleneck — #25 and #38 both wait on it,
-and #39 waits on all three.
+While #61 is open, it is the only dispatchable node. Its post-merge DAG receipt
+may relabel #21 and #38 `ready-for-agent`; #25 remains deferred behind #38 and
+the unanswered-phone research in #50. The integration does not silently start
+either product slice.
 
 This graph is the whole graph. It is narrowed by owner decision, not only by
 dependency edges: the 2026-07-30 and 2026-07-31 re-plan receipts on issue #15
@@ -177,9 +174,9 @@ start a deferred node merely because its blockers closed.
 
 ## Resuming in a new session
 
-Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0019,
+Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0022,
 specification issue #15 **including its comments** — the 2026-07-31 re-plan
-locks the executable graph and supersedes every earlier frontier receipt — and
-the frontier ticket bodies. `src/runtime/` is now real product code and the
-target APIs it defines do exist; the rest of `src/` predates the hard cut.
-Reopening an accepted decision requires an explicit superseding ADR.
+and the 2026-08-01 #61 hold receipt supersede earlier frontier receipts — then
+read #61 and the conditionally next ticket bodies. `src/runtime/` is real
+product code. Reopening an accepted decision requires an explicit superseding
+ADR.

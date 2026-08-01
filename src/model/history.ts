@@ -11,6 +11,8 @@ export interface HistoryChat {
 
 export interface HistoryContact {
   readonly id: string;
+  /** Every equivalent native address WhatsApp supplied for this contact. */
+  readonly nativeIds: readonly string[];
   readonly displayName?: string;
 }
 

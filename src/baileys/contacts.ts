@@ -1,9 +1,12 @@
 import type { ContactUpdate } from "../model/contact.ts";
 
-interface ContactLike {
+export interface ContactNativeIds {
   readonly id?: string | null;
   readonly lid?: string | null;
   readonly phoneNumber?: string | null;
+}
+
+interface ContactLike extends ContactNativeIds {
   readonly name?: string | null;
   readonly notify?: string | null;
   readonly verifiedName?: string | null;
@@ -26,13 +29,17 @@ function unique(values: readonly (string | undefined)[]): string[] {
   return out;
 }
 
+export function contactNativeIds(contact: ContactNativeIds): string[] {
+  return unique([text(contact.id), text(contact.phoneNumber), text(contact.lid)]);
+}
+
 export function mapContactUpdates(
   contacts: readonly ContactLike[],
   at = Date.now(),
 ): ContactUpdate[] {
   const out: ContactUpdate[] = [];
   for (const contact of contacts) {
-    const nativeIds = unique([text(contact.id), text(contact.phoneNumber), text(contact.lid)]);
+    const nativeIds = contactNativeIds(contact);
     const id = nativeIds[0];
     if (!id) continue;
     out.push({

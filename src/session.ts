@@ -14,6 +14,7 @@ import type { GroupMetadata, Outbound, Status, WaIdentity } from "./model/index.
 import type { MessageRef, SendOptions } from "./model/outbound.ts";
 import { isTerminal } from "./model/index.ts";
 import type { AuthStrategy, CredentialStore } from "./ports.ts";
+import { settle } from "./outcome.ts";
 import { loadAuth } from "./baileys/authState.ts";
 import { openSocket, type BaileysConn, type RawEvent } from "./baileys/socket.ts";
 import {
@@ -174,6 +175,52 @@ export interface WhatsAppSession {
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/** A protocol observation reached the session but could not be fully processed. */
+class SessionProcessingError extends Error {
+  override readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super("session event processing failed", { cause });
+    this.name = "SessionProcessingError";
+    this.cause = cause;
+  }
+}
+
+type SessionFailureKind = "subscriber" | "teardown" | "run";
+
+class SessionFailure extends Error {
+  readonly kind: SessionFailureKind;
+  readonly reason: unknown;
+
+  constructor(kind: SessionFailureKind, reason: unknown) {
+    super(`session ${kind} failure`, { cause: reason });
+    this.name = "SessionFailure";
+    this.kind = kind;
+    this.reason = reason;
+  }
+}
+
+const failureFrom = (
+  outcome: PromiseSettledResult<unknown> | undefined,
+  fallback: Exclude<SessionFailureKind, "subscriber">,
+): SessionFailure | undefined =>
+  outcome?.status === "rejected"
+    ? new SessionFailure(
+        outcome.reason instanceof SubscriptionHandlerError ? "subscriber" : fallback,
+        outcome.reason,
+      )
+    : undefined;
+
+const preferredFailure = (
+  failures: readonly (SessionFailure | undefined)[],
+): SessionFailure | undefined => {
+  for (const kind of ["subscriber", "teardown", "run"] as const) {
+    const failure = failures.find((candidate) => candidate?.kind === kind);
+    if (failure) return failure;
+  }
+  return undefined;
+};
+
 /**
  * Create a single WhatsApp account session.
  *
@@ -232,6 +279,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
   let status: Status = initialState;
   let stopped = false;
   let supervisor: Promise<void> | undefined;
+  let started: Promise<void> | undefined;
   let conn: BaileysConn | undefined;
   const dispatcher = createSubscriptionDispatcher((to, content, options) =>
     send(to, content, options),
@@ -266,7 +314,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     // Wipe dead creds BEFORE announcing logged_out, so the guarantee "on
     // logged_out the credentials are gone" holds for any consumer — even one
     // that exits the moment it sees the event.
-    if (next.phase === "logged_out") await store.clear().catch(() => {});
+    if (next.phase === "logged_out") await store.clear();
     status = next;
     await dispatcher.dispatch({ type: "connection", status });
   }
@@ -385,84 +433,94 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       reportFailure = resolve;
     });
     signalPipelineFailure = reportFailure;
-    // Occurrence is tracked apart from the reason: end() may reject with a
-    // falsy value, and truthiness would silently swallow the failure.
-    let teardownFailed = false;
-    let teardownError: unknown;
-    // The run body's own failure is captured rather than left in flight: a
-    // `finally` cannot override an exception that is already propagating, so a
-    // teardown failure recorded there would never reach the precedence check.
-    let bodyFailed = false;
-    let bodyError: unknown;
-
-    try {
-      const auth = await loadAuth(store);
-      initialSyncComplete = auth.initialSyncComplete;
-      conn = await openSocketImpl({
-        auth: { creds: auth.creds, keys: auth.keys },
-        authMethod: config.auth.method,
-        saveCreds: auth.saveCreds,
-        logger,
-      });
-
-      // stop() may have run while openSocket() was in flight — conn was still
-      // undefined then, so stop()'s `conn?.end()` was a no-op. Without this guard
-      // the freshly opened socket would leak: the loop below would block on its
-      // events after the session was already stopped. Tear it down and bail.
-      if (stopped) {
-        await conn.end();
-        return;
-      }
-
-      const events = conn.events[Symbol.asyncIterator]();
-      while (true) {
-        const next = await Promise.race([
-          events.next().then((result) => ({ type: "event" as const, result })),
-          pipelineFailure.then((error) => ({ type: "failure" as const, error })),
-        ]);
-        if (next.type === "failure") throw next.error;
-        if (next.result.done) break;
-        await enqueue(() => handle(next.result.value));
-      }
-      await eventPipeline;
-    } catch (error) {
-      bodyFailed = true;
-      bodyError = error;
-    } finally {
-      signalPipelineFailure = () => {};
-      try {
-        await conn?.end();
-      } catch (error) {
-        stopped = true;
-        teardownFailed = true;
-        teardownError = error;
-        // The stop transition still notifies subscribers, and a handler that
-        // rejects it owns the failure: per ADR-0013 an awaited rejection fails
-        // the pipeline, and a subscriber's own error outranks the teardown one.
-        await apply({ t: "stop" }).catch((dispatchError: unknown) => {
-          if (dispatchError instanceof SubscriptionHandlerError)
-            teardownError = dispatchError.cause;
+    const body = await settle(
+      (async () => {
+        const auth = await loadAuth(store);
+        initialSyncComplete = auth.initialSyncComplete;
+        conn = await openSocketImpl({
+          auth: { creds: auth.creds, keys: auth.keys },
+          authMethod: config.auth.method,
+          saveCreds: auth.saveCreds,
+          logger,
         });
-      }
-    }
-    // Precedence: a subscriber's own error, then a teardown failure, then an
-    // ordinary run error. A failed credential write must never be masked by the
-    // transport error that happened to surface first.
-    if (bodyFailed && bodyError instanceof SubscriptionHandlerError) throw bodyError;
-    if (teardownFailed) throw teardownError;
-    if (bodyFailed) throw bodyError;
+
+        // stop() may have run while openSocket() was in flight — conn was still
+        // undefined then, so stop()'s `conn?.end()` was a no-op. Without this guard
+        // the freshly opened socket would leak: the loop below would block on its
+        // events after the session was already stopped. Tear it down and bail.
+        if (stopped) {
+          await conn.end();
+          return;
+        }
+
+        const events = conn.events[Symbol.asyncIterator]();
+        while (true) {
+          const next = await Promise.race([
+            events.next().then((result) => ({ type: "event" as const, result })),
+            pipelineFailure.then((error) => ({ type: "failure" as const, error })),
+          ]);
+          if (next.type === "failure") throw next.error;
+          if (next.result.done) break;
+          await enqueue(async () => {
+            try {
+              await handle(next.result.value);
+            } catch (error) {
+              throw error instanceof SubscriptionHandlerError
+                ? error
+                : new SessionProcessingError(error);
+            }
+          });
+        }
+        await eventPipeline;
+      })(),
+    );
+    signalPipelineFailure = () => {};
+
+    const teardown = await settle(Promise.resolve(conn?.end()));
+    const disconnected =
+      teardown.status === "rejected"
+        ? await (async () => {
+            stopped = true;
+            return settle(apply({ t: "stop" }));
+          })()
+        : undefined;
+    const failure = preferredFailure([
+      failureFrom(body, "run"),
+      failureFrom(disconnected, "run"),
+      failureFrom(teardown, "teardown"),
+    ]);
+    if (failure) throw failure;
+  }
+
+  async function failTerminal(failure: SessionFailure): Promise<never> {
+    stopped = true;
+    const disconnected = await settle(apply({ t: "stop" }));
+    const disconnectedFailure = failureFrom(disconnected, "run");
+    const reason = failure.reason;
+    const terminal =
+      reason instanceof SubscriptionHandlerError || reason instanceof SessionProcessingError
+        ? new SessionFailure(failure.kind, reason.cause)
+        : failure;
+    throw preferredFailure([
+      disconnectedFailure?.reason instanceof SubscriptionHandlerError
+        ? new SessionFailure("subscriber", disconnectedFailure.reason.cause)
+        : disconnectedFailure,
+      terminal,
+    ]);
   }
 
   async function supervise(): Promise<void> {
-    await apply({ t: "start" });
+    const initial = await settle(apply({ t: "start" }));
+    const initialFailure = failureFrom(initial, "run");
+    if (initialFailure) return failTerminal(initialFailure);
     while (!stopped) {
-      await runOnce().catch(async (err) => {
-        if (err instanceof SubscriptionHandlerError) {
-          stopped = true;
-          throw err.cause;
-        }
-        if (stopped) throw err;
-        logger.error({ err }, "session run errored");
+      await runOnce().catch(async (error: unknown) => {
+        const failure = error instanceof SessionFailure ? error : new SessionFailure("run", error);
+        const reason = failure.reason;
+        if (reason instanceof SubscriptionHandlerError || reason instanceof SessionProcessingError)
+          return failTerminal(failure);
+        if (stopped) throw failure;
+        logger.error({ err: reason }, "session run errored");
         // Treat an open/run failure as a retryable transport close.
         await apply({
           t: "close",
@@ -499,7 +557,18 @@ export function createSession(config: SessionConfig): WhatsAppSession {
     },
     subscribe: (handlers, options) => dispatcher.subscribe(handlers, options),
     // Idempotent: hand back the one running supervisor so stop() can await it.
-    start: () => (supervisor ??= supervise()),
+    start() {
+      if (!started) {
+        supervisor = supervise();
+        started = supervisor.catch((error: unknown) => {
+          throw error instanceof SessionFailure ? error.reason : error;
+        });
+        // Preserve the same rejecting promise for awaiting callers while a
+        // documented detached start remains owned by the session itself.
+        void started.catch(() => {});
+      }
+      return started;
+    },
     send,
     async markRead(refs) {
       if (status.phase !== "online" || !conn)
@@ -536,28 +605,34 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       stopped = true;
       clearVerdict();
       clearSync();
-      // As in runOnce(): a falsy rejection reason is still a failure, so track
-      // occurrence separately from the captured value.
-      let teardownFailed = false;
-      let teardownError: unknown;
-      try {
-        await conn?.end(); // close → classified intentional → machine → disconnected
-      } catch (error) {
-        teardownFailed = true;
-        teardownError = error;
-      }
+      const teardown = await settle(Promise.resolve(conn?.end()));
       // Always wait for the supervisor to finish tearing down (incl. any socket
       // opened after this call) so stop() never returns while a live socket
-      // lingers — even when end() rejected above. The supervisor's error wins:
-      // it carries the session's real terminal failure (a subscriber's own
-      // error over a duplicate teardown rejection).
-      try {
-        await supervisor;
-      } catch (error) {
-        teardownFailed = true;
-        teardownError = error;
-      }
-      if (teardownFailed) throw teardownError;
+      // lingers — even when end() rejected above.
+      const supervised = supervisor
+        ? await settle(supervisor)
+        : ({ status: "fulfilled", value: undefined } as const);
+      // A stop that landed before a socket existed has no close event to move
+      // the machine. Settle it explicitly after all late-open teardown finishes.
+      const disconnected =
+        !isTerminal(status) && status.phase !== "disconnected"
+          ? await settle(apply({ t: "stop" }))
+          : undefined;
+      const supervisedFailure =
+        supervised.status === "rejected"
+          ? supervised.reason instanceof SessionFailure
+            ? supervised.reason
+            : new SessionFailure("run", supervised.reason)
+          : undefined;
+      const failure = preferredFailure([
+        failureFrom(disconnected, "run"),
+        supervisedFailure,
+        failureFrom(teardown, "teardown"),
+      ]);
+      if (failure)
+        throw failure.reason instanceof SubscriptionHandlerError
+          ? failure.reason.cause
+          : failure.reason;
     },
   };
 }

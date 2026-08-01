@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "./_expect.ts";
@@ -24,6 +25,63 @@ test("[file] a write recreates a store directory that disappeared", async () => 
 
   await store.write({ creds: "after" });
   expect(await store.read("creds")).toBe("after");
+});
+
+test("[file] clear removes credentials without deleting its caller's directory", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wa-file-owned-"));
+  const unrelated = join(dir, "application-data.txt");
+  writeFileSync(unrelated, "keep me");
+  const store = fileStore(dir);
+
+  await store.write({ creds: "secret", "pre-key:1": "key" });
+  await store.clear();
+
+  expect(readFileSync(unrelated, "utf8")).toBe("keep me");
+  expect(await store.read("creds")).toBe(null);
+});
+
+test("[file] legacy credentials migrate once and cannot reappear after clear", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wa-file-legacy-"));
+  const legacy = join(dir, "creds.json");
+  const unrelated = join(dir, "application-data.txt");
+  writeFileSync(legacy, "old secret");
+  writeFileSync(unrelated, "keep me");
+
+  const store = fileStore(dir);
+  expect(await store.read("creds")).toBe("old secret");
+  await store.clear();
+
+  expect(await fileStore(dir).read("creds")).toBe(null);
+  expect(readFileSync(unrelated, "utf8")).toBe("keep me");
+});
+
+test("[file] distinct credential keys cannot collide on one filename", async () => {
+  const store = fileStore(mkdtempSync(join(tmpdir(), "wa-file-keys-")));
+
+  await store.write({ "a/b": "slash", "a:b": "colon" });
+
+  expect(await store.read("a/b")).toBe("slash");
+  expect(await store.read("a:b")).toBe("colon");
+});
+
+test("[file] a storage error is not reported as a missing credential", async () => {
+  const root = mkdtempSync(join(tmpdir(), "wa-file-error-"));
+  const notDirectory = join(root, "not-a-directory");
+  writeFileSync(notDirectory, "occupied");
+
+  await assert.rejects(fileStore(notDirectory).read("creds"), { code: "ENOTDIR" });
+});
+
+test("[file] credential storage is private to the current operating-system user", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "wa-file-mode-"));
+  const store = fileStore(dir);
+  await store.write({ creds: "secret" });
+
+  const namespace = readdirSync(dir, { withFileTypes: true }).find((entry) => entry.isDirectory());
+  assert.ok(namespace);
+  expect(statSync(join(dir, namespace.name)).mode & 0o777).toBe(0o700);
+  for (const file of readdirSync(join(dir, namespace.name)))
+    expect(statSync(join(dir, namespace.name, file)).mode & 0o777).toBe(0o600);
 });
 
 // libsql-specific: one database, many accounts, fully isolated row-spaces.

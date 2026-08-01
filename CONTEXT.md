@@ -10,6 +10,12 @@ A protocol-native address for a WhatsApp participant, carrying one primary ID
 and every known equivalent native ID, such as its PN and LID forms.
 _Avoid_: Identity, contact, person
 
+**Address Resolution**:
+The Current Mirror fact that delivered PN or LID forms of a WhatsApp Address
+belong to one contact record. It joins only native forms WhatsApp supplied and
+never infers a person.
+_Avoid_: Identity resolution, person matching
+
 **Message Sender**:
 The WhatsApp Address of the actual author of a message, including the linked
 account for an own message.
@@ -118,15 +124,16 @@ only before execution begins; an expired executing attempt becomes terminal
 _Avoid_: Permanent running state, automatic send retry, best-effort recovery
 
 **Revision**:
-The per-account monotonic number the data store stamps on every Accepted Source
-Batch; snapshots report their revision and a patch applies only when its
-`fromRevision` exactly matches the client’s current revision.
+The per-account monotonic Current Mirror number, advanced only when projection
+changes state. Snapshots report it and a patch applies only when its
+`fromRevision` exactly matches the client’s current revision; source `seq`
+advances for every Accepted Source Batch.
 _Avoid_: Timestamp ordering, heuristic deduplication
 
 **Snapshot Window**:
 The bounded first frame of a client watch — the account, chat summaries,
-contacts, and groups. An active conversation loads Stored Message Pages
-separately.
+contacts with their Address Resolution aliases, and groups. An active
+conversation loads Stored Message Pages separately.
 _Avoid_: Full-mirror dump, event replay, per-chat message window
 
 **Lifecycle Operation**:

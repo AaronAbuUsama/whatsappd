@@ -32,6 +32,117 @@ test("send before online throws (guarded by phase)", async () => {
   expect(threw).toBe(true);
 });
 
+test("session failure precedence is subscriber, teardown, then run error", async () => {
+  const bodies = ["ok", "run", "subscriber"] as const;
+  const endings = ["ok", "error", "undefined"] as const;
+  const supervisors = ["ok", "rejects"] as const;
+
+  for (const body of bodies) {
+    for (const ending of endings) {
+      for (const supervisor of supervisors) {
+        const runFailure = new Error(`run:${body}:${ending}:${supervisor}`);
+        const subscriberFailure = new Error(`subscriber:${body}:${ending}:${supervisor}`);
+        const supervisorFailure = new Error(`supervisor:${body}:${ending}:${supervisor}`);
+        const teardownFailure =
+          ending === "undefined" ? undefined : new Error(`end:${body}:${ending}:${supervisor}`);
+        const fakeConn = {
+          events: (async function* () {
+            if (body === "ok") {
+              yield {
+                t: "close",
+                fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+              } as const;
+            } else if (body === "run") {
+              yield { t: "qr", qr: "socket-ready" } as const;
+            } else {
+              yield {
+                t: "message",
+                msg: textMessage({
+                  id: "m1",
+                  chatId: "person@s.whatsapp.net",
+                  text: "Hello",
+                }),
+              } as const;
+            }
+          })(),
+          requestPairingCode: async () => {
+            throw runFailure;
+          },
+          end: async () => {
+            if (ending !== "ok") throw teardownFailure;
+          },
+        };
+        const session = createSession({
+          store: memoryStore(),
+          auth: pairingAuth("+15551234567"),
+          openSocket: async () => fakeConn,
+        } as unknown as Parameters<typeof createSession>[0]);
+        session.subscribe({
+          ...(body === "subscriber"
+            ? {
+                message() {
+                  throw subscriberFailure;
+                },
+              }
+            : {}),
+          ...(supervisor === "rejects"
+            ? {
+                connection(status) {
+                  if (status.phase === "disconnected") throw supervisorFailure;
+                },
+              }
+            : {}),
+        });
+
+        const outcome = await session.start().then(
+          () => ({ status: "fulfilled" as const }),
+          (reason: unknown) => ({ status: "rejected" as const, reason }),
+        );
+        const expected =
+          supervisor === "rejects"
+            ? supervisorFailure
+            : body === "subscriber"
+              ? subscriberFailure
+              : ending !== "ok"
+                ? teardownFailure
+                : body === "run"
+                  ? runFailure
+                  : undefined;
+
+        if (expected === undefined && body === "ok" && ending === "ok")
+          expect(outcome.status).toBe("fulfilled");
+        else {
+          const label = `${body}/${ending}/${supervisor}`;
+          assert.equal(outcome.status, "rejected", `${label} must reject`);
+          if (outcome.status === "rejected") assert.equal(outcome.reason, expected, label);
+        }
+      }
+    }
+  }
+});
+
+test("a subscriber rejecting the initial connection transition stops before opening a socket", async () => {
+  const failure = new Error("cannot record connecting");
+  let opened = false;
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => {
+      opened = true;
+      throw new Error("socket must not open");
+    },
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      if (status.phase === "connecting") throw failure;
+    },
+  });
+
+  await assert.rejects(session.start(), failure);
+  expect(opened).toBe(false);
+  expect(session.status.phase).toBe("disconnected");
+});
+
 test("a rejected subscription handler fails the session pipeline", async () => {
   const failure = new Error("acceptance failed");
   let updateDelivered = false;
@@ -337,6 +448,77 @@ test("stop() during socket startup tears down the late-opened socket and awaits 
 
   expect(outcome).toBe("stopped"); // stop() resolved, didn't hang
   expect(ended).toBe(true); // the late-opened socket was torn down
+  expect(s.status.phase).toBe("disconnected");
+});
+
+test("a failed credential wipe is surfaced before logged_out is announced", async () => {
+  const wipeFailure = new Error("credential wipe failed");
+  const inner = memoryStore();
+  const phases: string[] = [];
+  const session = createSession({
+    store: { ...inner, clear: async () => Promise.reject(wipeFailure) },
+    auth: qrAuth(),
+    openSocket: async () => ({
+      events: (async function* () {
+        yield {
+          t: "close",
+          fault: {
+            reason: "logged_out_remote",
+            retryable: false,
+            disposition: "logged_out",
+          },
+        } as const;
+      })(),
+      end: () => {},
+    }),
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      phases.push(status.phase);
+    },
+  });
+
+  await assert.rejects(session.start(), (error: unknown) => error === wipeFailure);
+  expect(phases.includes("logged_out")).toBe(false);
+  expect(session.status.phase).toBe("disconnected");
+});
+
+test("a detached start owns its terminal rejection", async () => {
+  const failure = new Error("acceptance failed");
+  let ended!: () => void;
+  const didEnd = new Promise<void>((resolve) => {
+    ended = resolve;
+  });
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    openSocket: async () => ({
+      events: (async function* () {
+        yield {
+          t: "message",
+          msg: textMessage({ id: "m1", chatId: "person@s.whatsapp.net", text: "Hello" }),
+        } as const;
+      })(),
+      end: ended,
+    }),
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    message() {
+      throw failure;
+    },
+  });
+
+  let unhandled: unknown;
+  const observe = (error: unknown): void => {
+    unhandled = error;
+  };
+  process.once("unhandledRejection", observe);
+  void session.start();
+  await didEnd;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  process.off("unhandledRejection", observe);
+
+  expect(unhandled).toBe(undefined);
 });
 
 test("pairing-code session reaches online when the provider rejects requests before QR readiness", async () => {
@@ -556,9 +738,13 @@ test("a teardown failure outranks an ordinary run error", async () => {
   const runFailure = new Error("transport read failed");
   const teardownFailure = new Error("credential persistence failed");
   const fakeConn = {
-    events: (async function* () {
-      throw runFailure;
-    })(),
+    events: {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          throw runFailure;
+        },
+      }),
+    },
     end: async () => {
       throw teardownFailure;
     },

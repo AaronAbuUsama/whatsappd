@@ -288,9 +288,9 @@ contract does not carry — the `accept()` call is the only scope, and no observ
 identity exists until something retries. `AccountLease.fencingToken` is a
 `number`, not the `string` the lease sketch shows: a store deciding whether a
 writer has been superseded compares tokens, and string order ranks claim 10
-below claim 9 (ADR-0018). `WhatsAppPatch` carries upserts only until deletion
-has something to delete (ADR-0019). Read `src/runtime/contracts.ts` for the
-shipped shapes.
+below claim 9 (ADR-0018). ADR-0022 adds the first delete: consolidation of a
+redundant current contact after WhatsApp delivers equivalent address forms.
+Read `src/runtime/contracts.ts` for the shipped shapes.
 
 ```ts
 export interface AcceptedWhatsAppBatch {

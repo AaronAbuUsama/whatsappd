@@ -20,6 +20,10 @@ revision cursor. This is the Ambient Brain boundary: messages, edits,
 reactions, receipts, and revocations remain distinct source observations even
 though the client mirror projects their current state.
 
+The reader is bounded: callers supply the last consumed `seq` and an optional
+positive page size (default 100). A source-only observation advances `seq` even
+when it takes no mirror revision, so catch-up never depends on patch production.
+
 ## Considered options
 
 - **Memory-only pause and retry**: rejected as a lossless guarantee because the

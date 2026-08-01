@@ -1,39 +1,138 @@
 /**
- * A file-backed {@link CredentialStore} — one file per key under a directory.
- * Durable across restarts; a good default for a single account worker.
+ * A file-backed {@link CredentialStore} under one private, library-owned
+ * namespace. Durable across restarts; a good default for one account worker.
  */
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CredentialStore } from "../ports.ts";
 
-/** Make a key safe to use as a filename. */
-const fileName = (key: string): string => `${key.replace(/[^0-9A-Za-z._-]/g, "_")}.json`;
+const NAMESPACE = ".whatsappd-credentials";
+const STATE_FILE = "store.json";
+
+interface FileState {
+  readonly version: 1;
+  readonly legacyFallback: boolean;
+  readonly values: Readonly<Record<string, string | null>>;
+}
+
+const emptyState = (legacyFallback: boolean): FileState => ({
+  version: 1,
+  legacyFallback,
+  values: {},
+});
+
+const isMissing = (error: unknown): boolean =>
+  error instanceof Error && "code" in error && error.code === "ENOENT";
+
+/** The pre-0.2.3 filename, retained only for safe on-demand migration. */
+const legacyFileName = (key: string): string => `${key.replace(/[^0-9A-Za-z._-]/g, "_")}.json`;
+
+function parseState(source: string): FileState {
+  const parsed: unknown = JSON.parse(source);
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    (parsed as { version?: unknown }).version !== 1 ||
+    typeof (parsed as { legacyFallback?: unknown }).legacyFallback !== "boolean" ||
+    (parsed as { values?: unknown }).values === null ||
+    typeof (parsed as { values?: unknown }).values !== "object" ||
+    Array.isArray((parsed as { values?: unknown }).values) ||
+    Object.values((parsed as FileState).values).some(
+      (value) => value !== null && typeof value !== "string",
+    )
+  )
+    throw new TypeError("invalid whatsappd credential file");
+  return parsed as FileState;
+}
 
 export function fileStore(dir: string): CredentialStore {
-  const path = (key: string): string => join(dir, fileName(key));
+  const namespace = join(dir, NAMESPACE);
+  const statePath = join(namespace, STATE_FILE);
+  const observedLegacy = new Set<string>();
+  let pending: Promise<void> = Promise.resolve();
+
+  const serialize = <T>(work: () => Promise<T>): Promise<T> => {
+    const result = pending.then(work);
+    pending = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
+  const load = async (): Promise<FileState | undefined> => {
+    try {
+      return parseState(await readFile(statePath, "utf8"));
+    } catch (error) {
+      if (isMissing(error)) return undefined;
+      throw error;
+    }
+  };
+
+  const commit = async (state: FileState): Promise<void> => {
+    await mkdir(namespace, { recursive: true, mode: 0o700 });
+    // mkdir's mode is filtered by umask and does not tighten an existing path.
+    await chmod(namespace, 0o700);
+    const temporary = join(namespace, `${STATE_FILE}.${randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, JSON.stringify(state), {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+        flush: true,
+      });
+      await rename(temporary, statePath);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    }
+  };
 
   return {
-    async read(key) {
-      try {
-        return await readFile(path(key), "utf-8");
-      } catch {
-        return null; // missing key
-      }
+    read(key) {
+      return serialize(async () => {
+        const current = await load();
+        if (current && Object.hasOwn(current.values, key)) return current.values[key] ?? null;
+        if (current && !current.legacyFallback) return null;
+
+        const legacyPath = join(dir, legacyFileName(key));
+        let value: string;
+        try {
+          value = await readFile(legacyPath, "utf8");
+        } catch (error) {
+          if (isMissing(error)) return null;
+          throw error;
+        }
+
+        observedLegacy.add(legacyPath);
+        await commit({
+          version: 1,
+          legacyFallback: true,
+          values: { ...current?.values, [key]: value },
+        });
+        return value;
+      });
     },
-    async write(entries) {
-      // Every write, not once at creation: the directory can disappear under a
-      // live store — a cleanup job, a tmpfs, an operator with `rm -rf` — and a
-      // credential save that ENOENTs there is the save that loses the session.
-      // `recursive: true` makes this a no-op when the directory already exists.
-      await mkdir(dir, { recursive: true });
-      await Promise.all(
-        Object.entries(entries).map(([key, value]) =>
-          value === null ? rm(path(key), { force: true }) : writeFile(path(key), value),
-        ),
-      );
+
+    write(entries) {
+      if (Object.keys(entries).length === 0) return Promise.resolve();
+      return serialize(async () => {
+        const current = (await load()) ?? emptyState(true);
+        const values: Record<string, string | null> = { ...current.values };
+        for (const [key, value] of Object.entries(entries)) values[key] = value;
+        await commit({ ...current, values });
+      });
     },
-    async clear() {
-      await rm(dir, { recursive: true, force: true });
+
+    clear() {
+      return serialize(async () => {
+        // An empty owned state is the durable tombstone that prevents legacy
+        // files from reappearing after a normal process restart.
+        await commit(emptyState(false));
+        await Promise.all([...observedLegacy].map((path) => rm(path, { force: true })));
+        observedLegacy.clear();
+      });
     },
   };
 }

@@ -60,7 +60,11 @@ and `stop()`.
 ## Credentials
 
 `CredentialStore` is an opaque string key/value capability. The package ships
-file and memory stores from the root entry point.
+file and memory stores from the root entry point. `fileStore(dir)` owns only its
+private `.whatsappd-credentials` child: `clear()` never removes `dir` or any
+unrelated file. Writes atomically replace a private `0600` state file, and old
+per-key files are migrated on first read without allowing cleared credentials
+to reappear after restart.
 
 ## Runtime, backend, and client
 
@@ -112,11 +116,12 @@ change as a patch whose `fromRevision` is the revision it applies to; a gap
 replaces state with a fresh snapshot rather than applying over it. Replaying a
 message the mirror already holds produces no patch.
 
-A conversation is fed by `messages()` and by the message upserts on `watch()`,
-and the two are reconciled on `(chatId, messageId)` rather than appended. That
-is what makes paging safe alongside live traffic: a backdated message can arrive
-as a patch _and_ appear in the older page that now contains it, and applying
-both by identity leaves one message. An exhausted cursor means nothing older is
+`messages()` and `watch()` are independent data surfaces; the client does not
+maintain an application collection or deduplicate them for you. A consumer
+merges message records on `(chatId, messageId)`. A backdated message can arrive
+as a patch _and_ appear in the older page that now contains it, and that
+identity-based upsert leaves one message. The cursor itself prevents skips or
+duplicates _between stored pages_. An exhausted cursor means nothing older is
 **stored** — never that WhatsApp has no more.
 
 Credentials, WhatsApp data, the account lease, and media bytes are four separate
@@ -126,12 +131,16 @@ be replaced individually. Starting a second runtime for an account another one
 holds rejects with `AccountAlreadyClaimedError` before any socket opens.
 
 This slice projects text messages, the chats they belong to, contacts, and
-groups. A data store rejects any other durable event with
-`UnsupportedDurableEventError` rather than dropping it, so nothing reaches the
-mirror by a side route; the runtime correspondingly does not observe what it
-cannot yet project, so receipts pass by without storing anything. A storage
-failure stops processing with the original failure instead of being logged and
-skipped.
+groups. Normalized updates such as receipts are retained in the accepted-source
+feed even before they gain a current-mirror projection. Accepted-source reads
+are bounded and resume from their own `seq`; a storage failure stops processing
+with the original failure instead of being logged and skipped.
+
+Snapshots expose `contactAliases`, mapping every WhatsApp-delivered PN or LID
+form to its owning contact record. When later evidence explicitly links two
+previously separate contact records, the patch upserts the consolidated record
+and deletes only the redundant current-mirror contact; accepted source evidence
+is never deleted.
 
 Connection and presence are live signals with an expiry: no status is ever
 stored, and none is replayed as current truth. The _instant_ each was observed

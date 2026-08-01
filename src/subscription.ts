@@ -8,6 +8,7 @@ import type {
   Update,
 } from "./model/index.ts";
 import { refOf, type MessageRef, type Outbound, type SendOptions } from "./model/outbound.ts";
+import { firstRejection } from "./outcome.ts";
 
 export type Awaitable<T> = T | Promise<T>;
 export type Unsubscribe = () => void;
@@ -100,8 +101,8 @@ export function createSubscriptionDispatcher(send: Send): {
         }),
       );
       const results = await Promise.allSettled(pending);
-      const rejected = results.find((result) => result.status === "rejected");
-      if (rejected?.status === "rejected") throw new SubscriptionHandlerError(rejected.reason);
+      const rejected = firstRejection(results);
+      if (rejected) throw new SubscriptionHandlerError(rejected.reason);
     },
   };
 }

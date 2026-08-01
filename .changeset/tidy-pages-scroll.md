@@ -29,7 +29,7 @@ Contacts and groups now project instead of only being recorded: the runtime
 subscribes `contact` and `group`, a conversation sync's contacts and its group
 chats' subjects and rosters become mirror records, and a contact merges rather
 than replaces so a presence observation cannot blank a name. A receipt still
-has no projection, and `UnsupportedDurableEventError` still refuses it.
+has no current projection, but remains retained in the accepted source log.
 
 Durable last-seen and account connection timestamps arrive with ADR-0020,
 amending ADR-0014: the runtime derives an `ObservedInstant` from an ephemeral
@@ -40,9 +40,10 @@ instants advance monotonically, so a replayed or late older observation takes no
 revision. Connection Freshness is unchanged — a live connection frame still
 expires and is never hydrated as startup truth.
 
-A last-seen updates a contact and never creates one, so a PN ping and a LID
-ping cannot open two records for one WhatsApp Address — a split that could only
-be reconciled by removing a record, which ADR-0019 forbids. A live group rename
+A last-seen updates a contact and never creates one because presence supplies no
+equivalence evidence. When a later contact, sync, or message explicitly links
+PN and LID forms, ADR-0022 consolidates redundant Current Mirror contacts while
+the Accepted Source Batches remain intact. A live group rename
 reaches the chat summary as well as the group record, so one Snapshot Window
 never carries two names for the same group.
 
