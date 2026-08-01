@@ -662,6 +662,54 @@ test("an update is retained in accepted source without inventing a projection", 
   expect((await data.accepted("personal", 0))[0]?.events[0]?.event.type).toBe("update");
 });
 
+test("a media edit retains cloneable metadata without its live download handle", async () => {
+  const { driver, backend, runtime } = lane("personal");
+  await runtime.start();
+  let downloads = 0;
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "edit",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      message: {
+        id: "m1",
+        chatId: PERSON,
+        sender: { id: PERSON, mode: "pn" },
+        fromMe: false,
+        timestamp: AT,
+        live: true,
+        isGroup: false,
+        kind: "image",
+        media: {
+          mimetype: "image/jpeg",
+          width: 640,
+          height: 480,
+          async download() {
+            downloads++;
+            return Buffer.from("image");
+          },
+        },
+      },
+    },
+  });
+
+  const event = (await backend.data.accepted("personal", 0))[0]?.events[0]?.event;
+  assert.ok(event?.type === "update" && event.update.kind === "edit");
+  assert.equal(event.update.message.kind, "image");
+  if (event.update.message.kind === "image") {
+    expect(event.update.message.media).toEqual({
+      mimetype: "image/jpeg",
+      width: 640,
+      height: 480,
+    });
+    expect("download" in event.update.message.media).toBe(false);
+  }
+  expect(downloads).toBe(0);
+
+  await runtime.stop();
+});
+
 test("projected and source-only observations commit in one batch", async () => {
   const data = memoryDataStore();
 

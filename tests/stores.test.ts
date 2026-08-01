@@ -49,9 +49,12 @@ test("[file] legacy credentials migrate once and cannot reappear after clear", a
 
   const store = fileStore(dir);
   expect(await store.read("creds")).toBe("old secret");
-  await store.clear();
+  // Logout may happen in a replacement process, so migration cleanup cannot
+  // depend on paths remembered only by the instance that performed the read.
+  await fileStore(dir).clear();
 
   expect(await fileStore(dir).read("creds")).toBe(null);
+  expect(() => readFileSync(legacy, "utf8")).toThrow();
   expect(readFileSync(unrelated, "utf8")).toBe("keep me");
 });
 

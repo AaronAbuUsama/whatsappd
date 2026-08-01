@@ -13,12 +13,15 @@ const STATE_FILE = "store.json";
 interface FileState {
   readonly version: 1;
   readonly legacyFallback: boolean;
+  /** Keys whose pre-namespace files still need removing on credential clear. */
+  readonly legacyKeys?: readonly string[];
   readonly values: Readonly<Record<string, string | null>>;
 }
 
 const emptyState = (legacyFallback: boolean): FileState => ({
   version: 1,
   legacyFallback,
+  legacyKeys: [],
   values: {},
 });
 
@@ -35,6 +38,9 @@ function parseState(source: string): FileState {
     typeof parsed !== "object" ||
     (parsed as { version?: unknown }).version !== 1 ||
     typeof (parsed as { legacyFallback?: unknown }).legacyFallback !== "boolean" ||
+    ((parsed as { legacyKeys?: unknown }).legacyKeys !== undefined &&
+      (!Array.isArray((parsed as { legacyKeys?: unknown }).legacyKeys) ||
+        (parsed as { legacyKeys: unknown[] }).legacyKeys.some((key) => typeof key !== "string"))) ||
     (parsed as { values?: unknown }).values === null ||
     typeof (parsed as { values?: unknown }).values !== "object" ||
     Array.isArray((parsed as { values?: unknown }).values) ||
@@ -49,7 +55,6 @@ function parseState(source: string): FileState {
 export function fileStore(dir: string): CredentialStore {
   const namespace = join(dir, NAMESPACE);
   const statePath = join(namespace, STATE_FILE);
-  const observedLegacy = new Set<string>();
   let pending: Promise<void> = Promise.resolve();
 
   const serialize = <T>(work: () => Promise<T>): Promise<T> => {
@@ -105,10 +110,10 @@ export function fileStore(dir: string): CredentialStore {
           throw error;
         }
 
-        observedLegacy.add(legacyPath);
         await commit({
           version: 1,
           legacyFallback: true,
+          legacyKeys: [...new Set([...(current?.legacyKeys ?? []), key])],
           values: { ...current?.values, [key]: value },
         });
         return value;
@@ -127,11 +132,15 @@ export function fileStore(dir: string): CredentialStore {
 
     clear() {
       return serialize(async () => {
+        const current = await load();
+        await Promise.all(
+          (current?.legacyKeys ?? []).map((key) =>
+            rm(join(dir, legacyFileName(key)), { force: true }),
+          ),
+        );
         // An empty owned state is the durable tombstone that prevents legacy
         // files from reappearing after a normal process restart.
         await commit(emptyState(false));
-        await Promise.all([...observedLegacy].map((path) => rm(path, { force: true })));
-        observedLegacy.clear();
       });
     },
   };

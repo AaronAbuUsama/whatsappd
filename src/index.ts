@@ -73,6 +73,8 @@ export type {
   AccountRecord,
   ChatRecord,
   ContactRecord,
+  DurableInboundMessage,
+  DurableUpdate,
   GroupRecord,
   MediaStore,
   MessageRecord,

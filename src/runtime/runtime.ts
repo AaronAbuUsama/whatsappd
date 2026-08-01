@@ -12,6 +12,8 @@
  * @packageDocumentation
  */
 import { isOnline, isTerminal, type Status } from "../model/status.ts";
+import type { MediaMeta } from "../model/message.ts";
+import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import { firstRejection, settle } from "../outcome.ts";
@@ -20,6 +22,7 @@ import {
   AccountNotHeldError,
   type AccountLease,
   type AccountLeaseStore,
+  type DurableUpdate,
   type StoredMessagePage,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
@@ -28,6 +31,32 @@ import {
   type WhatsAppDurableEvent,
   type WhatsAppSnapshot,
 } from "./contracts.ts";
+
+const durableUpdate = (update: Update): DurableUpdate => {
+  if (update.kind !== "edit") return update;
+  switch (update.message.kind) {
+    case "image":
+    case "video":
+    case "audio":
+    case "document":
+    case "sticker": {
+      const source = update.message.media;
+      const media: MediaMeta = {
+        ...(source.mimetype !== undefined && { mimetype: source.mimetype }),
+        ...(source.fileLength !== undefined && { fileLength: source.fileLength }),
+        ...(source.fileName !== undefined && { fileName: source.fileName }),
+        ...(source.seconds !== undefined && { seconds: source.seconds }),
+        ...(source.ptt !== undefined && { ptt: source.ptt }),
+        ...(source.width !== undefined && { width: source.width }),
+        ...(source.height !== undefined && { height: source.height }),
+        ...(source.caption !== undefined && { caption: source.caption }),
+      };
+      return { ...update, message: { ...update.message, media } };
+    }
+    default:
+      return update;
+  }
+};
 
 /**
  * What a connection status durably says about *when*, if anything.
@@ -234,7 +263,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    */
   const handlers: WhatsAppSessionHandlers = {
     message: (message) => accept({ type: "message", message }),
-    update: (update) => accept({ type: "update", update }),
+    update: (update) => accept({ type: "update", update: durableUpdate(update) }),
     conversationSync: (batch) => accept({ type: "conversation_sync", batch }),
     contact: (contact) => accept({ type: "contact", contact }),
     group: (group) => accept({ type: "group", group }),

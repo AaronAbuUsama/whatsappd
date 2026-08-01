@@ -45,3 +45,6 @@ when it takes no mirror revision, so catch-up never depends on patch production.
   typing, availability, `online`, or pairing status would manufacture current
   state. Connection state is live and expiry-aware; durable account lifecycle
   facts remain in runtime state.
+- A media edit retains normalized message metadata, not its live `download()`
+  closure. The closure cannot survive serialization or a restart; ADR-0015 and
+  #21 own durable byte capture while the handle is still usable.

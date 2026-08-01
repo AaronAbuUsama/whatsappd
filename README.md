@@ -63,8 +63,8 @@ and `stop()`.
 file and memory stores from the root entry point. `fileStore(dir)` owns only its
 private `.whatsappd-credentials` child: `clear()` never removes `dir` or any
 unrelated file. Writes atomically replace a private `0600` state file, and old
-per-key files are migrated on first read without allowing cleared credentials
-to reappear after restart.
+per-key files are migrated on first read, remembered durably, and removed by a
+later `clear()` even from a replacement process.
 
 ## Runtime, backend, and client
 
@@ -132,9 +132,10 @@ holds rejects with `AccountAlreadyClaimedError` before any socket opens.
 
 This slice projects text messages, the chats they belong to, contacts, and
 groups. Normalized updates such as receipts are retained in the accepted-source
-feed even before they gain a current-mirror projection. Accepted-source reads
-are bounded and resume from their own `seq`; a storage failure stops processing
-with the original failure instead of being logged and skipped.
+feed even before they gain a current-mirror projection. A media edit retains its
+metadata there, never the live `download()` closure. Accepted-source reads are
+bounded and resume from their own `seq`; a storage failure stops processing with
+the original failure instead of being logged and skipped.
 
 Snapshots expose `contactAliases`, mapping every WhatsApp-delivered PN or LID
 form to its owning contact record. When later evidence explicitly links two

@@ -11,7 +11,15 @@
  *
  * @packageDocumentation
  */
-import type { GroupParticipant, PresenceUpdate, Status, WhatsAppAddress } from "../model/index.ts";
+import type {
+  GroupParticipant,
+  InboundMessage,
+  MediaMeta,
+  PresenceUpdate,
+  Status,
+  Update,
+  WhatsAppAddress,
+} from "../model/index.ts";
 import type { MessageRef } from "../model/outbound.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { WhatsAppEvent } from "../subscription.ts";
@@ -39,6 +47,23 @@ export type ObservedInstant =
       readonly at: number;
     };
 
+type MediaInboundMessage = Extract<
+  InboundMessage,
+  { kind: "image" | "video" | "audio" | "document" | "sticker" }
+>;
+
+/** A normalized message safe to retain after its live media handle expires. */
+export type DurableInboundMessage =
+  | Exclude<InboundMessage, MediaInboundMessage>
+  | (Omit<MediaInboundMessage, "media"> & { readonly media: MediaMeta });
+
+type EditUpdate = Extract<Update, { kind: "edit" }>;
+
+/** A source update whose edited media carries metadata, never a live closure. */
+export type DurableUpdate =
+  | Exclude<Update, EditUpdate>
+  | (Omit<EditUpdate, "message"> & { readonly message: DurableInboundMessage });
+
 /**
  * The source events that may be durably accepted.
  *
@@ -50,7 +75,8 @@ export type ObservedInstant =
  * and is durable (ADR-0020).
  */
 export type WhatsAppDurableEvent =
-  | Exclude<WhatsAppEvent, { type: "connection" | "presence" }>
+  | Exclude<WhatsAppEvent, { type: "connection" | "presence" | "update" }>
+  | { readonly type: "update"; readonly update: DurableUpdate }
   | ObservedInstant;
 
 /**
