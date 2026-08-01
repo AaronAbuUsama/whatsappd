@@ -11,7 +11,15 @@
  *
  * @packageDocumentation
  */
-import type { GroupParticipant, PresenceUpdate, Status, WhatsAppAddress } from "../model/index.ts";
+import type {
+  GroupParticipant,
+  InboundMessage,
+  MediaMeta,
+  PresenceUpdate,
+  Status,
+  Update,
+  WhatsAppAddress,
+} from "../model/index.ts";
 import type { MessageRef } from "../model/outbound.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { WhatsAppEvent } from "../subscription.ts";
@@ -39,6 +47,23 @@ export type ObservedInstant =
       readonly at: number;
     };
 
+type MediaInboundMessage = Extract<
+  InboundMessage,
+  { kind: "image" | "video" | "audio" | "document" | "sticker" }
+>;
+
+/** A normalized message safe to retain after its live media handle expires. */
+export type DurableInboundMessage =
+  | Exclude<InboundMessage, MediaInboundMessage>
+  | (Omit<MediaInboundMessage, "media"> & { readonly media: MediaMeta });
+
+type EditUpdate = Extract<Update, { kind: "edit" }>;
+
+/** A source update whose edited media carries metadata, never a live closure. */
+export type DurableUpdate =
+  | Exclude<Update, EditUpdate>
+  | (Omit<EditUpdate, "message"> & { readonly message: DurableInboundMessage });
+
 /**
  * The source events that may be durably accepted.
  *
@@ -50,7 +75,8 @@ export type ObservedInstant =
  * and is durable (ADR-0020).
  */
 export type WhatsAppDurableEvent =
-  | Exclude<WhatsAppEvent, { type: "connection" | "presence" }>
+  | Exclude<WhatsAppEvent, { type: "connection" | "presence" | "update" }>
+  | { readonly type: "update"; readonly update: DurableUpdate }
   | ObservedInstant;
 
 /**
@@ -157,6 +183,9 @@ export type MirrorRecord =
   | { readonly type: "group"; readonly group: GroupRecord }
   | { readonly type: "message"; readonly message: MessageRecord };
 
+/** A current-mirror identity removed because WhatsApp linked it to another record. */
+export type MirrorDelete = { readonly type: "contact"; readonly contactId: string };
+
 /**
  * The Snapshot Window: one account's bounded current mirror at one revision.
  *
@@ -172,6 +201,8 @@ export interface WhatsAppSnapshot {
   readonly account: AccountRecord;
   readonly chats: readonly ChatRecord[];
   readonly contacts: readonly ContactRecord[];
+  /** Native PN/LID address to the contact record that owns it. */
+  readonly contactAliases: Readonly<Record<string, string>>;
   readonly groups: readonly GroupRecord[];
 }
 
@@ -245,15 +276,16 @@ export interface StoredMessagePage {
  *
  * @remarks
  * A consumer applies a patch only when `fromRevision` equals its own revision.
- * There are no deletes: nothing removes a mirror record until revocation and
- * scope-bounded replacement exist, and the field arrives with the first thing
- * that produces one (ADR-0019, amending ADR-0011).
+ * Deletes are identity-specific: currently only a contact record that WhatsApp
+ * explicitly linked to another PN/LID form can be removed. Source observations
+ * remain append-only; authoritative replacement still requires bounded scope.
  */
 export interface WhatsAppPatch {
   readonly accountId: string;
   readonly fromRevision: number;
   readonly revision: number;
   readonly upserts: readonly MirrorRecord[];
+  readonly deletes?: readonly MirrorDelete[];
 }
 
 /**
@@ -298,9 +330,10 @@ export interface WhatsAppDataStore {
    * holds appends it — it happened — but changes no record and takes no
    * revision, so a replayed message produces no client update.
    *
-   * @throws {@link UnsupportedDurableEventError} when an event has no
-   * projection yet, and {@link StaleAccountClaimError} for a superseded token —
-   * in both cases nothing is appended and the revision does not move.
+   * @throws {@link UnsupportedDurableEventError} when an event kind is not
+   * supported for durable acceptance, and {@link StaleAccountClaimError} for a
+   * superseded token — in both cases nothing is appended and the revision does
+   * not move. A supported source-only update is appended without a revision.
    */
   accept(
     accountId: string,
@@ -344,8 +377,17 @@ export interface WhatsAppDataStore {
     options?: StoredMessagePageOptions,
   ): Promise<StoredMessagePage>;
 
-  /** Read accepted source batches strictly after a consumer's own `seq`. */
-  accepted(accountId: string, afterSeq: number): Promise<readonly AcceptedWhatsAppBatch[]>;
+  /**
+   * Read a bounded page of accepted source batches strictly after a consumer's
+   * own `seq`.
+   *
+   * @param limit - Maximum batches to return; defaults to 100.
+   */
+  accepted(
+    accountId: string,
+    afterSeq: number,
+    limit?: number,
+  ): Promise<readonly AcceptedWhatsAppBatch[]>;
 }
 
 /** A single-writer claim on one account (ADR-0009). */
@@ -478,14 +520,12 @@ export class AccountNotHeldError extends Error {
 }
 
 /**
- * Thrown when a durable event has no projection in this slice.
+ * Thrown when a durable event cannot yet be accepted safely in this slice.
  *
  * @remarks
- * This slice projects text messages, the chats they belong to, contacts,
- * groups, and derived observation instants. Every other durable event — an
- * `update`, an authoritative sync replacement — fails loudly here rather than
- * being dropped on the way to storage: a silent skip would report a mirror as
- * current when it is missing changes.
+ * Modeled source-only updates are accepted without moving the mirror revision.
+ * Non-text messages, authoritative sync replacement, and unknown event kinds
+ * still fail loudly rather than being dropped or falsely reported as current.
  */
 export class UnsupportedDurableEventError extends Error {
   constructor(what: string) {
@@ -553,11 +593,11 @@ export interface WhatsAppClient {
    * filled (ADR-0010). It reads storage only — see
    * {@link WhatsAppDataStore.messages}.
    *
-   * **Both surfaces are applied by record identity.** A conversation is fed by
-   * this method *and* by the message upserts on {@link WhatsAppClient.watch},
-   * and the two are reconciled on `(chatId, messageId)` — the identity of
-   * {@link MessageRecord} — never by appending. That is what makes "no
-   * duplicate, no skip" hold rather than depending on arrival order:
+   * **Consumers apply both surfaces by record identity.** This method and the
+   * message upserts on {@link WhatsAppClient.watch} are independent reads; the
+   * client does not own or reconcile an application collection. Merge them on
+   * `(chatId, messageId)` — the identity of {@link MessageRecord} — rather than
+   * appending:
    *
    * - A message newer than an open cursor can only arrive as a patch. Paging
    *   older can never reach it, so it cannot be delivered twice.
@@ -565,9 +605,9 @@ export interface WhatsAppClient {
    *   skew, the backfill of #25 — arrives as a patch and is also returned by
    *   the older page that now contains it. Both describe one record at one
    *   identity, so an upsert leaves one message; an append would leave two.
-   * - Nothing is ever skipped, because the cursor is a position in the ordering
-   *   rather than an offset: a record inserted below it still falls inside the
-   *   next page.
+   * - Stored pages neither skip nor duplicate records because the cursor is a
+   *   position in the ordering rather than an offset: a record inserted below
+   *   it still falls inside the next page.
    *
    * {@link StoredMessagePage.revision} says which patches a page already
    * reflects, so the two surfaces can be ordered as well as merged.

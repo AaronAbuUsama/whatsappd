@@ -19,6 +19,7 @@ import makeWASocket, {
 import type { Logger } from "pino";
 import { classifyDisconnect, type WhatsAppFault } from "../errors.ts";
 import type { AuthStrategy } from "../ports.ts";
+import { settle } from "../outcome.ts";
 import {
   addressOf,
   type GroupMetadata,
@@ -203,6 +204,11 @@ export interface OpenSocketOpts {
   logger: Logger;
 }
 
+export interface OpenSocketDependencies {
+  fetchLatestVersion: typeof fetchLatestBaileysVersion;
+  makeSocket: typeof makeWASocket;
+}
+
 export function browserForOpen(
   authMethod: AuthStrategy["method"],
   auth: { readonly creds: { readonly registered?: boolean } },
@@ -324,8 +330,19 @@ function connectionUpdateTelemetry(update: BaileysEventMap["connection.update"])
 }
 
 export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
+  return openSocketWith(opts, {
+    fetchLatestVersion: fetchLatestBaileysVersion,
+    makeSocket: makeWASocket,
+  });
+}
+
+/** Open the real adapter with replaceable protocol constructors for direct tests. */
+export async function openSocketWith(
+  opts: OpenSocketOpts,
+  dependencies: OpenSocketDependencies,
+): Promise<BaileysConn> {
   const { auth, authMethod, saveCreds, logger } = opts;
-  const { version } = await fetchLatestBaileysVersion();
+  const { version } = await dependencies.fetchLatestVersion();
   const queue = new EventQueue();
   let intentional = false;
   const requestFullHistory = shouldRequestFullHistoryOnOpen(auth);
@@ -341,7 +358,7 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
     "opening baileys socket",
   );
 
-  const sock: WASocket = makeWASocket({
+  const sock: WASocket = dependencies.makeSocket({
     version,
     logger,
     browser,
@@ -359,16 +376,15 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
   });
 
   let credentialWrites = Promise.resolve();
-  // A separate flag, not truthiness of the reason: a store may reject with a
-  // falsy value (undefined, 0, ""), and the FIRST failure must be the one kept.
-  let credentialWriteFailed = false;
-  let credentialWriteError: unknown;
+  let credentialWriteOutcome: PromiseSettledResult<void> = {
+    status: "fulfilled",
+    value: undefined,
+  };
   sock.ev.on("creds.update", () => {
-    credentialWrites = credentialWrites.then(saveCreds).catch((error: unknown) => {
-      if (!credentialWriteFailed) {
-        credentialWriteFailed = true;
-        credentialWriteError = error;
-      }
+    credentialWrites = credentialWrites.then(async () => {
+      const outcome = await settle(saveCreds());
+      if (credentialWriteOutcome.status === "fulfilled" && outcome.status === "rejected")
+        credentialWriteOutcome = outcome;
     });
   });
   let ending: Promise<void> | undefined;
@@ -381,7 +397,7 @@ export async function openSocket(opts: OpenSocketOpts): Promise<BaileysConn> {
         pending = credentialWrites;
         await pending;
       } while (pending !== credentialWrites);
-      if (credentialWriteFailed) throw credentialWriteError;
+      if (credentialWriteOutcome.status === "rejected") throw credentialWriteOutcome.reason;
     })());
 
   // Media bytes are pulled on demand via this factory — never buffered here.

@@ -4,12 +4,17 @@ status: accepted
 
 # A patch carries only upserts until deletion exists
 
+> Amended by ADR-0022: WhatsApp-delivered PN/LID equivalence is now the first
+> proven delete producer. It may remove a redundant current contact record;
+> accepted source remains append-only. The revocation and authoritative-
+> replacement restrictions below still hold.
+
 ADR-0011 specifies that a patch carries "normalized mirror-record upserts and
 deletes". Implementing it produced no deletes to carry. This decision amends
 that one clause; everything else in ADR-0011 — the `fromRevision`/`revision`
 pair, exact-base application, gap-forces-snapshot — stands unchanged.
 
-## Nothing removes a mirror record yet
+## The original restriction
 
 `WhatsAppPatch` ships with `upserts` alone. Every projection in this slice adds
 or replaces a record: a message arrives, a chat's last-message time moves. The
@@ -36,10 +41,10 @@ Adding it later is a widening of the patch shape: a client that ignores an
 absent `deletes` behaves identically to one written before it existed, so the
 change is additive for consumers that apply upserts by record identity.
 
-## Consequences
+## Original consequences
 
-- A backend implementing `WhatsAppDataStore.accept()` never emits deletions, and
-  a mirror only grows within an account until a slice earns removal.
+- A backend implementing `WhatsAppDataStore.accept()` emitted no deletions until
+  ADR-0022 supplied an explicit, tested contact-consolidation producer.
 - The slice that models revocation owns this decision's reversal, and owns
   proving it: a patch that removes a record, and a client that applies it.
 - Prune, retention, and account deletion remain outside the patch contract —

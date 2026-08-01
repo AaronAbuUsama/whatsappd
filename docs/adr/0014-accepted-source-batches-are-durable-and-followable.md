@@ -20,6 +20,10 @@ revision cursor. This is the Ambient Brain boundary: messages, edits,
 reactions, receipts, and revocations remain distinct source observations even
 though the client mirror projects their current state.
 
+The reader is bounded: callers supply the last consumed `seq` and an optional
+positive page size (default 100). A source-only observation advances `seq` even
+when it takes no mirror revision, so catch-up never depends on patch production.
+
 ## Considered options
 
 - **Memory-only pause and retry**: rejected as a lossless guarantee because the
@@ -41,3 +45,6 @@ though the client mirror projects their current state.
   typing, availability, `online`, or pairing status would manufacture current
   state. Connection state is live and expiry-aware; durable account lifecycle
   facts remain in runtime state.
+- A media edit retains normalized message metadata, not its live `download()`
+  closure. The closure cannot survive serialization or a restart; ADR-0015 and
+  #21 own durable byte capture while the handle is still usable.

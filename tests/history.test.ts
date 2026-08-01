@@ -72,10 +72,62 @@ test("conversation sync chats and contacts map without leaking Baileys types", (
   });
   expect(batch.chats[1]).toMatchObject({ id: "1555@s.whatsapp.net", isGroup: false });
   expect(batch.contacts).toEqual([
-    { id: "1555@s.whatsapp.net", displayName: "Alice" },
-    { id: "1666@s.whatsapp.net", displayName: "Bob" },
+    { id: "1555@s.whatsapp.net", nativeIds: ["1555@s.whatsapp.net"], displayName: "Alice" },
+    { id: "1666@s.whatsapp.net", nativeIds: ["1666@s.whatsapp.net"], displayName: "Bob" },
   ]);
   expect(batch.messages).toEqual([]);
+});
+
+test("conversation sync contacts retain every PN and LID form Baileys delivered", () => {
+  const batch = toConversationSyncBatch(
+    {
+      chats: [],
+      contacts: [
+        {
+          id: "1555@s.whatsapp.net",
+          phoneNumber: "1555@s.whatsapp.net",
+          lid: "55555@lid",
+          name: "Alice",
+        },
+      ] as HistoryPayload["contacts"],
+      messages: [],
+    },
+    SELF,
+  );
+
+  expect(batch.contacts).toEqual([
+    {
+      id: "1555@s.whatsapp.net",
+      nativeIds: ["1555@s.whatsapp.net", "55555@lid"],
+      displayName: "Alice",
+    },
+  ]);
+});
+
+test("conversation sync contacts use the live adapter's trimmed native-id fallback", () => {
+  const batch = toConversationSyncBatch(
+    {
+      chats: [],
+      contacts: [
+        {
+          id: "   ",
+          phoneNumber: " 1555@s.whatsapp.net ",
+          lid: " 55555@lid ",
+          name: "Alice",
+        },
+      ] as HistoryPayload["contacts"],
+      messages: [],
+    },
+    SELF,
+  );
+
+  expect(batch.contacts).toEqual([
+    {
+      id: "1555@s.whatsapp.net",
+      nativeIds: ["1555@s.whatsapp.net", "55555@lid"],
+      displayName: "Alice",
+    },
+  ]);
 });
 
 test("conversation sync batches keep chats, contacts, and non-live messages together", () => {

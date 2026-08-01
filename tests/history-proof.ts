@@ -336,7 +336,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         r.anchor_msg_hash as string,
         msgs,
       );
-      console.log(`\n▶ request ${id} chat=${r.chat_hash} count=${r.count}`);
+      const chatHash = typeof r.chat_hash === "string" ? r.chat_hash : "unknown";
+      const count = typeof r.count === "number" ? r.count : "unknown";
+      console.log(`\n▶ request ${id} chat=${chatHash} count=${count}`);
       console.log(
         `  correlated batches: ${rows.length} ${JSON.stringify(rows.map((b) => ({ seq: b.seq, chunk: b.chunk_order, progress: b.progress, latest: b.is_latest, msgs: b.message_count })))}`,
       );

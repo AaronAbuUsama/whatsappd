@@ -26,6 +26,7 @@ import {
   type GroupRecord,
   type MediaStore,
   type MessageRecord,
+  type MirrorDelete,
   type MirrorRecord,
   type ObservedInstant,
   type StoredMessageCursor,
@@ -106,27 +107,41 @@ const advance = (current: number | undefined, at: number): number => Math.max(cu
 function projectContact(
   pending: AccountMirror,
   upserts: MirrorRecord[],
+  deletes: MirrorDelete[],
   contact: ContactRecord,
 ): void {
-  const known = contact.nativeIds
-    .map((id) => pending.contactKeys.get(id))
-    .find((id) => id !== undefined);
-  const contactId = known ?? contact.contactId;
+  const reachedIds = [
+    ...new Set(
+      contact.nativeIds.flatMap((id) => {
+        const reached = pending.contactKeys.get(id);
+        return reached === undefined ? [] : [reached];
+      }),
+    ),
+  ];
+  const contactId = reachedIds[0] ?? contact.contactId;
+  const reached = reachedIds.flatMap((id) => {
+    const record = pending.contacts.get(id);
+    return record === undefined ? [] : [record];
+  });
   const existing = pending.contacts.get(contactId);
-  const merged: ContactRecord = existing
-    ? {
-        ...existing,
-        ...contact,
-        // The record keeps the identity it was first stored under: a newly
-        // delivered form joins it rather than renaming it out from under every
-        // consumer holding the old key.
-        contactId,
-        nativeIds: [...new Set([...existing.nativeIds, ...contact.nativeIds])],
-        ...(contact.lastSeenAt !== undefined && {
-          lastSeenAt: advance(existing.lastSeenAt, contact.lastSeenAt),
-        }),
-      }
-    : contact;
+  const nativeIds = [
+    ...new Set([...reached.flatMap((record) => record.nativeIds), ...contact.nativeIds]),
+  ];
+  const seen = [...reached.flatMap((record) => record.lastSeenAt ?? []), contact.lastSeenAt].filter(
+    (at): at is number => at !== undefined,
+  );
+  const merged: ContactRecord = {
+    ...Object.assign({}, ...reached.toReversed()),
+    ...contact,
+    contactId,
+    nativeIds,
+    ...(seen.length > 0 && { lastSeenAt: Math.max(...seen) }),
+  };
+
+  for (const id of reachedIds.slice(1)) {
+    pending.contacts.delete(id);
+    deletes.push({ type: "contact", contactId: id });
+  }
   // Indexed before the no-change bail, so a form this observation was the first
   // to name still resolves next time even when it moved nothing.
   for (const id of merged.nativeIds) pending.contactKeys.set(id, contactId);
@@ -199,25 +214,22 @@ function projectSyncedChat(
  * connection timestamps (ADR-0020).
  *
  * @remarks
- * A last-seen lands on a contact that already exists and creates nothing —
- * see the note inside, which is the reason one contact can never split into
- * two records this slice would then have to merge away.
+ * A last-seen lands on a contact that already exists and creates nothing: one
+ * observed native form is not evidence that two forms are equivalent.
  */
 function projectObserved(
   pending: AccountMirror,
   upserts: MirrorRecord[],
+  deletes: MirrorDelete[],
   accountId: string,
   observed: ObservedInstant,
 ): void {
   if (observed.type === "last_seen") {
     // A presence observation updates a contact; it never invents one. It knows
-    // exactly one native form of an address and nothing that links it to the
-    // others, so letting it create records is what lets a PN ping and a LID
-    // ping open two records for one WhatsApp Address — and a later contact
-    // event naming both could then only reconcile them by *removing* one, which
-    // ADR-0019 does not allow a mirror to do. Contact and conversation-sync
-    // observations always carry the full `nativeIds` set, so a record created
-    // only by them can always be found again and never needs merging away.
+    // exactly one native form and nothing that links it to another. Later
+    // contact, sync, or message evidence may explicitly link forms; ADR-0022
+    // then consolidates redundant current contacts while retaining the
+    // accepted source evidence.
     //
     // The cost is bounded and deliberate: an address WhatsApp has never named
     // in a contact or sync batch keeps no last-seen. WhatsApp only sends
@@ -225,7 +237,7 @@ function projectObserved(
     // own sync already delivered.
     const contactId = pending.contactKeys.get(observed.contactId);
     if (contactId === undefined) return;
-    return projectContact(pending, upserts, {
+    return projectContact(pending, upserts, deletes, {
       accountId,
       contactId,
       nativeIds: [observed.contactId],
@@ -251,11 +263,19 @@ function projectObserved(
 function projectMessage(
   pending: AccountMirror,
   upserts: MirrorRecord[],
+  deletes: MirrorDelete[],
   accountId: string,
   message: InboundMessage,
 ): void {
   if (message.kind !== "text")
     throw new UnsupportedDurableEventError(`a "${message.kind}" message`);
+
+  if (message.sender.alt !== undefined)
+    projectContact(pending, upserts, deletes, {
+      accountId,
+      contactId: message.sender.id,
+      nativeIds: [message.sender.id, message.sender.alt],
+    });
 
   const record: MessageRecord = {
     accountId,
@@ -293,12 +313,17 @@ function projectMessage(
 function projectEvent(
   pending: AccountMirror,
   upserts: MirrorRecord[],
+  deletes: MirrorDelete[],
   accountId: string,
   { event }: WhatsAppDataEvent,
 ): void {
   switch (event.type) {
     case "message":
-      return projectMessage(pending, upserts, accountId, event.message);
+      return projectMessage(pending, upserts, deletes, accountId, event.message);
+    case "update":
+      // The source observation is retained by accept(); current receipt/edit/
+      // revocation projection lands in its own product slice.
+      return;
     case "conversation_sync": {
       const { context, chats, contacts, messages } = event.batch;
       // Deleting on a sync needs explicit, scope-bounded replacement metadata
@@ -307,18 +332,18 @@ function projectEvent(
         throw new UnsupportedDurableEventError("an authoritative conversation-sync replacement");
       for (const chat of chats) projectSyncedChat(pending, upserts, accountId, chat);
       for (const contact of contacts)
-        projectContact(pending, upserts, {
+        projectContact(pending, upserts, deletes, {
           accountId,
           contactId: contact.id,
-          nativeIds: [contact.id],
+          nativeIds: [...new Set([contact.id, ...contact.nativeIds])],
           ...(contact.displayName !== undefined && { displayName: contact.displayName }),
         });
-      for (const message of messages) projectMessage(pending, upserts, accountId, message);
+      for (const message of messages) projectMessage(pending, upserts, deletes, accountId, message);
       return;
     }
     case "contact": {
       const { contact } = event;
-      return projectContact(pending, upserts, {
+      return projectContact(pending, upserts, deletes, {
         accountId,
         contactId: contact.id,
         // The primary id first, then whatever equivalents the event carried.
@@ -361,9 +386,9 @@ function projectEvent(
     }
     case "last_seen":
     case "account_connection":
-      return projectObserved(pending, upserts, accountId, event);
+      return projectObserved(pending, upserts, deletes, accountId, event);
     default:
-      throw new UnsupportedDurableEventError(`a "${event.type}" event`);
+      throw new UnsupportedDurableEventError("an unknown event");
   }
 }
 
@@ -378,6 +403,7 @@ function projectEvent(
  */
 export function memoryDataStore(): WhatsAppDataStore {
   const accounts = new Map<string, AccountMirror>();
+  const copy = <T>(value: T): T => structuredClone(value);
   const mirrorOf = (accountId: string): AccountMirror => {
     const existing = accounts.get(accountId);
     if (existing) return existing;
@@ -404,6 +430,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       if (fencingToken < mirror.claim)
         throw new StaleAccountClaimError(accountId, fencingToken, mirror.claim);
 
+      const ownedEvents = copy(events);
       const fromRevision = mirror.revision;
       // Project into copies so a rejected event leaves nothing behind: the
       // append, the projection, and the revision stamp commit together or not
@@ -417,19 +444,27 @@ export function memoryDataStore(): WhatsAppDataStore {
         messages: new Map(mirror.messages),
       };
       const upserts: MirrorRecord[] = [];
-      for (const event of events) projectEvent(pending, upserts, accountId, event);
+      const deletes: MirrorDelete[] = [];
+      for (const event of ownedEvents) projectEvent(pending, upserts, deletes, accountId, event);
 
       // The observation is recorded either way — it happened. Only a real
       // change to current state takes a revision, so a replay leaves clients
       // with nothing to apply.
-      const revision = upserts.length === 0 ? fromRevision : fromRevision + 1;
+      const revision =
+        upserts.length === 0 && deletes.length === 0 ? fromRevision : fromRevision + 1;
       const batch: AcceptedWhatsAppBatch = {
         accountId,
         seq: mirror.batches.length + 1,
         fromRevision,
         revision,
-        events: [...events],
-        patch: { accountId, fromRevision, revision, upserts },
+        events: ownedEvents,
+        patch: {
+          accountId,
+          fromRevision,
+          revision,
+          upserts,
+          ...(deletes.length > 0 && { deletes }),
+        },
       };
       mirror.account = pending.account;
       mirror.chats = pending.chats;
@@ -440,7 +475,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       mirror.revision = revision;
       mirror.claim = fencingToken;
       mirror.batches.push(batch);
-      return batch;
+      return copy(batch);
     },
 
     async claim(accountId, fencingToken) {
@@ -452,14 +487,15 @@ export function memoryDataStore(): WhatsAppDataStore {
 
     async snapshot(accountId) {
       const mirror = mirrorOf(accountId);
-      return {
+      return copy({
         accountId,
         revision: mirror.revision,
         account: mirror.account,
         chats: [...mirror.chats.values()],
         contacts: [...mirror.contacts.values()],
+        contactAliases: Object.fromEntries(mirror.contactKeys),
         groups: [...mirror.groups.values()],
-      };
+      });
     },
 
     async messages(accountId, chatId, options) {
@@ -482,7 +518,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       // Named only when an older stored message really exists, so following the
       // cursor never hands a caller an empty page and calls that the end.
       const last = older.length > limit ? messages[messages.length - 1] : undefined;
-      return {
+      return copy({
         accountId,
         chatId,
         // Read from the same mirror state as the rows above, so a consumer can
@@ -490,11 +526,17 @@ export function memoryDataStore(): WhatsAppDataStore {
         revision: mirror.revision,
         messages,
         ...(last && { nextBefore: { timestamp: last.timestamp, messageId: last.messageId } }),
-      };
+      });
     },
 
-    async accepted(accountId, afterSeq) {
-      return mirrorOf(accountId).batches.filter((batch) => batch.seq > afterSeq);
+    async accepted(accountId, afterSeq, limit = 100) {
+      if (!Number.isInteger(limit) || limit < 1)
+        throw new RangeError(`limit must be a positive integer, got ${limit}`);
+      return copy(
+        mirrorOf(accountId)
+          .batches.filter((batch) => batch.seq > afterSeq)
+          .slice(0, limit),
+      );
     },
   };
 }

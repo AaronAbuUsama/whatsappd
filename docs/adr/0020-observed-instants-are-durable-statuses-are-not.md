@@ -98,17 +98,12 @@ reported only when nothing worse happened.
   update naming its PN would open a second record and strand the name on one
   snapshot entry and the last-seen on another.
 - A last-seen updates a contact and never creates one, which is what keeps that
-  matching sound. A presence observation knows one native form of an address and
-  nothing that links it to the others, so a creating one would let a PN ping and
-  a LID ping open two records for a single WhatsApp Address — and a later
-  contact event naming both could then only reconcile them by _removing_ a
-  record, which ADR-0019 does not permit a mirror to do. Contact and
-  conversation-sync observations always carry the full `nativeIds` set, so a
-  record only they create can always be found again and never needs merging
-  away. The cost is deliberate and bounded: an address WhatsApp has never named
-  in a contact or sync batch keeps no last-seen, and WhatsApp only sends
-  presence for addresses a session subscribed to, which its own sync delivered.
-  The slice that earns record removal may revisit this.
+  matching sound. A presence observation knows one native form of an address
+  and nothing that links it to another, so it supplies no Address Resolution
+  evidence. Later contact, conversation-sync, or message evidence may
+  explicitly link delivered forms; ADR-0022 then consolidates redundant Current
+  Mirror contacts while every Accepted Source Batch remains intact. An address
+  WhatsApp has never established in the mirror keeps no last-seen.
 - The slice that models a contact's live availability owns the reverse
   question — whether a client should ever _derive_ presence from `lastSeenAt` —
   and the answer this decision assumes is no.

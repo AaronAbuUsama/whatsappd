@@ -18,14 +18,14 @@ token is rejected at the acceptance boundary rather than reaching the mirror.
 
 A storage failure stops processing with the original failure instead of being
 skipped. This slice projects text messages and the chats they belong to; a
-store rejects any other durable event type with `UnsupportedDurableEventError`
-rather than dropping it, and the runtime does not observe what it cannot yet
-project. What it does observe is accepted whole: a conversation sync's contacts
-are recorded in the source log even though nothing projects them yet, rather
-than being trimmed to what the mirror currently models. A watch ends with a
-`closed` frame when the runtime stops — carrying the failure when the session
-died rather than being stopped — so a consumer is never left waiting on an
-account nothing is consuming.
+store rejects unknown durable event kinds with `UnsupportedDurableEventError`
+rather than dropping them. Modeled updates without a current projection remain
+accepted source evidence and advance `seq` without advancing the mirror
+revision. What the runtime observes is accepted whole: a conversation sync's
+contacts are retained alongside the batch's other normalized events. A watch
+ends with a `closed` frame when the runtime stops — carrying the failure when
+the session died rather than being stopped — so a consumer is never left
+waiting on an account nothing is consuming.
 
 `AccountNotHeldError` reports a runtime acting on an account whose claim it
 never took, has let lapse, or gave back to a stop; the store's

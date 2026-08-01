@@ -1,12 +1,23 @@
-import { Browsers, getCompanionPlatformId, proto, type BaileysEventMap } from "baileys";
+import {
+  Browsers,
+  getCompanionPlatformId,
+  proto,
+  type BaileysEventMap,
+  type WASocket,
+} from "baileys";
+import assert from "node:assert/strict";
+import pino from "pino";
 import { expect, test } from "./_expect.ts";
 import {
   browserForOpen,
+  openSocketWith,
   shouldRequestFullHistoryOnOpen,
   toMessagingHistoryEvents,
   toMessagingHistoryStatusEvents,
   toMessagesUpsertEvents,
 } from "../src/baileys/socket.ts";
+import { loadAuth } from "../src/baileys/authState.ts";
+import { memoryStore } from "../src/stores/memory.ts";
 import { baseMessage, SELF } from "./fixtures.ts";
 
 type HistoryPayload = BaileysEventMap["messaging-history.set"];
@@ -38,6 +49,61 @@ test("fresh companion registration defers full-history until registration comple
       creds: { registered: true, me: { id: "15551234567:1@s.whatsapp.net", name: "~" } },
     }),
   ).toBe(true);
+});
+
+test("openSocket end drains late credential writes and keeps the first rejection", async () => {
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+  let socketEnds = 0;
+  const socket = {
+    ev: {
+      on(event: string, listener: (...args: unknown[]) => void) {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+      },
+    },
+    end() {
+      socketEnds++;
+    },
+  } as unknown as WASocket;
+  const emit = (event: string, ...args: unknown[]): void => {
+    for (const listener of listeners.get(event) ?? []) listener(...args);
+  };
+  let firstStarted!: () => void;
+  const didStartFirst = new Promise<void>((resolve) => (firstStarted = resolve));
+  let releaseFirst!: () => void;
+  const firstBarrier = new Promise<void>((resolve) => (releaseFirst = resolve));
+  const firstFailure = new Error("first credential write failed");
+  let writes = 0;
+  const auth = await loadAuth(memoryStore());
+  const conn = await openSocketWith(
+    {
+      auth: { creds: auth.creds, keys: auth.keys },
+      authMethod: "qr",
+      logger: pino({ level: "silent" }),
+      saveCreds: async () => {
+        writes++;
+        if (writes === 1) {
+          firstStarted();
+          await firstBarrier;
+          throw firstFailure;
+        }
+      },
+    },
+    {
+      fetchLatestVersion: async () => ({ version: [2, 3000, 0], isLatest: true }),
+      makeSocket: (() => socket) as never,
+    },
+  );
+
+  emit("creds.update", {});
+  await didStartFirst;
+  const ending = conn.end();
+  emit("creds.update", {}); // arrived after end() began draining
+  releaseFirst();
+
+  await assert.rejects(Promise.resolve(ending), firstFailure);
+  await assert.rejects(Promise.resolve(conn.end()), firstFailure);
+  expect(writes).toBe(2);
+  expect(socketEnds).toBe(1);
 });
 
 test("messaging-history.set emits one conversation sync batch and no inbound message event", () => {

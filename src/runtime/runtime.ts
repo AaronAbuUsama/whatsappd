@@ -12,12 +12,17 @@
  * @packageDocumentation
  */
 import { isOnline, isTerminal, type Status } from "../model/status.ts";
+import type { MediaMeta } from "../model/message.ts";
+import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
+import { firstRejection, settle } from "../outcome.ts";
 import {
   AccountAlreadyClaimedError,
   AccountNotHeldError,
   type AccountLease,
+  type AccountLeaseStore,
+  type DurableUpdate,
   type StoredMessagePage,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
@@ -26,6 +31,32 @@ import {
   type WhatsAppDurableEvent,
   type WhatsAppSnapshot,
 } from "./contracts.ts";
+
+const durableUpdate = (update: Update): DurableUpdate => {
+  if (update.kind !== "edit") return update;
+  switch (update.message.kind) {
+    case "image":
+    case "video":
+    case "audio":
+    case "document":
+    case "sticker": {
+      const source = update.message.media;
+      const media: MediaMeta = {
+        ...(source.mimetype !== undefined && { mimetype: source.mimetype }),
+        ...(source.fileLength !== undefined && { fileLength: source.fileLength }),
+        ...(source.fileName !== undefined && { fileName: source.fileName }),
+        ...(source.seconds !== undefined && { seconds: source.seconds }),
+        ...(source.ptt !== undefined && { ptt: source.ptt }),
+        ...(source.width !== undefined && { width: source.width }),
+        ...(source.height !== undefined && { height: source.height }),
+        ...(source.caption !== undefined && { caption: source.caption }),
+      };
+      return { ...update, message: { ...update.message, media } };
+    }
+    default:
+      return update;
+  }
+};
 
 /**
  * What a connection status durably says about *when*, if anything.
@@ -160,14 +191,26 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   let session: RuntimeSession | undefined;
   let unsubscribe: Unsubscribe | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let renewing: Promise<void> | undefined;
   let supervisor: Promise<void> | undefined;
   let starting: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
+  let terminal: Extract<WhatsAppClientFrame, { type: "closed" }> | undefined;
 
   const publish = (frame: WhatsAppClientFrame): void => {
-    for (const listener of listeners) listener(frame);
+    for (const listener of listeners) {
+      try {
+        // Each observer owns its view of mutable JavaScript data. Terminal
+        // errors deliberately retain identity so callers can compare causes.
+        listener(frame.type === "closed" ? { ...frame } : structuredClone(frame));
+      } catch {
+        // Observers are downstream of a committed write. One broken observer
+        // cannot roll it back or prevent the remaining observers seeing it.
+        listeners.delete(listener);
+      }
+    }
   };
 
   /**
@@ -213,14 +256,14 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * What this slice consumes from the session.
    *
    * @remarks
-   * Only what the mirror can project is subscribed at all. `update` events have
-   * no projection yet and are not observed — which is a scope statement, not a
-   * bypass: nothing reaches the mirror by another route, and the store still
-   * refuses any unsupported event type a caller hands it. What is observed is
-   * accepted whole, never trimmed to what currently projects.
+   * Every durable normalized observation is subscribed. Some, such as message
+   * updates, are retained in accepted source before they gain a current-mirror
+   * projection; source truth must not disappear merely because projection work
+   * belongs to a later slice.
    */
   const handlers: WhatsAppSessionHandlers = {
     message: (message) => accept({ type: "message", message }),
+    update: (update) => accept({ type: "update", update: durableUpdate(update) }),
     conversationSync: (batch) => accept({ type: "conversation_sync", batch }),
     contact: (contact) => accept({ type: "contact", contact }),
     group: (group) => accept({ type: "group", group }),
@@ -311,34 +354,30 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // commonest way an account goes offline. `off` is the evidence there was a
     // session at all: a startup that failed before subscribing never connected,
     // so it has no disconnection to record.
-    let unstamped: unknown;
-    if (off && claim) {
-      // Held rather than thrown, and folded in only below: a store that cannot
-      // take this last write must not overwrite the failure that killed the
-      // session, which is the one the caller needs to see.
-      await acceptUnder(claim, {
-        type: "account_connection",
-        kind: "disconnected",
-        at: Date.now(),
-      }).catch((error: unknown) => {
-        unstamped = error;
-      });
-    }
-    try {
-      await open?.stop?.();
-      // Nothing awaited the supervisor while the session ran, so its terminal
-      // failure — a rejected handler, a dead socket — arrives here.
-      await running;
-    } catch (error) {
-      failure ??= { error };
-    } finally {
-      // Reported only when nothing worse happened: the session's own death
-      // outranks a teardown that could not write its last timestamp.
-      if (unstamped !== undefined) failure ??= { error: unstamped };
-      // A claim outliving a failed close would lock the account out until its
-      // TTL expired, so the release does not depend on the close working.
-      if (claim) await backend.leases.release(claim);
-    }
+    const stampOutcome =
+      off && claim
+        ? await settle(
+            acceptUnder(claim, {
+              type: "account_connection",
+              kind: "disconnected",
+              at: Date.now(),
+            }),
+          )
+        : undefined;
+    const closeOutcome = await settle(Promise.resolve(open?.stop?.()));
+    // Nothing awaited the supervisor while the session ran, so its terminal
+    // failure — a rejected handler, a dead socket — arrives here. It is joined
+    // even when stop() failed.
+    const runOutcome = await settle(running ?? Promise.resolve());
+    // A claim outliving a failed close would lock the account out until its TTL
+    // expired, so releasing it does not depend on either close outcome.
+    const releaseOutcome = claim ? await settle(backend.leases.release(claim)) : undefined;
+    const rejected = firstRejection(
+      [runOutcome, closeOutcome, stampOutcome, releaseOutcome].filter(
+        (result) => result !== undefined,
+      ),
+    );
+    if (rejected) failure ??= { error: rejected.reason };
   }
 
   /**
@@ -361,7 +400,8 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         // can be seen; without this frame it simply goes quiet, for ever. Even a
         // release that failed halfway is published — leaving watchers suspended
         // is worse than reporting a messy stop.
-        publish({ type: "closed", ...(failure && { error: failure.error }) });
+        terminal = { type: "closed", ...(failure && { error: failure.error }) };
+        publish(terminal);
       }
     })());
   }
@@ -379,23 +419,43 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * Hold the claim for the session's life; losing it stops the runtime.
    *
    * @remarks
-   * Only ever one renewal is in flight — `release()` clears the heartbeat before
-   * anything else — and a lease store cannot renew a claim that was already
-   * released, so there is no post-await liveness check here. A store that
-   * renewed one anyway would be defeated at the acceptance boundary, which
-   * compares fencing tokens rather than trusting this cached claim.
+   * Only ever one renewal is in flight. A post-await ownership check prevents a
+   * slow backend response from resurrecting a claim that teardown cleared.
    */
-  async function renew(): Promise<void> {
+  async function renewOnce(): Promise<void> {
     const held = lease;
     if (!held || stopped) return;
-    const result = await backend.leases
-      .renew(held, leaseTtlMs)
-      .catch(() => ({ renewed: false }) as const);
+    let result: Awaited<ReturnType<AccountLeaseStore["renew"]>>;
+    try {
+      result = await backend.leases.renew(held, leaseTtlMs);
+    } catch (error) {
+      failure ??= { error };
+      await halt();
+      return;
+    }
+    // A stop or a later claim may have cleared/replaced this lease while the
+    // backend call was in flight. Its stale result must not resurrect either.
+    if (stopped || lease !== held) return;
     if (result.renewed) lease = result.lease;
     else {
       lease = undefined; // gone; releasing it would evict its new holder
       await halt();
     }
+  }
+
+  function renew(): Promise<void> {
+    if (renewing) return renewing;
+    const attempt = renewOnce();
+    renewing = attempt;
+    void attempt.then(
+      () => {
+        if (renewing === attempt) renewing = undefined;
+      },
+      () => {
+        if (renewing === attempt) renewing = undefined;
+      },
+    );
+    return attempt;
   }
 
   async function open(): Promise<void> {
@@ -481,6 +541,10 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     snapshot: () => backend.data.snapshot(accountId),
     messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
     onFrame(listener) {
+      if (terminal) {
+        listener({ ...terminal });
+        return () => {};
+      }
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
@@ -506,8 +570,13 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
       const signal = options?.signal;
       const queued: WhatsAppClientFrame[] = [];
       let wake: (() => void) | undefined;
+      let close!: (frame: Extract<WhatsAppClientFrame, { type: "closed" }>) => void;
+      const closed = new Promise<Extract<WhatsAppClientFrame, { type: "closed" }>>((resolve) => {
+        close = resolve;
+      });
       const push = (frame: WhatsAppClientFrame): void => {
         queued.push(frame);
+        if (frame.type === "closed") close(frame);
         wake?.();
       };
       // Subscribed before the snapshot is read, so a change committed while it
@@ -530,9 +599,16 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
       // only from exactly here (ADR-0011), so it moves with what is yielded
       // rather than staying at the first snapshot's revision.
       let applied = -1;
-      const resnapshot = async (): Promise<WhatsAppSnapshot | typeof CANCELLED> => {
-        const snapshot = await Promise.race([runtime.snapshot(), cancelled]);
-        if (snapshot === CANCELLED) return CANCELLED;
+      const resnapshot = async (): Promise<
+        WhatsAppSnapshot | typeof CANCELLED | Extract<WhatsAppClientFrame, { type: "closed" }>
+      > => {
+        const alreadyClosed = queued.find(
+          (frame): frame is Extract<WhatsAppClientFrame, { type: "closed" }> =>
+            frame.type === "closed",
+        );
+        if (alreadyClosed) return alreadyClosed;
+        const snapshot = await Promise.race([runtime.snapshot(), cancelled, closed]);
+        if (snapshot === CANCELLED || "type" in snapshot) return snapshot;
         applied = snapshot.revision;
         return snapshot;
       };
@@ -540,6 +616,10 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
       try {
         const snapshot = await resnapshot();
         if (snapshot === CANCELLED || signal?.aborted) return;
+        if ("type" in snapshot) {
+          yield snapshot;
+          return;
+        }
         yield { type: "snapshot", snapshot };
         while (!signal?.aborted) {
           for (const frame of queued.splice(0)) {
@@ -551,6 +631,10 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
               if (frame.patch.fromRevision !== applied) {
                 const fresh = await resnapshot();
                 if (fresh === CANCELLED || signal?.aborted) return;
+                if ("type" in fresh) {
+                  yield fresh;
+                  return;
+                }
                 yield { type: "snapshot", snapshot: fresh };
                 continue;
               }

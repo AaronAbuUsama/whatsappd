@@ -201,10 +201,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // intact integrity check and identical digests. Supporting evidence only —
   // this is not, and must never be labeled, a product-durability (P2) proof.
   const reopened = new DatabaseSync(dbFile, { readOnly: true });
-  const quickCheck = String(
-    (reopened.prepare("PRAGMA quick_check;").get() as Record<string, unknown>)["quick_check"] ??
-      "failed",
-  );
+  const quickCheckValue = (
+    reopened.prepare("PRAGMA quick_check;").get() as Record<string, unknown>
+  )["quick_check"];
+  const quickCheck = typeof quickCheckValue === "string" ? quickCheckValue : "failed";
   const after = oracle(reopened);
   reopened.close();
   const snapshotRestarted = quickCheck === "ok" && JSON.stringify(before) === JSON.stringify(after);
