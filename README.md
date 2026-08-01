@@ -1,8 +1,9 @@
 # whatsappd
 
-The [SDK capability catalogue](docs/sdk-capabilities.md) distinguishes the
-implemented-and-proven product from target, deferred, upstream-only, internal,
-and application-owned capabilities. This README documents the shipped surface.
+The [SDK capability catalogue](docs/sdk-capabilities.md) distinguishes callable
+surface from supported proof, target, deferred, upstream-only, internal, and
+application-owned capabilities. This README shows the current public API; the
+catalogue is authoritative about the proof status of each outcome.
 
 A typed WhatsApp session engine for Node.js. It normalizes Baileys events,
 awaits application handlers in source order, and keeps credentials behind an
@@ -57,6 +58,10 @@ await session.send(chatId, { text: "hello" });
 await session.markRead([messageRef]);
 await session.setTyping(chatId, true);
 ```
+
+`markRead` and `setTyping` are callable immediate Session methods, but their
+production command paths are currently `implemented-unproven`; they are not yet
+the durable, reconciled Client operations targeted by the catalogue.
 
 Use `session.stop()` for intentional teardown.
 
