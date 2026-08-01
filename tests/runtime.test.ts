@@ -1116,6 +1116,42 @@ test("a throwing frame observer cannot block a later observer after commit", asy
   await runtime.stop();
 });
 
+test("closed-frame wrappers are isolated while preserving the failure identity", async () => {
+  const driver = createTestWhatsAppSession();
+  const died = new Error("socket died");
+  let die!: (error: unknown) => void;
+  const dying = new Promise<void>((_, reject) => {
+    die = reject;
+  });
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend: memoryBackend(),
+    openSession: () => ({ ...driver.session, start: () => dying }),
+  });
+  await runtime.start();
+  runtime.onFrame((frame) => {
+    if (frame.type !== "closed") return;
+    const mutable = frame as { type: string; error?: unknown };
+    mutable.type = "patch";
+    delete mutable.error;
+  });
+  let current: WhatsAppClientFrame | undefined;
+  runtime.onFrame((frame) => {
+    current = frame;
+  });
+
+  die(died);
+  await tick();
+
+  expect(current).toEqual({ type: "closed", error: died });
+  let late: WhatsAppClientFrame | undefined;
+  runtime.onFrame((frame) => {
+    late = frame;
+  });
+  expect(late).toEqual({ type: "closed", error: died });
+  await assert.rejects(runtime.stop(), (error: unknown) => error === died);
+});
+
 test("losing the account lease stops the runtime without evicting its new holder", async () => {
   const inner = memoryLeaseStore();
   let released = 0;

@@ -3,8 +3,9 @@
  * namespace. Durable across restarts; a good default for one account worker.
  */
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { SignalDataTypeMap } from "baileys";
 import type { CredentialStore } from "../ports.ts";
 
 const NAMESPACE = ".whatsappd-credentials";
@@ -13,15 +14,12 @@ const STATE_FILE = "store.json";
 interface FileState {
   readonly version: 1;
   readonly legacyFallback: boolean;
-  /** Keys whose pre-namespace files still need removing on credential clear. */
-  readonly legacyKeys?: readonly string[];
   readonly values: Readonly<Record<string, string | null>>;
 }
 
 const emptyState = (legacyFallback: boolean): FileState => ({
   version: 1,
   legacyFallback,
-  legacyKeys: [],
   values: {},
 });
 
@@ -31,6 +29,27 @@ const isMissing = (error: unknown): boolean =>
 /** The pre-0.2.3 filename, retained only for safe on-demand migration. */
 const legacyFileName = (key: string): string => `${key.replace(/[^0-9A-Za-z._-]/g, "_")}.json`;
 
+// The old store had no manifest and claimed the whole supplied directory.
+// Restrict cleanup to the exact credential name/prefixes it could emit; every
+// other caller-owned entry survives.
+const legacySignalTypes = {
+  "pre-key": true,
+  session: true,
+  "sender-key": true,
+  "sender-key-memory": true,
+  "app-state-sync-key": true,
+  "app-state-sync-version": true,
+  "lid-mapping": true,
+  "device-list": true,
+  tctoken: true,
+  "identity-key": true,
+} satisfies Record<keyof SignalDataTypeMap, true>;
+
+const legacySignalPrefixes = Object.keys(legacySignalTypes);
+const isLegacyCredentialFile = (name: string): boolean =>
+  name === "creds.json" ||
+  legacySignalPrefixes.some((prefix) => name.startsWith(`${prefix}_`) && name.endsWith(".json"));
+
 function parseState(source: string): FileState {
   const parsed: unknown = JSON.parse(source);
   if (
@@ -38,9 +57,6 @@ function parseState(source: string): FileState {
     typeof parsed !== "object" ||
     (parsed as { version?: unknown }).version !== 1 ||
     typeof (parsed as { legacyFallback?: unknown }).legacyFallback !== "boolean" ||
-    ((parsed as { legacyKeys?: unknown }).legacyKeys !== undefined &&
-      (!Array.isArray((parsed as { legacyKeys?: unknown }).legacyKeys) ||
-        (parsed as { legacyKeys: unknown[] }).legacyKeys.some((key) => typeof key !== "string"))) ||
     (parsed as { values?: unknown }).values === null ||
     typeof (parsed as { values?: unknown }).values !== "object" ||
     Array.isArray((parsed as { values?: unknown }).values) ||
@@ -113,7 +129,6 @@ export function fileStore(dir: string): CredentialStore {
         await commit({
           version: 1,
           legacyFallback: true,
-          legacyKeys: [...new Set([...(current?.legacyKeys ?? []), key])],
           values: { ...current?.values, [key]: value },
         });
         return value;
@@ -132,11 +147,14 @@ export function fileStore(dir: string): CredentialStore {
 
     clear() {
       return serialize(async () => {
-        const current = await load();
+        const legacyFiles = await readdir(dir).catch((error: unknown) => {
+          if (isMissing(error)) return [];
+          throw error;
+        });
         await Promise.all(
-          (current?.legacyKeys ?? []).map((key) =>
-            rm(join(dir, legacyFileName(key)), { force: true }),
-          ),
+          legacyFiles
+            .filter(isLegacyCredentialFile)
+            .map((name) => rm(join(dir, name), { force: true })),
         );
         // An empty owned state is the durable tombstone that prevents legacy
         // files from reappearing after a normal process restart.

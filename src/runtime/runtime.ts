@@ -204,7 +204,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       try {
         // Each observer owns its view of mutable JavaScript data. Terminal
         // errors deliberately retain identity so callers can compare causes.
-        listener(frame.type === "closed" ? frame : structuredClone(frame));
+        listener(frame.type === "closed" ? { ...frame } : structuredClone(frame));
       } catch {
         // Observers are downstream of a committed write. One broken observer
         // cannot roll it back or prevent the remaining observers seeing it.
@@ -542,7 +542,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
     onFrame(listener) {
       if (terminal) {
-        listener(terminal);
+        listener({ ...terminal });
         return () => {};
       }
       listeners.add(listener);

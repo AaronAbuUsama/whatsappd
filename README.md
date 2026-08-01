@@ -63,8 +63,9 @@ and `stop()`.
 file and memory stores from the root entry point. `fileStore(dir)` owns only its
 private `.whatsappd-credentials` child: `clear()` never removes `dir` or any
 unrelated file. Writes atomically replace a private `0600` state file, and old
-per-key files are migrated on first read, remembered durably, and removed by a
-later `clear()` even from a replacement process.
+per-key files are migrated on first read. A later `clear()` removes every
+recognized old Baileys credential file—even one never read—from a replacement
+process while preserving other caller-owned entries.
 
 ## Runtime, backend, and client
 

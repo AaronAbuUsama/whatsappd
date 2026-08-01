@@ -40,22 +40,34 @@ test("[file] clear removes credentials without deleting its caller's directory",
   expect(await store.read("creds")).toBe(null);
 });
 
-test("[file] legacy credentials migrate once and cannot reappear after clear", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "wa-file-legacy-"));
-  const legacy = join(dir, "creds.json");
-  const unrelated = join(dir, "application-data.txt");
-  writeFileSync(legacy, "old secret");
-  writeFileSync(unrelated, "keep me");
+test("[file] clear removes migrated and untouched legacy credentials across restarts", async () => {
+  const legacyNames = [
+    "creds.json",
+    "pre-key_1.json",
+    "session_peer.json",
+    "sender-key_peer.json",
+    "sender-key-memory_peer.json",
+    "app-state-sync-key_1.json",
+    "app-state-sync-version_1.json",
+    "lid-mapping_peer.json",
+    "device-list_peer.json",
+    "tctoken_peer.json",
+    "identity-key_peer.json",
+  ];
 
-  const store = fileStore(dir);
-  expect(await store.read("creds")).toBe("old secret");
-  // Logout may happen in a replacement process, so migration cleanup cannot
-  // depend on paths remembered only by the instance that performed the read.
-  await fileStore(dir).clear();
+  for (const migrateCreds of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), "wa-file-legacy-"));
+    const unrelated = join(dir, "application-data.json");
+    for (const name of legacyNames) writeFileSync(join(dir, name), "old secret");
+    writeFileSync(unrelated, "keep me");
 
-  expect(await fileStore(dir).read("creds")).toBe(null);
-  expect(() => readFileSync(legacy, "utf8")).toThrow();
-  expect(readFileSync(unrelated, "utf8")).toBe("keep me");
+    if (migrateCreds) expect(await fileStore(dir).read("creds")).toBe("old secret");
+    await fileStore(dir).clear();
+
+    expect(await fileStore(dir).read("creds")).toBe(null);
+    for (const name of legacyNames) expect(() => readFileSync(join(dir, name), "utf8")).toThrow();
+    expect(readFileSync(unrelated, "utf8")).toBe("keep me");
+  }
 });
 
 test("[file] distinct credential keys cannot collide on one filename", async () => {
