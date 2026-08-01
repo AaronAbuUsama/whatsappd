@@ -112,6 +112,43 @@ const older = page.nextBefore
 await runtime.stop();
 ```
 
+For a Current Mirror, credentials, and Account Leases that survive process
+replacement, install the optional libSQL client and inject the independent
+media capability explicitly:
+
+```bash
+pnpm add whatsappd @libsql/client
+```
+
+```ts
+import {
+  createSession,
+  createWhatsAppRuntime,
+  libsqlBackend,
+  memoryMediaStore,
+  qrAuth,
+} from "whatsappd";
+
+const backend = libsqlBackend({
+  url: "file:./whatsapp.db",
+  accountId: "personal",
+  media: memoryMediaStore(),
+});
+
+const runtime = createWhatsAppRuntime({
+  accountId: "personal",
+  backend,
+  openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
+});
+await runtime.start();
+
+// A replacement backend opened on the same URL reconstructs the accepted
+// source, mirror, and stored pages.
+
+await runtime.stop(); // releases the account; does not close a shared backend
+await backend.close(); // the application owns the libSQL client's lifetime
+```
+
 A watch begins with the current snapshot and its revision, then delivers each
 change as a patch whose `fromRevision` is the revision it applies to; a gap
 replaces state with a fresh snapshot rather than applying over it. Replaying a
