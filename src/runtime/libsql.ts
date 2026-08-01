@@ -150,17 +150,19 @@ async function transact<T>(
   mode: "read" | "write",
   work: (transaction: Transaction) => Promise<T>,
 ): Promise<T> {
-  const transaction = await (await client.get()).transaction(mode);
-  try {
-    const result = await work(transaction);
-    await transaction.commit();
-    return result;
-  } catch (error) {
-    if (!transaction.closed) await transaction.rollback().catch(() => {});
-    throw error;
-  } finally {
-    transaction.close();
-  }
+  return client.run(async (opened) => {
+    const transaction = await opened.transaction(mode);
+    try {
+      const result = await work(transaction);
+      await transaction.commit();
+      return result;
+    } catch (error) {
+      if (!transaction.closed) await transaction.rollback().catch(() => {});
+      throw error;
+    } finally {
+      transaction.close();
+    }
+  });
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {

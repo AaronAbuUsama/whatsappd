@@ -66,6 +66,17 @@ const newestFirst = (a: StoredMessageCursor, b: StoredMessageCursor): number =>
  */
 export function memoryDataStore(): WhatsAppDataStore {
   const accounts = new Map<string, AccountMirror>();
+  // ponytail: one in-memory transaction chain preserves atomic call order;
+  // split it per account only if test-backend contention becomes measurable.
+  let operations: Promise<void> = Promise.resolve();
+  const serialize = <T>(operation: () => Promise<T> | T): Promise<T> => {
+    const result = operations.then(operation);
+    operations = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  };
   const copy = <T>(value: T): T => structuredClone(value);
   const mirrorOf = (accountId: string): AccountMirror => {
     const existing = accounts.get(accountId);
@@ -87,94 +98,95 @@ export function memoryDataStore(): WhatsAppDataStore {
 
   return {
     async accept(accountId, events, fencingToken) {
-      const mirror = mirrorOf(accountId);
-      // A resumed writer whose claim has moved on must not reach the mirror,
-      // however long its event has been buffered (ADR-0009).
-      if (fencingToken < mirror.claim)
-        throw new StaleAccountClaimError(accountId, fencingToken, mirror.claim);
-
       const ownedEvents = copy(events);
-      const fromRevision = mirror.revision;
-      // Project into copies so a rejected event leaves nothing behind: the
-      // append, the projection, and the revision stamp commit together or not
-      // at all.
-      const { upserts, deletes, mutations } = await projectCurrentMirror(
-        {
-          account: async () => mirror.account,
-          chat: async (chatId) => mirror.chats.get(chatId),
-          contact: async (contactId) => mirror.contacts.get(contactId),
-          contactId: async (nativeId) => mirror.contactKeys.get(nativeId),
-          group: async (groupId) => mirror.groups.get(groupId),
-          message: async (chatId, messageId) => mirror.messages.get(messageKey(chatId, messageId)),
-        },
-        accountId,
-        ownedEvents,
-      );
+      return serialize(async () => {
+        const mirror = mirrorOf(accountId);
+        // A resumed writer whose claim has moved on must not reach the mirror,
+        // however long its event has been buffered (ADR-0009).
+        if (fencingToken < mirror.claim)
+          throw new StaleAccountClaimError(accountId, fencingToken, mirror.claim);
 
-      // The observation is recorded either way — it happened. Only a real
-      // change to current state takes a revision, so a replay leaves clients
-      // with nothing to apply.
-      const revision =
-        upserts.length === 0 && deletes.length === 0 ? fromRevision : fromRevision + 1;
-      const batch: AcceptedWhatsAppBatch = {
-        accountId,
-        seq: mirror.batches.length + 1,
-        fromRevision,
-        revision,
-        events: ownedEvents,
-        patch: {
+        // Project into an overlay so a rejected event leaves nothing behind:
+        // the append, projection, and revision commit together or not at all.
+        const { upserts, deletes, mutations } = await projectCurrentMirror(
+          {
+            account: async () => mirror.account,
+            chat: async (chatId) => mirror.chats.get(chatId),
+            contact: async (contactId) => mirror.contacts.get(contactId),
+            contactId: async (nativeId) => mirror.contactKeys.get(nativeId),
+            group: async (groupId) => mirror.groups.get(groupId),
+            message: async (chatId, messageId) =>
+              mirror.messages.get(messageKey(chatId, messageId)),
+          },
           accountId,
+          ownedEvents,
+        );
+        const fromRevision = mirror.revision;
+        const revision =
+          upserts.length === 0 && deletes.length === 0 ? fromRevision : fromRevision + 1;
+        const batch: AcceptedWhatsAppBatch = {
+          accountId,
+          seq: mirror.batches.length + 1,
           fromRevision,
           revision,
-          upserts,
-          ...(deletes.length > 0 && { deletes }),
-        },
-      };
-      for (const mutation of mutations) {
-        if (mutation.type === "contact_alias") {
-          mirror.contactKeys.set(mutation.nativeId, mutation.contactId);
-          continue;
+          events: ownedEvents,
+          patch: {
+            accountId,
+            fromRevision,
+            revision,
+            upserts,
+            ...(deletes.length > 0 && { deletes }),
+          },
+        };
+        for (const mutation of mutations) {
+          if (mutation.type === "contact_alias") {
+            mirror.contactKeys.set(mutation.nativeId, mutation.contactId);
+            continue;
+          }
+          if (mutation.type === "delete") {
+            mirror.contacts.delete(mutation.record.contactId);
+            continue;
+          }
+          const record = mutation.record;
+          switch (record.type) {
+            case "account":
+              mirror.account = record.account;
+              break;
+            case "chat":
+              mirror.chats.set(record.chat.chatId, record.chat);
+              break;
+            case "contact":
+              mirror.contacts.set(record.contact.contactId, record.contact);
+              break;
+            case "group":
+              mirror.groups.set(record.group.groupId, record.group);
+              break;
+            case "message":
+              mirror.messages.set(
+                messageKey(record.message.chatId, record.message.messageId),
+                record.message,
+              );
+              break;
+          }
         }
-        if (mutation.type === "delete") {
-          mirror.contacts.delete(mutation.record.contactId);
-          continue;
-        }
-        const record = mutation.record;
-        switch (record.type) {
-          case "account":
-            mirror.account = record.account;
-            break;
-          case "chat":
-            mirror.chats.set(record.chat.chatId, record.chat);
-            break;
-          case "contact":
-            mirror.contacts.set(record.contact.contactId, record.contact);
-            break;
-          case "group":
-            mirror.groups.set(record.group.groupId, record.group);
-            break;
-          case "message":
-            mirror.messages.set(
-              messageKey(record.message.chatId, record.message.messageId),
-              record.message,
-            );
-            break;
-        }
-      }
-      mirror.revision = revision;
-      mirror.claim = fencingToken;
-      mirror.batches.push(batch);
-      return copy(batch);
+        mirror.revision = revision;
+        mirror.claim = fencingToken;
+        mirror.batches.push(batch);
+        return copy(batch);
+      });
     },
 
-    async claim(accountId, fencingToken) {
-      const mirror = mirrorOf(accountId);
-      if (fencingToken < mirror.claim)
-        throw new StaleAccountClaimError(accountId, fencingToken, mirror.claim);
-      mirror.claim = fencingToken;
+    claim(accountId, fencingToken) {
+      return serialize(() => {
+        const mirror = mirrorOf(accountId);
+        if (fencingToken < mirror.claim)
+          throw new StaleAccountClaimError(accountId, fencingToken, mirror.claim);
+        mirror.claim = fencingToken;
+      });
     },
 
     async snapshot(accountId) {
+      await operations;
       const mirror = mirrorOf(accountId);
       return copy({
         accountId,
@@ -191,6 +203,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       const limit = options?.limit ?? 25;
       if (!Number.isInteger(limit) || limit < 1)
         throw new RangeError(`limit must be a positive integer, got ${limit}`);
+      await operations;
       const before = options?.before;
       const mirror = mirrorOf(accountId);
       // ponytail: no ordering index, so a page sorts the chat's whole history.
@@ -221,6 +234,7 @@ export function memoryDataStore(): WhatsAppDataStore {
     async accepted(accountId, afterSeq, limit = 100) {
       if (!Number.isInteger(limit) || limit < 1)
         throw new RangeError(`limit must be a positive integer, got ${limit}`);
+      await operations;
       return copy(
         mirrorOf(accountId)
           .batches.filter((batch) => batch.seq > afterSeq)
@@ -304,7 +318,7 @@ export function memoryMediaStore(): MediaStore {
  *
  * @remarks
  * The capabilities are constructed independently and can be replaced one at a
- * time — pass `{ ...memoryBackend(), data: libsqlDataStore(...) }` to mix.
+ * time by passing a different implementation of the corresponding contract.
  *
  * @returns A backend whose state vanishes with the process.
  */

@@ -192,6 +192,75 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
     }
   });
 
+  test(`[${name}] an in-flight acceptance cannot restore a superseded claim`, async () => {
+    const resource = await create();
+    try {
+      await resource.data.claim(ACCOUNT, 1);
+      const accepted = resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "message",
+            message: textMessage({ id: "ordered", chatId: PN, text: "ordered" }),
+          }),
+        ],
+        1,
+      );
+      await resource.data.claim(ACCOUNT, 2);
+      await accepted;
+
+      await assert.rejects(
+        resource.data.accept(
+          ACCOUNT,
+          [
+            observed({
+              type: "message",
+              message: textMessage({ id: "stale-after", chatId: PN, text: "stale" }),
+            }),
+          ],
+          1,
+        ),
+        StaleAccountClaimError,
+      );
+      expect(
+        (await resource.data.messages(ACCOUNT, PN)).messages.map(({ messageId }) => messageId),
+      ).toEqual(["ordered"]);
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] concurrent acceptances keep distinct source and revision steps`, async () => {
+    const resource = await create();
+    try {
+      const batches = await Promise.all(
+        ["first", "second"].map((id) =>
+          resource.data.accept(
+            ACCOUNT,
+            [
+              observed({
+                type: "message",
+                message: textMessage({ id, chatId: PN, text: id, timestamp: AT }),
+              }),
+            ],
+            1,
+          ),
+        ),
+      );
+      expect(
+        batches.map(({ seq, fromRevision, revision }) => [seq, fromRevision, revision]),
+      ).toEqual([
+        [1, 0, 1],
+        [2, 1, 2],
+      ]);
+      expect(
+        (await resource.data.messages(ACCOUNT, PN)).messages.map(({ messageId }) => messageId),
+      ).toEqual(["second", "first"]);
+    } finally {
+      await resource.close();
+    }
+  });
+
   test(`[${name}] keyset pages survive timestamp collisions and a live insertion`, async () => {
     const resource = await create();
     try {

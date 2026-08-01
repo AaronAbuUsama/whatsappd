@@ -143,6 +143,26 @@ test("independent libSQL backends contend on database time without resetting fen
   }
 });
 
+test("independent libSQL clients resolve a simultaneous first lease as one winner", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-concurrent-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const first = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  const second = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+
+  try {
+    const attempts = await Promise.all([
+      first.leases.acquire(ACCOUNT, "first", 10_000),
+      second.leases.acquire(ACCOUNT, "second", 10_000),
+    ]);
+    expect(attempts.filter(({ acquired }) => acquired).length).toBe(1);
+    expect(attempts.filter(({ acquired }) => !acquired).length).toBe(1);
+  } finally {
+    await first.close();
+    await second.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a replacement claim fences an independent stale backend before its first write", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-stale-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
