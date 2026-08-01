@@ -13,7 +13,7 @@ an owner release checkpoint.
 | Shared domain language           | `CONTEXT.md`                                               |
 | Accepted architecture decisions  | `docs/adr/0001` … `0023`                                   |
 | Published build specification    | GitHub issue #15                                           |
-| Capability source of truth       | `docs/sdk-capabilities.md` / issue #67                     |
+| Capability source of truth       | `docs/sdk-capabilities.md` plus its atomic evidence ledger |
 | Execution-graph repair           | GitHub issue #68                                           |
 | Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
@@ -139,8 +139,8 @@ WhatsApp messages”, or report a delivered count tied to the request.
   failures, detached starts, startup-stop state, and falsy-safe precedence.
 - Accepted updates are retained and page by source `seq`; their receipt/edit/
   revocation current-mirror projection remains a later product slice.
-- `fileStore()` is restart-safe and migration-safe, but libSQL remains the first
-  backend intended to persist the whole runtime (#38).
+- `libsqlBackend()` now persists credentials, accepted/current data, and leases;
+  `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - The Ambient Agent v3 PocketBase spike remains fixture evidence on the old
   package. Production integration still waits for a published release with
   durable media and a persistent runtime backend.

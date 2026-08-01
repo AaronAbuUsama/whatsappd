@@ -1,9 +1,11 @@
 # whatsappd
 
 The [SDK capability catalogue](docs/sdk-capabilities.md) distinguishes callable
-surface from supported proof, target, deferred, upstream-only, internal, and
-application-owned capabilities. This README shows the current public API; the
-catalogue is authoritative about the proof status of each outcome.
+surface from target, deferred, upstream-only, internal, and application-owned
+capabilities. Its generated [atomic evidence ledger](docs/sdk-capability-evidence.md)
+records the exact variant, surface, backend, lifecycle, proof rung, receipt,
+and gap for every current claim. This README shows the current public API; the
+ledger is authoritative about support.
 
 A typed WhatsApp session engine for Node.js. It normalizes Baileys events,
 awaits application handlers in source order, and keeps credentials behind an
