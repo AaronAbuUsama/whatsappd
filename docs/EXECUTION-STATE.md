@@ -162,7 +162,7 @@ from this file before the owner accepts #68's replacement graph.
 
 Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0023,
 specification issue #15 **including its comments** — the 2026-07-31 re-plan
-and the 2026-08-01 #61 hold receipt supersede earlier frontier receipts — then
-read #61 and the conditionally next ticket bodies. `src/runtime/` is real
-product code. Reopening an accepted decision requires an explicit superseding
-ADR.
+and the 2026-08-01 #67/#68 planning receipts supersede earlier frontier receipts
+— then read #67 and #68. Do not resume #61 or its conditionally-next tickets.
+`src/runtime/` is real product code. Reopening an accepted decision requires an
+explicit superseding ADR.
