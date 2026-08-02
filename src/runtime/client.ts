@@ -85,6 +85,10 @@ async function createClientState(
   let recovering: Promise<void> | undefined;
   let connectionTimer: ReturnType<typeof setTimeout> | undefined;
   let off: Unsubscribe = () => {};
+  let rejectHydration!: (reason: WhatsAppClientClosedError) => void;
+  const hydrationTerminated = new Promise<never>((_, reject) => {
+    rejectHydration = reject;
+  });
 
   const requireClient = (): void => {
     if (closed) throw new WhatsAppClientClosedError("Client", closeCause);
@@ -218,6 +222,21 @@ async function createClientState(
 
   const consume = (frame: WhatsAppClientFrame): void => {
     if (closed) return;
+    if (frame.type === "closed") {
+      if (hydrating) {
+        rejectHydration(
+          new WhatsAppClientClosedError("Client", "error" in frame ? frame.error : undefined),
+        );
+        return;
+      }
+      if (connectionTimer) clearTimeout(connectionTimer);
+      accountState = {
+        record: account,
+        closed: "error" in frame ? { error: frame.error } : {},
+      };
+      notify(accountListeners, accountState);
+      return;
+    }
     if (hydrating || recovering) {
       queued.push(frame);
       return;
@@ -265,15 +284,6 @@ async function createClientState(
           conversation.receivePresence(frame.presence, frame.expiresAt);
       return;
     }
-    if (frame.type === "closed") {
-      if (connectionTimer) clearTimeout(connectionTimer);
-      accountState = {
-        record: account,
-        closed: "error" in frame ? { error: frame.error } : {},
-      };
-      notify(accountListeners, accountState);
-      return;
-    }
     if (frame.type !== "patch") return;
     if (frame.patch.revision <= revision) return;
     if (frame.patch.fromRevision === revision) {
@@ -307,8 +317,8 @@ async function createClientState(
 
   off = source.onFrame(consume);
   try {
-    await start();
-    replace(await source.snapshot());
+    await Promise.race([start(), hydrationTerminated]);
+    replace(await Promise.race([source.snapshot(), hydrationTerminated]));
     hydrating = false;
     for (const frame of queued.splice(0)) consume(frame);
   } catch (error) {

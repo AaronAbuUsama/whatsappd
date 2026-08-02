@@ -110,6 +110,39 @@ test("one awaited Client owns startup, hydration, live state, and shutdown", asy
   assert.equal((await stored.leases.acquire(ACCOUNT, "replacement", 30_000)).acquired, true);
 });
 
+test("Runtime termination rejects Client creation while initial hydration is blocked", async () => {
+  const base = memoryBackend();
+  let snapshotReady!: () => void;
+  const snapshotStarted = new Promise<void>((resolve) => {
+    snapshotReady = resolve;
+  });
+  let releaseSnapshot!: () => void;
+  const snapshotGate = new Promise<void>((resolve) => {
+    releaseSnapshot = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        snapshotReady();
+        await snapshotGate;
+        return base.data.snapshot(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const creating = openClient(backend, driver);
+
+  await snapshotStarted;
+  try {
+    await driver.session.stop?.();
+    await assert.rejects(withDeadline(creating), WhatsAppClientClosedError);
+  } finally {
+    releaseSnapshot();
+  }
+});
+
 test("an awaited Client hydrates account, contacts, aliases, and groups", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
