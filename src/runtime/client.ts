@@ -174,11 +174,13 @@ async function createClientState(
     closeCause = failure?.error;
     if (failure) {
       accountState = { record: account, closed: { error: failure.error } };
-      notifyAccount();
     }
     off();
     connectionTimer?.();
+    connectionTimer = undefined;
     for (const conversation of conversations) conversation.close();
+    pendingNotifications = undefined;
+    if (failure) notifyAccount();
     for (const unsubscribe of clientSubscriptions) unsubscribe();
   };
 

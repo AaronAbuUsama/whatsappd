@@ -51,6 +51,11 @@ notifies application listeners. Hydration and recovery reads happen outside
 that commit. Their results carry a Client generation and cannot publish after a
 newer recovery, Runtime Closure, or resource close.
 
+A hard Client failure follows the same boundary: it detaches live input,
+cancels owned deadlines, closes every Opened Conversation, and discards queued
+nonterminal notifications before publishing terminal account state. A terminal
+listener therefore cannot cross-read a still-live resource owned by that Client.
+
 Runtime Closure bypasses hydration and recovery queues. A conversation opened
 during recovery validates the committed generation before `open()` resolves,
 so it cannot return state older than the Client it belongs to.

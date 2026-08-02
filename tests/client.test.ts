@@ -1788,9 +1788,19 @@ test("a failed gap read closes that Client and a fresh owned Client retries hydr
       messages: [],
     },
   });
+  const conversation = await client.chats.open(ALPHA);
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "typing" } });
+  let conversationReadDuringFailure: ReturnType<typeof conversation.get> | undefined;
+  let conversationErrorDuringFailure: unknown;
   const failed = new Promise<void>((resolve) => {
     client.account.subscribe((state) => {
-      if (state.closed?.error === failure) resolve();
+      if (state.closed?.error !== failure) return;
+      try {
+        conversationReadDuringFailure = conversation.get();
+      } catch (error) {
+        conversationErrorDuringFailure = error;
+      }
+      resolve();
     });
   });
 
@@ -1813,6 +1823,8 @@ test("a failed gap read closes that Client and a fresh owned Client retries hydr
   });
   await withDeadline(failed);
 
+  assert.equal(conversationReadDuringFailure, undefined);
+  assert(conversationErrorDuringFailure instanceof WhatsAppClientClosedError);
   assert.throws(
     () => client.chats.list(),
     (error) => error instanceof WhatsAppClientClosedError && error.cause === failure,
@@ -1821,13 +1833,13 @@ test("a failed gap read closes that Client and a fresh owned Client retries hydr
 
   const replacementDriver = createTestWhatsAppSession();
   const replacement = await openClient({ ...base }, replacementDriver);
-  const conversation = await replacement.chats.open(ALPHA);
+  const replacementConversation = await replacement.chats.open(ALPHA);
   assert.deepEqual(
-    conversation.get().messages.map((message) => message.messageId),
+    replacementConversation.get().messages.map((message) => message.messageId),
     ["m2", "m1"],
   );
 
-  conversation.close();
+  replacementConversation.close();
   await replacement.close();
 });
 
