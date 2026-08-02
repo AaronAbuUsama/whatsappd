@@ -4,9 +4,10 @@ import { test } from "./_expect.ts";
 
 import {
   createWhatsAppClient,
-  createWhatsAppRuntime,
   memoryBackend,
   WhatsAppClientClosedError,
+  type WhatsAppBackendResource,
+  type WhatsAppClientOptions,
 } from "../src/index.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 
@@ -30,15 +31,43 @@ async function withDeadline<T>(promise: Promise<T>, ms = 1_000): Promise<T> {
   }
 }
 
-test("an awaited Client exposes hydrated chats and publishes later chat changes", async () => {
-  const backend = memoryBackend();
-  const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
+function openClient(
+  backend: WhatsAppBackendResource,
+  driver: ReturnType<typeof createTestWhatsAppSession>,
+  tuning: Pick<WhatsAppClientOptions, "freshnessMs" | "holderId" | "leaseTtlMs"> = {},
+) {
+  return createWhatsAppClient({
     accountId: ACCOUNT,
-    backend,
+    openBackend: () => backend,
     openSession: () => driver.session,
+    ...tuning,
   });
-  await runtime.start();
+}
+
+test("one awaited Client owns startup, hydration, live state, and shutdown", async () => {
+  const stored = memoryBackend();
+  let backendCloses = 0;
+  const backend = {
+    ...stored,
+    async close() {
+      backendCloses += 1;
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  let sessionStops = 0;
+  const client = await createWhatsAppClient({
+    accountId: ACCOUNT,
+    openBackend: () => backend,
+    openSession: () => ({
+      ...driver.session,
+      async stop() {
+        sessionStops += 1;
+        await driver.session.stop?.();
+      },
+    }),
+  });
+  assert.deepEqual(client.account.get().record, { accountId: ACCOUNT });
+
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -52,7 +81,6 @@ test("an awaited Client exposes hydrated chats and publishes later chat changes"
     },
   });
 
-  const client = await createWhatsAppClient(runtime);
   assert.deepEqual(
     client.chats.list().map((chat) => [chat.chatId, chat.subject]),
     [
@@ -75,19 +103,17 @@ test("an awaited Client exposes hydrated chats and publishes later chat changes"
   assert.deepEqual(published, [[ALPHA, BRAVO]]);
 
   unsubscribe();
-  await client.close();
-  await runtime.stop();
+  await Promise.all([client.close(), client.close()]);
+  assert.equal(sessionStops, 1);
+  assert.equal(backendCloses, 1);
+  assert.throws(() => client.chats.list(), WhatsAppClientClosedError);
+  assert.equal((await stored.leases.acquire(ACCOUNT, "replacement", 30_000)).acquired, true);
 });
 
 test("an awaited Client hydrates account, contacts, aliases, and groups", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -107,8 +133,6 @@ test("an awaited Client hydrates account, contacts, aliases, and groups", async 
       messages: [],
     },
   });
-
-  const client = await createWhatsAppClient(runtime);
   assert.deepEqual(client.account.get().record, { accountId: ACCOUNT });
   assert.deepEqual(
     client.contacts.list().map((contact) => contact.contactId),
@@ -128,18 +152,12 @@ test("an awaited Client hydrates account, contacts, aliases, and groups", async 
   assert.equal(client.groups.get(ROOM)?.subject, "Room");
 
   await client.close();
-  await runtime.stop();
 });
 
 test("opening a chat merges its newest saved page with matching live upserts", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -152,7 +170,6 @@ test("opening a chat merges its newest saved page with matching live upserts", a
       ],
     },
   });
-  const client = await createWhatsAppClient(runtime);
   const conversation = await client.chats.open(ALPHA, { pageSize: 2 });
 
   await driver.emit({
@@ -169,19 +186,12 @@ test("opening a chat merges its newest saved page with matching live upserts", a
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("one committed message patch publishes one coherent conversation state", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
-  const client = await createWhatsAppClient(runtime);
+  const client = await openClient(backend, driver);
   const conversation = await client.chats.open(ALPHA);
   const published: Array<{
     readonly messages: readonly string[];
@@ -212,19 +222,12 @@ test("one committed message patch publishes one coherent conversation state", as
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("one committed patch stages every conversation before notifying any", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
-  const client = await createWhatsAppClient(runtime);
+  const client = await openClient(backend, driver);
   const alpha = await client.chats.open(ALPHA);
   const bravo = await client.chats.open(BRAVO);
   const crossRead: string[][] = [];
@@ -263,7 +266,6 @@ test("one committed patch stages every conversation before notifying any", async
   alpha.close();
   bravo.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("opening reconciles a page/live collision and keeps a backdated live insertion ordered", async () => {
@@ -289,12 +291,7 @@ test("opening reconciles a page/live collision and keeps a backdated live insert
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -307,8 +304,6 @@ test("opening reconciles a page/live collision and keeps a backdated live insert
       ],
     },
   });
-  const client = await createWhatsAppClient(runtime);
-
   const opening = client.chats.open(ALPHA, { pageSize: 2 });
   await pageStarted;
   await driver.emit({
@@ -339,7 +334,6 @@ test("opening reconciles a page/live collision and keeps a backdated live insert
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("Client identifier ordering matches the stores' binary ordering", async () => {
@@ -349,12 +343,7 @@ test("Client identifier ordering matches the stores' binary ordering", async () 
   const lowerGroup = "a@g.us";
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -373,8 +362,6 @@ test("Client identifier ordering matches the stores' binary ordering", async () 
       ],
     },
   });
-
-  const client = await createWhatsAppClient(runtime);
   const conversation = await client.chats.open(ALPHA);
   assert.deepEqual(
     client.chats.list().map((chat) => chat.chatId),
@@ -395,7 +382,6 @@ test("Client identifier ordering matches the stores' binary ordering", async () 
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("loadOlder joins concurrent reads, preserves state on failure, retries, and exhausts the cursor", async () => {
@@ -422,12 +408,7 @@ test("loadOlder joins concurrent reads, preserves state on failure, retries, and
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -445,7 +426,6 @@ test("loadOlder joins concurrent reads, preserves state on failure, retries, and
       ),
     },
   });
-  const client = await createWhatsAppClient(runtime);
   const conversation = await client.chats.open(ALPHA, { pageSize: 2 });
   assert.deepEqual(
     conversation.get().messages.map((message) => message.messageId),
@@ -485,7 +465,6 @@ test("loadOlder joins concurrent reads, preserves state on failure, retries, and
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("a revision gap replaces all global Client state from one fresh Runtime snapshot", async () => {
@@ -502,13 +481,7 @@ test("a revision gap replaces all global Client state from one fresh Runtime sna
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
-  const client = await createWhatsAppClient(runtime);
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -561,7 +534,6 @@ test("a revision gap replaces all global Client state from one fresh Runtime sna
   assert.equal(client.groups.get(ROOM)?.subject, "Room");
 
   await client.close();
-  await runtime.stop();
 });
 
 test("a revision gap re-reads and replaces every opened conversation window", async () => {
@@ -578,12 +550,7 @@ test("a revision gap re-reads and replaces every opened conversation window", as
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -601,7 +568,6 @@ test("a revision gap re-reads and replaces every opened conversation window", as
       ),
     },
   });
-  const client = await createWhatsAppClient(runtime);
   const conversation = await client.chats.open(ALPHA, { pageSize: 4 });
   assert.deepEqual(
     conversation.get().messages.map((message) => message.messageId),
@@ -642,7 +608,6 @@ test("a revision gap re-reads and replaces every opened conversation window", as
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("a revision gap publishes only after every fresh conversation window is ready", async () => {
@@ -676,12 +641,7 @@ test("a revision gap publishes only after every fresh conversation window is rea
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -706,7 +666,6 @@ test("a revision gap publishes only after every fresh conversation window is rea
       ],
     },
   });
-  const client = await createWhatsAppClient(runtime);
   const alpha = await client.chats.open(ALPHA, { pageSize: 2 });
   const bravo = await client.chats.open(BRAVO, { pageSize: 2 });
   let chatNotifications = 0;
@@ -782,7 +741,6 @@ test("a revision gap publishes only after every fresh conversation window is rea
   alpha.close();
   bravo.close();
   await client.close();
-  await runtime.stop();
 });
 
 test("a revision gap racing the first page read leaves only the fresh replacement window", async () => {
@@ -817,12 +775,7 @@ test("a revision gap racing the first page read leaves only the fresh replacemen
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -840,7 +793,6 @@ test("a revision gap racing the first page read leaves only the fresh replacemen
       ),
     },
   });
-  const client = await createWhatsAppClient(runtime);
   const opening = client.chats.open(ALPHA, { pageSize: 2 });
   await firstPageStarted;
 
@@ -872,10 +824,9 @@ test("a revision gap racing the first page read leaves only the fresh replacemen
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 });
 
-test("a failed gap read closes only that Client and a fresh Client retries hydration", async () => {
+test("a failed gap read closes that Client and a fresh owned Client retries hydration", async () => {
   const base = memoryBackend();
   const failure = new Error("recovery snapshot failed");
   let fencingToken = 0;
@@ -896,12 +847,7 @@ test("a failed gap read closes only that Client and a fresh Client retries hydra
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -911,7 +857,6 @@ test("a failed gap read closes only that Client and a fresh Client retries hydra
       messages: [],
     },
   });
-  const client = await createWhatsAppClient(runtime);
   const failed = new Promise<void>((resolve) => {
     client.account.subscribe((state) => {
       if (state.closed?.error === failure) resolve();
@@ -941,7 +886,10 @@ test("a failed gap read closes only that Client and a fresh Client retries hydra
     () => client.chats.list(),
     (error) => error instanceof WhatsAppClientClosedError && error.cause === failure,
   );
-  const replacement = await createWhatsAppClient(runtime);
+  await client.close();
+
+  const replacementDriver = createTestWhatsAppSession();
+  const replacement = await openClient({ ...base }, replacementDriver);
   const conversation = await replacement.chats.open(ALPHA);
   assert.deepEqual(
     conversation.get().messages.map((message) => message.messageId),
@@ -950,8 +898,6 @@ test("a failed gap read closes only that Client and a fresh Client retries hydra
 
   conversation.close();
   await replacement.close();
-  await client.close();
-  await runtime.stop();
 });
 
 test("a connection frame that expires during hydration is never exposed as current", async () => {
@@ -977,14 +923,12 @@ test("a connection frame that expires during hydration is never exposed as curre
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
+  const creating = createWhatsAppClient({
     accountId: ACCOUNT,
-    backend,
+    openBackend: () => backend,
     freshnessMs: 5,
     openSession: () => driver.session,
   });
-  await runtime.start();
-  const creating = createWhatsAppClient(runtime);
   await snapshotStarted;
   await driver.emit({ type: "connection", status: { phase: "online" } });
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -994,7 +938,6 @@ test("a connection frame that expires during hydration is never exposed as curre
   assert.equal(client.account.get().connection, undefined);
 
   await client.close();
-  await runtime.stop();
 });
 
 test("identity and live state are sampled, replaced, expired, and never hydrated after restart", async () => {
@@ -1005,14 +948,7 @@ test("identity and live state are sampled, replaced, expired, and never hydrated
     phoneE164: "+233200000000",
   };
   const driver = createTestWhatsAppSession({ identity });
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    freshnessMs: 25,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
-  const client = await createWhatsAppClient(runtime);
+  const client = await openClient(backend, driver, { freshnessMs: 25 });
   const conversation = await client.chats.open(ALPHA);
   assert.deepEqual(client.account.get().identity, identity);
 
@@ -1043,16 +979,9 @@ test("identity and live state are sampled, replaced, expired, and never hydrated
 
   conversation.close();
   await client.close();
-  await runtime.stop();
 
   const replacementDriver = createTestWhatsAppSession();
-  const replacementRuntime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => replacementDriver.session,
-  });
-  await replacementRuntime.start();
-  const replacement = await createWhatsAppClient(replacementRuntime);
+  const replacement = await openClient({ ...backend }, replacementDriver);
   const reopened = await replacement.chats.open(ALPHA);
   assert.equal(replacement.account.get().connection, undefined);
   assert.equal(replacement.account.get().identity, undefined);
@@ -1060,10 +989,9 @@ test("identity and live state are sampled, replaced, expired, and never hydrated
 
   reopened.close();
   await replacement.close();
-  await replacementRuntime.stop();
 });
 
-test("close and AbortSignal cancel Client resources without stopping the Runtime", async () => {
+test("close and AbortSignal cancel every owned Client resource", async () => {
   const base = memoryBackend();
   let pageReads = 0;
   let olderStarted!: () => void;
@@ -1086,12 +1014,7 @@ test("close and AbortSignal cancel Client resources without stopping the Runtime
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
+  const client = await openClient(backend, driver);
   await driver.emit({
     type: "conversation_sync",
     batch: {
@@ -1109,7 +1032,6 @@ test("close and AbortSignal cancel Client resources without stopping the Runtime
       ),
     },
   });
-  const client = await createWhatsAppClient(runtime);
   const conversation = await client.chats.open(ALPHA, { pageSize: 1 });
   const clientLifetime = new AbortController();
   client.account.subscribe(() => {}, { signal: clientLifetime.signal });
@@ -1150,18 +1072,6 @@ test("close and AbortSignal cancel Client resources without stopping the Runtime
   assert.throws(() => client.chats.list(), WhatsAppClientClosedError);
   assert.throws(() => client.contacts.get(ALPHA), WhatsAppClientClosedError);
   await assert.rejects(client.chats.open(ALPHA), WhatsAppClientClosedError);
-
-  // Client ownership is independent: the Runtime is still live and a new
-  // Client can hydrate the change accepted after the first Client closed.
-  await driver.emit({
-    type: "message",
-    message: textMessage({ id: "still-running", chatId: ALPHA, text: "live", timestamp: 400 }),
-  });
-  const replacement = await createWhatsAppClient(runtime);
-  assert.equal(replacement.chats.get(ALPHA)?.lastMessageAt, 400);
-
-  await replacement.close();
-  await runtime.stop();
 });
 
 test("listener failures are isolated and Runtime closure becomes account state", async () => {
@@ -1169,13 +1079,7 @@ test("listener failures are isolated and Runtime closure becomes account state",
   const driver = createTestWhatsAppSession({
     identity: { jid: "233200000000:1@s.whatsapp.net" },
   });
-  const runtime = createWhatsAppRuntime({
-    accountId: ACCOUNT,
-    backend,
-    openSession: () => driver.session,
-  });
-  await runtime.start();
-  const client = await createWhatsAppClient(runtime);
+  const client = await openClient(backend, driver);
   const listenerFailure = new Error("application listener failed");
   let laterListener = 0;
   let deferredThrow: (() => void) | undefined;
@@ -1202,7 +1106,13 @@ test("listener failures are isolated and Runtime closure becomes account state",
   assert.ok(deferredThrow);
   assert.throws(deferredThrow, (error) => error === listenerFailure);
 
-  await runtime.stop();
+  const closed = new Promise<void>((resolve) => {
+    client.account.subscribe((state) => {
+      if (state.closed) resolve();
+    });
+  });
+  await driver.session.stop?.();
+  await withDeadline(closed);
   assert.deepEqual(client.account.get().closed, {});
   assert.equal(client.account.get().connection, undefined);
   assert.equal(client.account.get().identity, undefined);

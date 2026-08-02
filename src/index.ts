@@ -55,6 +55,7 @@ export { isTerminal, isOnline, refOf } from "./model/index.ts";
 export { createWhatsAppRuntime } from "./runtime/runtime.ts";
 export type { WhatsAppRuntime, WhatsAppRuntimeConfig } from "./runtime/runtime.ts";
 export { createWhatsAppClient } from "./runtime/client.ts";
+export type { WhatsAppClientOptions } from "./runtime/client.ts";
 export {
   memoryBackend,
   memoryDataStore,
@@ -93,6 +94,7 @@ export type {
   WhatsAppConversation,
   WhatsAppConversationState,
   WhatsAppBackend,
+  WhatsAppBackendResource,
   WhatsAppClient,
   WhatsAppClientConnectionState,
 } from "./runtime/contracts.ts";

@@ -29,7 +29,7 @@ import {
   type MirrorDelete,
   type MirrorRecord,
   type StoredMessagePageOptions,
-  type WhatsAppBackend,
+  type WhatsAppBackendResource,
   type WhatsAppDataEvent,
   type WhatsAppDataStore,
   type WhatsAppPatch,
@@ -47,7 +47,7 @@ export interface LibsqlBackendOptions {
   readonly media: MediaStore;
 }
 
-export interface LibsqlBackend extends WhatsAppBackend, AsyncDisposable {
+export interface LibsqlBackend extends WhatsAppBackendResource, AsyncDisposable {
   close(): Promise<void>;
 }
 

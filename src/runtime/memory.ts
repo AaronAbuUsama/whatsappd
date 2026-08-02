@@ -24,7 +24,7 @@ import {
   type MediaStore,
   type MessageRecord,
   type StoredMessageCursor,
-  type WhatsAppBackend,
+  type WhatsAppBackendResource,
   type WhatsAppDataStore,
 } from "./contracts.ts";
 
@@ -327,11 +327,12 @@ export function memoryMediaStore(): MediaStore {
  *
  * @returns A backend whose state vanishes with the process.
  */
-export function memoryBackend(): WhatsAppBackend {
+export function memoryBackend(): WhatsAppBackendResource {
   return {
     credentials: memoryStore(),
     data: memoryDataStore(),
     leases: memoryLeaseStore(),
     media: memoryMediaStore(),
+    async close() {},
   };
 }

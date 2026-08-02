@@ -13,6 +13,7 @@ import type {
   StoredMessagePage,
   SubscriptionOptions,
   WhatsAppAccountState,
+  WhatsAppBackendResource,
   WhatsAppClient,
   WhatsAppClientFrame,
   WhatsAppConversation,
@@ -20,7 +21,12 @@ import type {
   WhatsAppPatch,
   WhatsAppSnapshot,
 } from "./contracts.ts";
-import { getWhatsAppClientSource, type WhatsAppRuntime } from "./runtime.ts";
+import {
+  createWhatsAppRuntime,
+  getWhatsAppClientSource,
+  type WhatsAppRuntime,
+  type WhatsAppRuntimeConfig,
+} from "./runtime.ts";
 
 const compareId = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
@@ -46,7 +52,15 @@ interface OpenConversation {
   close(): void;
 }
 
-export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<WhatsAppClient> {
+export type WhatsAppClientOptions = Omit<WhatsAppRuntimeConfig, "backend"> & {
+  /** Open the Backend instance this Client owns and closes. */
+  openBackend(): WhatsAppBackendResource | Promise<WhatsAppBackendResource>;
+};
+
+async function createClientState(
+  runtime: WhatsAppRuntime,
+  start: () => Promise<void>,
+): Promise<WhatsAppClient> {
   const source = getWhatsAppClientSource(runtime);
   const chats = new Map<string, ChatRecord>();
   const contacts = new Map<string, ContactRecord>();
@@ -293,6 +307,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
 
   off = source.onFrame(consume);
   try {
+    await start();
     replace(await source.snapshot());
     hydrating = false;
     for (const frame of queued.splice(0)) consume(frame);
@@ -604,6 +619,33 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     },
     async close() {
       closeClient();
+    },
+  };
+}
+
+/** Open one owned, hydrated WhatsApp Client. */
+export async function createWhatsAppClient(
+  options: WhatsAppClientOptions,
+): Promise<WhatsAppClient> {
+  const backend = await options.openBackend();
+  const runtime = createWhatsAppRuntime({ ...options, backend });
+  const state = await createClientState(runtime, () => runtime.start());
+  let closing: Promise<void> | undefined;
+
+  return {
+    ...state,
+    close() {
+      return (closing ??= (async () => {
+        let failure: unknown;
+        for (const close of [() => state.close(), () => runtime.stop(), () => backend.close()]) {
+          try {
+            await close();
+          } catch (error) {
+            failure ??= error;
+          }
+        }
+        if (failure) throw failure;
+      })());
     },
   };
 }

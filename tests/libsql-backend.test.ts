@@ -27,8 +27,7 @@ const ROOM = "room@g.us";
 const AT = 1_700_000_000_000;
 const execFile = promisify(execFileCallback);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const processReplacementTest =
-  "^a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable state only$";
+const processReplacementTest = "^a fresh owned Client reconstructs durable libSQL state only$";
 
 dataStoreConformance("memory data", async () => ({
   data: (await import("../src/runtime/memory.ts")).memoryDataStore(),
@@ -319,7 +318,7 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
   }
 });
 
-test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable state only", async () => {
+test("a fresh owned Client reconstructs durable libSQL state only", async () => {
   const replacementUrl = process.env.WHATSAPPD_ISSUE_71_PROCESS_URL;
   const expectedJson = process.env.WHATSAPPD_ISSUE_71_PROCESS_EXPECTED;
   const lid = "100000000000001@lid";
@@ -330,14 +329,12 @@ test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable s
       media: memoryMediaStore(),
     });
     const session = createTestWhatsAppSession();
-    const runtime = createWhatsAppRuntime({
+    const client = await createWhatsAppClient({
       accountId: ACCOUNT,
-      backend,
+      openBackend: () => backend,
       openSession: () => session.session,
     });
     try {
-      await runtime.start();
-      const client = await createWhatsAppClient(runtime);
       const conversation = await client.chats.open(CHAT);
       assert.deepEqual(
         {
@@ -353,10 +350,8 @@ test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable s
       assert.equal(client.account.get().connection, undefined);
       assert.deepEqual(conversation.get().presence, []);
       conversation.close();
-      await client.close();
     } finally {
-      await runtime.stop().catch(() => {});
-      await backend.close();
+      await client.close().catch(() => {});
     }
     return;
   }
@@ -365,15 +360,14 @@ test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable s
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
   const firstBackend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
   const firstSession = createTestWhatsAppSession();
-  const firstRuntime = createWhatsAppRuntime({
+  const firstClient = await createWhatsAppClient({
     accountId: ACCOUNT,
-    backend: firstBackend,
+    openBackend: () => firstBackend,
     freshnessMs: 10_000,
     openSession: () => firstSession.session,
   });
 
   try {
-    await firstRuntime.start();
     await firstSession.emit({
       type: "conversation_sync",
       batch: {
@@ -392,14 +386,12 @@ test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable s
         ],
       },
     });
-    const firstClient = await createWhatsAppClient(firstRuntime);
     const firstConversation = await firstClient.chats.open(CHAT);
     await firstSession.emit({ type: "connection", status: { phase: "online" } });
     await firstSession.emit({ type: "presence", presence: { chatId: CHAT, kind: "typing" } });
     assert.ok(firstClient.account.get().connection);
     assert.deepEqual(firstConversation.get().presence, [{ chatId: CHAT, kind: "typing" }]);
 
-    await firstRuntime.stop();
     const expected = {
       account: firstClient.account.get().record,
       chats: firstClient.chats.list(),
@@ -410,7 +402,6 @@ test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable s
     };
     firstConversation.close();
     await firstClient.close();
-    await firstBackend.close();
     await execFile(
       process.execPath,
       [
@@ -430,8 +421,7 @@ test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable s
       },
     );
   } finally {
-    await firstRuntime.stop().catch(() => {});
-    await firstBackend.close().catch(() => {});
+    await firstClient.close().catch(() => {});
     await rm(directory, { recursive: true, force: true });
   }
 });

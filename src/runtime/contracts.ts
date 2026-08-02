@@ -523,6 +523,11 @@ export interface WhatsAppBackend {
   readonly media: MediaStore;
 }
 
+/** One Backend instance whose lifetime belongs to a WhatsApp Client. */
+export interface WhatsAppBackendResource extends WhatsAppBackend {
+  close(): Promise<void>;
+}
+
 /** Thrown when a second runtime tries to open an account another one holds. */
 export class AccountAlreadyClaimedError extends Error {
   readonly accountId: string;
