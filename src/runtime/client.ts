@@ -10,6 +10,7 @@ import type {
   GroupRecord,
   MessageRecord,
   StoredMessageCursor,
+  StoredMessagePage,
   SubscriptionOptions,
   WhatsAppAccountState,
   WhatsAppClient,
@@ -36,10 +37,12 @@ interface OpenConversation {
   readonly public: WhatsAppConversation;
   hydrate(): Promise<void>;
   loadOlder(): Promise<void>;
-  replaceWindow(): Promise<void>;
+  readWindow(): Promise<StoredMessagePage | undefined>;
+  replaceWindow(page: StoredMessagePage): void;
   receive(message: MessageRecord): void;
   receivePresence(presence: PresenceUpdate, expiresAt: number): void;
-  commit(): void;
+  stage(): void;
+  flush(): void;
   close(): void;
 }
 
@@ -99,7 +102,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     for (const unsubscribe of clientSubscriptions) unsubscribe();
   };
 
-  const replace = (snapshot: WhatsAppSnapshot, publishChanges = false): void => {
+  const replace = (snapshot: WhatsAppSnapshot): (() => void) => {
     const previousAccount = accountState;
     const previousChats = publishedChats;
     const previousContacts = publishedContacts;
@@ -126,15 +129,14 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     publishedContacts = [...contacts.values()].sort(byContactId);
     publishedGroups = [...groups.values()].sort(byGroupId);
     revision = snapshot.revision;
-    if (!publishChanges) return;
-    if (!isDeepStrictEqual(previousAccount, accountState)) notify(accountListeners, accountState);
-    if (!isDeepStrictEqual(previousChats, publishedChats)) {
-      notify(chatListeners, publishedChats);
-    }
-    if (!isDeepStrictEqual(previousContacts, publishedContacts))
-      notify(contactListeners, publishedContacts);
-    if (!isDeepStrictEqual(previousGroups, publishedGroups))
-      notify(groupListeners, publishedGroups);
+    return () => {
+      if (!isDeepStrictEqual(previousAccount, accountState)) notify(accountListeners, accountState);
+      if (!isDeepStrictEqual(previousChats, publishedChats)) notify(chatListeners, publishedChats);
+      if (!isDeepStrictEqual(previousContacts, publishedContacts))
+        notify(contactListeners, publishedContacts);
+      if (!isDeepStrictEqual(previousGroups, publishedGroups))
+        notify(groupListeners, publishedGroups);
+    };
   };
 
   const rebuildAliases = (): void => {
@@ -192,7 +194,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       publishedContacts = [...contacts.values()].sort(byContactId);
     }
     if (groupsChanged) publishedGroups = [...groups.values()].sort(byGroupId);
-    for (const conversation of affectedConversations) conversation.commit();
+    for (const conversation of affectedConversations) conversation.stage();
+    for (const conversation of affectedConversations) conversation.flush();
     if (accountChanged) notify(accountListeners, accountState);
     if (chatsChanged) notify(chatListeners, publishedChats);
     if (contactsChanged) notify(contactListeners, publishedContacts);
@@ -266,8 +269,18 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     let task!: Promise<void>;
     task = (async () => {
       try {
-        replace(await source.snapshot(), true);
-        await Promise.all([...conversations].map((conversation) => conversation.replaceWindow()));
+        const snapshot = await source.snapshot();
+        const replacing = [...conversations];
+        const windows = await Promise.all(
+          replacing.map(
+            async (conversation) => [conversation, await conversation.readWindow()] as const,
+          ),
+        );
+        if (closed) return;
+        const flushGlobal = replace(snapshot);
+        for (const [conversation, page] of windows) if (page) conversation.replaceWindow(page);
+        flushGlobal();
+        for (const conversation of replacing) conversation.flush();
       } catch (error) {
         closeClient({ error });
       } finally {
@@ -327,7 +340,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     const conversationSubscriptions = new Set<Unsubscribe>();
     let cursor: StoredMessageCursor | undefined;
     let pageRead: Promise<void> | undefined;
-    let replacementRead: Promise<void> | undefined;
+    let replacementRead: Promise<StoredMessagePage | undefined> | undefined;
     let conversationClosed = false;
     let rejectClosed!: (error: WhatsAppClientClosedError) => void;
     const closedConversation = new Promise<never>((_, reject) => {
@@ -342,8 +355,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       loadingOlder: true,
       hasOlderSaved: false,
     };
-    const publish = (next: Partial<WhatsAppConversationState> = {}): void => {
-      const previous = state;
+    let publishedState = state;
+    const stage = (next: Partial<WhatsAppConversationState> = {}): void => {
       state = {
         ...state,
         ...next,
@@ -352,7 +365,15 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
           .sort(([left], [right]) => compareId(left, right))
           .map(([, entry]) => entry.value),
       };
-      if (!isDeepStrictEqual(previous, state)) notify(conversationListeners, state);
+    };
+    const flush = (): void => {
+      if (isDeepStrictEqual(publishedState, state)) return;
+      publishedState = state;
+      notify(conversationListeners, state);
+    };
+    const publish = (next: Partial<WhatsAppConversationState> = {}): void => {
+      stage(next);
+      flush();
     };
     const requireConversation = (): void => {
       if (conversationClosed) throw new WhatsAppClientClosedError("conversation");
@@ -398,7 +419,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       loadOlder() {
         if (conversationClosed)
           return Promise.reject(new WhatsAppClientClosedError("conversation"));
-        if (replacementRead) return replacementRead;
+        if (replacementRead) return replacementRead.then(() => {});
         if (pageRead) return pageRead;
         if (!cursor) return Promise.resolve();
         const before = cursor;
@@ -425,9 +446,9 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         pageRead = task;
         return task;
       },
-      replaceWindow() {
+      readWindow() {
         if (replacementRead) return replacementRead;
-        let task!: Promise<void>;
+        let task!: Promise<StoredMessagePage | undefined>;
         task = (async () => {
           try {
             const pending = pageRead;
@@ -438,9 +459,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
                 if (conversationClosed) return;
               }
             if (conversationClosed) return;
-            let page;
             try {
-              page = await Promise.race([
+              return await Promise.race([
                 source.messages(chatId, { limit: Math.max(pageSize, messages.size) }),
                 closedConversation,
               ]);
@@ -448,22 +468,24 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
               if (conversationClosed) return;
               throw error;
             }
-            if (conversationClosed) return;
-            messages.clear();
-            for (const message of page.messages) messages.set(message.messageId, message);
-            cursor = page.nextBefore;
-            publish({
-              chat: chats.get(chatId),
-              loadingOlder: false,
-              hasOlderSaved: cursor !== undefined,
-              error: undefined,
-            });
           } finally {
             if (replacementRead === task) replacementRead = undefined;
           }
         })();
         replacementRead = task;
         return task;
+      },
+      replaceWindow(page) {
+        if (conversationClosed) return;
+        messages.clear();
+        for (const message of page.messages) messages.set(message.messageId, message);
+        cursor = page.nextBefore;
+        stage({
+          chat: chats.get(chatId),
+          loadingOlder: false,
+          hasOlderSaved: cursor !== undefined,
+          error: undefined,
+        });
       },
       receive(message) {
         if (conversationClosed) return;
@@ -490,9 +512,13 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         presences.set(subject, { value: presence, timer });
         publish();
       },
-      commit() {
+      stage() {
         if (conversationClosed) return;
-        publish({ chat: chats.get(chatId) });
+        stage({ chat: chats.get(chatId) });
+      },
+      flush() {
+        if (conversationClosed) return;
+        flush();
       },
       close() {
         if (conversationClosed) return;
