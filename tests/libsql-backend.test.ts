@@ -6,16 +6,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "./_expect.ts";
 import {
-  createInProcessWhatsAppClient,
+  createWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   memoryMediaStore,
   AccountAlreadyClaimedError,
   StaleAccountClaimError,
-  type WhatsAppClient,
-  type WhatsAppSnapshot,
 } from "../src/index.ts";
+import { getWhatsAppClientSource } from "../src/runtime/runtime.ts";
 import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
@@ -45,17 +44,6 @@ dataStoreConformance("libSQL data", async () => {
     },
   };
 });
-
-async function firstSnapshot(client: WhatsAppClient): Promise<WhatsAppSnapshot> {
-  const controller = new AbortController();
-  const frames = client.watch({ signal: controller.signal })[Symbol.asyncIterator]();
-  const first = await frames.next();
-  controller.abort();
-  await frames.return?.();
-  assert.equal(first.done, false);
-  assert.equal(first.value.type, "snapshot");
-  return first.value.snapshot;
-}
 
 const mediaMessage = (
   kind: "image" | "audio",
@@ -236,8 +224,8 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
 
     const expectedSnapshot = await firstBackend.data.snapshot(ACCOUNT);
     const expectedSource = await firstBackend.data.accepted(ACCOUNT, 0);
-    const expectedPage = await firstRuntime.messages(CHAT);
-    const expectedGroupPage = await firstRuntime.messages(ROOM);
+    const expectedPage = await getWhatsAppClientSource(firstRuntime).messages(CHAT);
+    const expectedGroupPage = await getWhatsAppClientSource(firstRuntime).messages(ROOM);
     await firstBackend.close();
 
     const replacementBackend = libsqlBackend({
@@ -251,10 +239,10 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
       backend: replacementBackend,
       openSession: () => replacementSession.session,
     });
-    const replacementClient = createInProcessWhatsAppClient(replacementRuntime);
+    const replacementClient = getWhatsAppClientSource(replacementRuntime);
 
     await replacementRuntime.start();
-    expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);
+    expect(await replacementClient.snapshot()).toEqual(expectedSnapshot);
     expect(await replacementClient.messages(CHAT)).toEqual(expectedPage);
     expect(await replacementClient.messages(ROOM)).toEqual(expectedGroupPage);
     expect(
@@ -325,6 +313,99 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
   }
 });
 
+test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable state only", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-friendly-client-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const lid = "100000000000001@lid";
+  const firstBackend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  const firstSession = createTestWhatsAppSession();
+  const firstRuntime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend: firstBackend,
+    freshnessMs: 10_000,
+    openSession: () => firstSession.session,
+  });
+
+  try {
+    await firstRuntime.start();
+    await firstSession.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+        chats: [
+          {
+            id: ROOM,
+            isGroup: true,
+            subject: "Room",
+            participants: [{ id: CHAT, role: "admin" }],
+          },
+        ],
+        contacts: [{ id: CHAT, nativeIds: [CHAT, lid], displayName: "Ada" }],
+        messages: [
+          textMessage({ id: "saved", chatId: CHAT, text: "Saved", timestamp: AT, live: false }),
+        ],
+      },
+    });
+    const firstClient = await createWhatsAppClient(firstRuntime);
+    const firstConversation = await firstClient.chats.open(CHAT);
+    await firstSession.emit({ type: "connection", status: { phase: "online" } });
+    await firstSession.emit({ type: "presence", presence: { chatId: CHAT, kind: "typing" } });
+    assert.ok(firstClient.account.get().connection);
+    assert.deepEqual(firstConversation.get().presence, [{ chatId: CHAT, kind: "typing" }]);
+
+    await firstRuntime.stop();
+    const expected = {
+      account: firstClient.account.get().record,
+      chats: firstClient.chats.list(),
+      contacts: firstClient.contacts.list(),
+      resolved: firstClient.contacts.resolve(lid),
+      groups: firstClient.groups.list(),
+      messages: firstConversation.get().messages,
+    };
+    firstConversation.close();
+    await firstClient.close();
+    await firstBackend.close();
+
+    const replacementBackend = libsqlBackend({
+      url,
+      accountId: ACCOUNT,
+      media: memoryMediaStore(),
+    });
+    const replacementSession = createTestWhatsAppSession();
+    const replacementRuntime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: replacementBackend,
+      openSession: () => replacementSession.session,
+    });
+    await replacementRuntime.start();
+    const replacementClient = await createWhatsAppClient(replacementRuntime);
+    const replacementConversation = await replacementClient.chats.open(CHAT);
+
+    assert.deepEqual(
+      {
+        account: replacementClient.account.get().record,
+        chats: replacementClient.chats.list(),
+        contacts: replacementClient.contacts.list(),
+        resolved: replacementClient.contacts.resolve(lid),
+        groups: replacementClient.groups.list(),
+        messages: replacementConversation.get().messages,
+      },
+      expected,
+    );
+    assert.equal(replacementClient.account.get().connection, undefined);
+    assert.deepEqual(replacementConversation.get().presence, []);
+
+    replacementConversation.close();
+    await replacementClient.close();
+    await replacementRuntime.stop();
+    await replacementBackend.close();
+  } finally {
+    await firstRuntime.stop().catch(() => {});
+    await firstBackend.close().catch(() => {});
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("new libSQL, file media, Runtime, and Client instances reconstruct image and voice bytes", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-replacement-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
@@ -365,7 +446,7 @@ test("new libSQL, file media, Runtime, and Client instances reconstruct image an
     await firstRuntime.stop();
 
     const expectedSnapshot = await firstBackend.data.snapshot(ACCOUNT);
-    const expectedPage = await firstRuntime.messages(CHAT);
+    const expectedPage = await getWhatsAppClientSource(firstRuntime).messages(CHAT);
     const expectedSource = await firstBackend.data.accepted(ACCOUNT, 0);
     await firstBackend.close();
 
@@ -381,10 +462,10 @@ test("new libSQL, file media, Runtime, and Client instances reconstruct image an
       backend: replacementBackend,
       openSession: () => replacementSession.session,
     });
-    const replacementClient = createInProcessWhatsAppClient(replacementRuntime);
+    const replacementClient = getWhatsAppClientSource(replacementRuntime);
     await replacementRuntime.start();
 
-    expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);
+    expect(await replacementClient.snapshot()).toEqual(expectedSnapshot);
     expect(await replacementClient.messages(CHAT)).toEqual(expectedPage);
     expect(await replacementBackend.data.accepted(ACCOUNT, 0)).toEqual(expectedSource);
     for (const message of expectedPage.messages) {
