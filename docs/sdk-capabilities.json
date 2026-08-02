@@ -1,0 +1,2838 @@
+{
+  "version": 3,
+  "audit": {
+    "whatsappdVersion": "0.2.2",
+    "baileysVersion": "7.0.0-rc14"
+  },
+  "verification": {
+    "automatedTests": "available",
+    "liveWhatsApp": "not-run",
+    "browserReact": "not-run",
+    "openTui": "not-run"
+  },
+  "interfaceDecision": {
+    "adr": "ADR-0023",
+    "selected": "namespaces-plus-opened-conversation",
+    "namespaces": [
+      {
+        "name": "account",
+        "scope": "state, identity, pairing, unlink, profile, privacy, blocklist"
+      },
+      {
+        "name": "chats",
+        "scope": "list, get, open, archive, mute, pin, clear, delete"
+      },
+      {
+        "name": "contacts",
+        "scope": "synced WhatsApp contacts and registration lookup"
+      },
+      {
+        "name": "groups",
+        "scope": "metadata, participants, invites, approvals, settings"
+      },
+      {
+        "name": "communities",
+        "scope": "communities and linked groups"
+      },
+      {
+        "name": "channels",
+        "scope": "WhatsApp channels/newsletters"
+      },
+      {
+        "name": "calls",
+        "scope": "call events, reject, and call links"
+      },
+      {
+        "name": "business",
+        "scope": "profile, catalog, products, orders, labels, quick replies"
+      },
+      {
+        "name": "operations",
+        "scope": "durable side-effect receipts and outcomes"
+      },
+      {
+        "name": "media",
+        "scope": "authorized reads of injected durable media"
+      }
+    ],
+    "openedConversation": [
+      "state",
+      "subscribe",
+      "loadOlder",
+      "requestPhoneHistory",
+      "send",
+      "messages",
+      "markRead",
+      "typing",
+      "recording"
+    ],
+    "operationSemantics": [
+      "Durable side effects accept an optional idempotency key and return an account-scoped operation receipt.",
+      "Receipts distinguish queued, claimed, executing, succeeded, failed, and outcome_unknown.",
+      "An execution that may have reached WhatsApp is never retried under the same operation identity.",
+      "An AbortSignal cancels the caller wait, not an already durable operation."
+    ],
+    "resourceOwnership": [
+      "client.close releases Client subscriptions and opened conversations.",
+      "client.close does not stop an application-owned Runtime or close an application-owned Backend.",
+      "Closing an opened conversation cancels its page reads and subscriptions without deleting messages or leaving the chat."
+    ],
+    "example": [
+      "const conversation = await client.chats.open(chatId, { signal });",
+      "await conversation.send.text(\"Hello\");",
+      "await conversation.send.document(bytes, { fileName: \"invoice.pdf\", mimetype: \"application/pdf\" });",
+      "await conversation.messages.react(messageId, \"👍\");",
+      "await conversation.markRead();",
+      "await conversation.loadOlder(); // saved database rows only",
+      "await conversation.requestPhoneHistory(); // distinct phone request",
+      "conversation.close();",
+      "await client.close();"
+    ]
+  },
+  "publicExports": [
+    "AcceptedWhatsAppBatch",
+    "AccountAlreadyClaimedError",
+    "AccountLease",
+    "AccountLeaseStore",
+    "AccountNotHeldError",
+    "AccountRecord",
+    "AuthStrategy",
+    "Awaitable",
+    "BinaryInput",
+    "ChatRecord",
+    "ContactRecord",
+    "ContactUpdate",
+    "ConversationSyncBatch",
+    "ConversationSyncContext",
+    "ConversationSyncSource",
+    "CredentialStore",
+    "Disposition",
+    "DurableInboundMessage",
+    "DurableMedia",
+    "DurableUpdate",
+    "FaultReason",
+    "FileMediaStoreOptions",
+    "GroupMetadata",
+    "GroupParticipant",
+    "GroupParticipantAction",
+    "GroupRecord",
+    "GroupUpdate",
+    "HistoryChat",
+    "HistoryContact",
+    "InboundMessage",
+    "LibsqlBackend",
+    "LibsqlBackendOptions",
+    "MediaHandle",
+    "MediaMeta",
+    "MediaStore",
+    "MessageContext",
+    "MessageFlags",
+    "MessageHandlerContext",
+    "MessageRecord",
+    "MessageRef",
+    "MetricEvent",
+    "MetricsHook",
+    "MirrorRecord",
+    "ObservedInstant",
+    "Outbound",
+    "PairingError",
+    "PairingState",
+    "PresenceKind",
+    "PresenceUpdate",
+    "ReceiptStatus",
+    "RecordedSessionCommands",
+    "RuntimeSession",
+    "SendOptions",
+    "SessionConfig",
+    "StaleAccountClaimError",
+    "Status",
+    "StoredMessageCursor",
+    "StoredMessagePage",
+    "StoredMessagePageOptions",
+    "SyncState",
+    "TestWhatsAppEvent",
+    "TestWhatsAppSessionDriver",
+    "TextMessageInput",
+    "Unsubscribe",
+    "UnsupportedDurableEventError",
+    "Update",
+    "WaIdentity",
+    "WhatsAppAddress",
+    "WhatsAppBackend",
+    "WhatsAppClient",
+    "WhatsAppClientConnectionState",
+    "WhatsAppClientFrame",
+    "WhatsAppDataEvent",
+    "WhatsAppDataStore",
+    "WhatsAppDurableEvent",
+    "WhatsAppFault",
+    "WhatsAppPatch",
+    "WhatsAppRuntime",
+    "WhatsAppRuntimeConfig",
+    "WhatsAppSession",
+    "WhatsAppSessionHandlers",
+    "WhatsAppSnapshot",
+    "assertE164",
+    "classifyDisconnect",
+    "createInProcessWhatsAppClient",
+    "createSession",
+    "createTestWhatsAppSession",
+    "createWhatsAppRuntime",
+    "dispositionFor",
+    "fileMediaStore",
+    "fileStore",
+    "isOnline",
+    "isRetryable",
+    "isTerminal",
+    "libsqlBackend",
+    "memoryBackend",
+    "memoryDataStore",
+    "memoryLeaseStore",
+    "memoryMediaStore",
+    "memoryStore",
+    "pairingAuth",
+    "qrAuth",
+    "refOf",
+    "textMessage"
+  ],
+  "capabilities": [
+    {
+      "id": "ACC-01",
+      "domain": "accounts",
+      "outcome": "Observe disconnected, connecting, pairing, authenticated, online, backoff, logged-out, and suspended states.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events connection.update`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`account.state`, `account.subscribe`; `useAccount`, `useConnection`",
+      "requirements": "Volatile live state plus durable observed instants; no public terminal-state observation recorded"
+    },
+    {
+      "id": "ACC-02",
+      "domain": "accounts",
+      "outcome": "Pair by QR and observe expiring challenge state.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`account.pair({ method: \"qr\" })`; `usePairing`",
+      "requirements": "Commands + protected challenge + trusted worker; #23, 0.3 target"
+    },
+    {
+      "id": "ACC-03",
+      "domain": "accounts",
+      "outcome": "Pair by validated phone number and pairing code.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`requestPairingCode`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`account.pair({ method: \"code\", phoneNumber })`; `usePairing`",
+      "requirements": "Commands + protected challenge; #23, 0.3 target"
+    },
+    {
+      "id": "ACC-04",
+      "domain": "accounts",
+      "outcome": "Unlink WhatsApp while retaining saved chats and other accounts.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`logout`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`; credential clear exists but no authorized lifecycle operation"
+      },
+      "target": "`account.unlink()`; `useUnlink` only if shared workflow emerges",
+      "requirements": "Commands + credentials; trusted worker; #23"
+    },
+    {
+      "id": "ACC-05",
+      "domain": "accounts",
+      "outcome": "Start and stop the application-owned live worker.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`runtime.start/stop`; `client.close` releases Client resources",
+      "requirements": "Credentials + lease + data + media; shipped lower-level"
+    },
+    {
+      "id": "ACC-06",
+      "domain": "accounts",
+      "outcome": "Read the connected account identity.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`socket.user`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`account.identity()` / `useAccount`",
+      "requirements": "Live trusted worker; shipped lower-level"
+    },
+    {
+      "id": "ACC-07",
+      "domain": "accounts",
+      "outcome": "Read a profile picture URL.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`profilePictureUrl`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`account.profile.picture(jid)`",
+      "requirements": "Live trusted worker; release undecided"
+    },
+    {
+      "id": "ACC-08",
+      "domain": "accounts",
+      "outcome": "Set or remove a profile picture.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`updateProfilePicture`, `removeProfilePicture`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`account.profile.setPicture/removePicture`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "ACC-09",
+      "domain": "accounts",
+      "outcome": "Read or update profile about/status and display name.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`fetchStatus`, `updateProfileStatus`, `updateProfileName`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`account.profile.about/setAbout/setName`",
+      "requirements": "Durable command for writes; deferred"
+    },
+    {
+      "id": "ACC-10",
+      "domain": "accounts",
+      "outcome": "Read privacy settings.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`fetchPrivacySettings`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`account.privacy.get()`",
+      "requirements": "Live trusted worker; deferred"
+    },
+    {
+      "id": "ACC-11",
+      "domain": "accounts",
+      "outcome": "Update last-seen, online, photo, about, receipt, group-add, call, message, link-preview, and default-disappearing privacy.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:chat update*Privacy`, `updateDefaultDisappearingMode`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`account.privacy.update(patch)`",
+      "requirements": "Durable command; defer atomically until native semantics are proven"
+    },
+    {
+      "id": "ACC-12",
+      "domain": "accounts",
+      "outcome": "Read the blocklist.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`fetchBlocklist`, `blocklist.set/update`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`account.blocklist.list/subscribe`",
+      "requirements": "Current mirror + command; deferred"
+    },
+    {
+      "id": "ACC-13",
+      "domain": "accounts",
+      "outcome": "Block or unblock one WhatsApp address.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`updateBlockStatus`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`account.blocklist.block/unblock`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "ACC-14",
+      "domain": "accounts",
+      "outcome": "Authenticate an application user and decide which WhatsApp accounts they may access.",
+      "upstream": {
+        "status": "unsupported",
+        "summary": "`unsupported-upstream`"
+      },
+      "current": {
+        "status": "application-owned",
+        "summary": "`application-owned` (ADR-0007)"
+      },
+      "target": "Not a Client login namespace",
+      "requirements": "Host auth/routes or native backend rules; application-owned"
+    },
+    {
+      "id": "ACC-15",
+      "domain": "accounts",
+      "outcome": "Access raw credentials, signal keys, pairing secrets, prekeys, or crypto operations.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "internal",
+        "summary": "`intentionally-internal`"
+      },
+      "target": "No friendly Client operation",
+      "requirements": "Credential/protected-challenge capabilities only; never consumer data"
+    },
+    {
+      "id": "CHAT-01",
+      "domain": "chats",
+      "outcome": "List current chat summaries.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events chats.*`, history sync)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`chats.list()`; `useChats`",
+      "requirements": "Data mirror; owner to be assigned by #68"
+    },
+    {
+      "id": "CHAT-02",
+      "domain": "chats",
+      "outcome": "Read one current chat.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`chats.get(chatId)`; `useChat`",
+      "requirements": "Data mirror; friendly DX"
+    },
+    {
+      "id": "CHAT-03",
+      "domain": "chats",
+      "outcome": "Open one synchronized conversation.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a product composition"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`; consumers currently combine `watch()` and `messages()` themselves"
+      },
+      "target": "`chats.open(chatId)`; `useConversation`",
+      "requirements": "Client-owned state per ADR-0023; friendly DX"
+    },
+    {
+      "id": "CHAT-04",
+      "domain": "chats",
+      "outcome": "Page older messages already saved in the backend.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a storage read"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.loadOlder()`; `useConversation`",
+      "requirements": "Data store; shipped low-level, friendly DX deferred"
+    },
+    {
+      "id": "CHAT-05",
+      "domain": "chats",
+      "outcome": "Ask the phone for older messages and receive a submission receipt only.",
+      "upstream": {
+        "status": "partial",
+        "summary": "`partial-or-unstable` (`fetchMessageHistory`); behavior is unresolved (#18/#50)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.requestPhoneHistory()`; `usePhoneHistoryRequest` if UI needs shared status",
+      "requirements": "Live worker; #50 research, #25 scheduler blocked"
+    },
+    {
+      "id": "CHAT-06",
+      "domain": "chats",
+      "outcome": "Automatically and fairly backfill every eligible chat without claiming completeness.",
+      "upstream": {
+        "status": "research-required",
+        "summary": "`research-required` because responses were not observed"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`"
+      },
+      "target": "`account.history.state/pause/resume`; `useHistoryBackfill`",
+      "requirements": "Durable progress + commands; #25/#50"
+    },
+    {
+      "id": "CHAT-07",
+      "domain": "chats",
+      "outcome": "Observe initial, recent, full, on-demand, and unlabeled conversation-sync batches.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`messaging-history.set/status`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Internal Client ingestion, not a UI event",
+      "requirements": "Accepted data; no on-demand integration observation recorded"
+    },
+    {
+      "id": "CHAT-08",
+      "domain": "chats",
+      "outcome": "Mark real message references read.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`readMessages`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.markRead()`",
+      "requirements": "Durable command target #22"
+    },
+    {
+      "id": "CHAT-09",
+      "domain": "chats",
+      "outcome": "Archive or unarchive a chat.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`chatModify archive`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`chats.archive/unarchive`",
+      "requirements": "Durable command + mirror; deferred"
+    },
+    {
+      "id": "CHAT-10",
+      "domain": "chats",
+      "outcome": "Mute or unmute a chat.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`chatModify mute`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`chats.mute/unmute`",
+      "requirements": "Durable command + mirror; deferred"
+    },
+    {
+      "id": "CHAT-11",
+      "domain": "chats",
+      "outcome": "Pin or unpin a chat.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`chatModify pin`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`chats.pin/unpin`",
+      "requirements": "Durable command + mirror; deferred"
+    },
+    {
+      "id": "CHAT-12",
+      "domain": "chats",
+      "outcome": "Clear messages from a chat locally.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`chatModify clear`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`chats.clear`",
+      "requirements": "Durable command + scoped mirror deletion; deferred"
+    },
+    {
+      "id": "CHAT-13",
+      "domain": "chats",
+      "outcome": "Delete a chat locally.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`chatModify delete`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`chats.delete`",
+      "requirements": "Durable command + scoped mirror deletion; deferred"
+    },
+    {
+      "id": "CHAT-14",
+      "domain": "chats",
+      "outcome": "Configure per-chat disappearing messages.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`disappearingMessagesInChat`, `groupToggleEphemeral`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.disappearing.set`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "CHAT-15",
+      "domain": "chats",
+      "outcome": "Treat saved paging as proof that all phone history is loaded.",
+      "upstream": {
+        "status": "unsupported",
+        "summary": "`unsupported-upstream`"
+      },
+      "current": {
+        "status": "unsupported",
+        "summary": "`unsupported-upstream`: explicitly prohibited by ADR-0010 and #18"
+      },
+      "target": "No operation",
+      "requirements": "No backend can infer this from silence"
+    },
+    {
+      "id": "CHAT-16",
+      "domain": "chats",
+      "outcome": "Mark a chat unread.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`chatModify markRead:false`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; current `markRead` only marks real references read"
+      },
+      "target": "`chats.markUnread(chatId)`",
+      "requirements": "Durable command + mirror; deferred"
+    },
+    {
+      "id": "CHAT-17",
+      "domain": "chats",
+      "outcome": "Observe upstream chat upserts, updates, and deletions.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events chats.upsert/update/delete`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; the current adapter derives chats from messages/history/groups"
+      },
+      "target": "Transparent `chats` state",
+      "requirements": "Data projection with scoped deletion; deferred"
+    },
+    {
+      "id": "MSG-IN-01",
+      "domain": "inbound-messages",
+      "outcome": "Receive text, including extended text.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:messages`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.state.messages`; `useConversation`",
+      "requirements": "Data mirror; shipped"
+    },
+    {
+      "id": "MSG-IN-02",
+      "domain": "inbound-messages",
+      "outcome": "Receive image metadata and downloadable bytes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same; attachment render slot may expose metadata/actions",
+      "requirements": "Data + injected media; shipped"
+    },
+    {
+      "id": "MSG-IN-03",
+      "domain": "inbound-messages",
+      "outcome": "Receive video or GIF metadata and bytes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same attachment behavior",
+      "requirements": "Data + injected media; capture shipped, no process-replacement byte observation"
+    },
+    {
+      "id": "MSG-IN-04",
+      "domain": "inbound-messages",
+      "outcome": "Receive audio or voice-note metadata and bytes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same attachment behavior",
+      "requirements": "Data + injected media; shipped"
+    },
+    {
+      "id": "MSG-IN-05",
+      "domain": "inbound-messages",
+      "outcome": "Receive document metadata and bytes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same attachment behavior",
+      "requirements": "Data + injected media; capture shipped, no process-replacement byte observation"
+    },
+    {
+      "id": "MSG-IN-06",
+      "domain": "inbound-messages",
+      "outcome": "Receive sticker metadata and bytes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same attachment behavior",
+      "requirements": "Data + injected media; capture shipped, no process-replacement byte observation"
+    },
+    {
+      "id": "MSG-IN-07",
+      "domain": "inbound-messages",
+      "outcome": "Receive static location.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.state.messages`",
+      "requirements": "Data projection required; owner to be assigned by #68"
+    },
+    {
+      "id": "MSG-IN-08",
+      "domain": "inbound-messages",
+      "outcome": "Receive one or many contact cards.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same; contact-card render slot only if behavior repeats",
+      "requirements": "Data projection required; owner to be assigned by #68"
+    },
+    {
+      "id": "MSG-IN-09",
+      "domain": "inbound-messages",
+      "outcome": "Receive poll creation.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same; poll module only with shared voting behavior",
+      "requirements": "Data projection required; owner to be assigned by #68"
+    },
+    {
+      "id": "MSG-IN-10",
+      "domain": "inbound-messages",
+      "outcome": "Preserve view-once, ephemeral, and edited wrappers as flags.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Message metadata",
+      "requirements": "Data schema expansion deferred"
+    },
+    {
+      "id": "MSG-IN-11",
+      "domain": "inbound-messages",
+      "outcome": "Preserve quotes and mentions.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Message metadata",
+      "requirements": "Data schema expansion deferred"
+    },
+    {
+      "id": "MSG-IN-12",
+      "domain": "inbound-messages",
+      "outcome": "Receive live location.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`liveLocationMessage`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves the raw live-location type, but no normalized live-location contract exists."
+      },
+      "target": "`conversation.state.messages`",
+      "requirements": "Modeling and data projection; deferred"
+    },
+    {
+      "id": "MSG-IN-13",
+      "domain": "inbound-messages",
+      "outcome": "Receive buttons, list, template, interactive, or native-flow replies/messages.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:messages`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw message types, but no normalized interactive reply/message contracts exist."
+      },
+      "target": "Message union after upstream-contract proof",
+      "requirements": "Modeling/data; deferred"
+    },
+    {
+      "id": "MSG-IN-14",
+      "domain": "inbound-messages",
+      "outcome": "Receive product, order, payment, or invoice messages.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw message types, but no normalized commerce message contracts exist."
+      },
+      "target": "`business` plus conversation message model",
+      "requirements": "Business/data; deferred"
+    },
+    {
+      "id": "MSG-IN-15",
+      "domain": "inbound-messages",
+      "outcome": "Receive group or newsletter invite messages.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw invite types, but no normalized invite contracts or actions exist."
+      },
+      "target": "Conversation message plus target domain action",
+      "requirements": "Data; deferred"
+    },
+    {
+      "id": "MSG-IN-16",
+      "domain": "inbound-messages",
+      "outcome": "Receive events, albums, sticker packs, poll results, or protocol notices.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw message types, but no normalized user-visible family contracts exist."
+      },
+      "target": "Model each user-visible family; protocol-only notices stay internal",
+      "requirements": "Data; deferred"
+    },
+    {
+      "id": "MSG-IN-17",
+      "domain": "inbound-messages",
+      "outcome": "Never silently drop an unknown addressable message type.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Internal compatibility behavior",
+      "requirements": "Data modeling required before durable acceptance"
+    },
+    {
+      "id": "MSG-OUT-01",
+      "domain": "outbound-messages",
+      "outcome": "Send text.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.text(text, options)`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-02",
+      "domain": "outbound-messages",
+      "outcome": "Send image with optional caption.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.image(input, options)`",
+      "requirements": "Durable commands #22; media input is caller-owned"
+    },
+    {
+      "id": "MSG-OUT-03",
+      "domain": "outbound-messages",
+      "outcome": "Send video or GIF.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.video(input, options)`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-04",
+      "domain": "outbound-messages",
+      "outcome": "Send audio or voice note.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.audio(input, options)`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-05",
+      "domain": "outbound-messages",
+      "outcome": "Send document with filename and MIME type.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.document(input, options)`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-06",
+      "domain": "outbound-messages",
+      "outcome": "Send sticker.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.sticker(input)`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-07",
+      "domain": "outbound-messages",
+      "outcome": "Send static location.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.location(location)`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-08",
+      "domain": "outbound-messages",
+      "outcome": "Send one or many vCard contacts.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.send.contacts(cards)`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-09",
+      "domain": "outbound-messages",
+      "outcome": "Reply/quote a real message reference.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Every send accepts `{ replyTo }`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-10",
+      "domain": "outbound-messages",
+      "outcome": "Mention selected WhatsApp addresses.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Text/media send option `{ mentions }`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-11",
+      "domain": "outbound-messages",
+      "outcome": "React or remove a reaction.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.messages.react/unreact`",
+      "requirements": "Durable commands #22"
+    },
+    {
+      "id": "MSG-OUT-12",
+      "domain": "outbound-messages",
+      "outcome": "Edit a sent text message.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.messages.edit`",
+      "requirements": "Durable commands + mirror reconciliation #22"
+    },
+    {
+      "id": "MSG-OUT-13",
+      "domain": "outbound-messages",
+      "outcome": "Delete a message for everyone.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.messages.revoke`",
+      "requirements": "Durable commands + deletion semantics #22/new issue"
+    },
+    {
+      "id": "MSG-OUT-14",
+      "domain": "outbound-messages",
+      "outcome": "Forward a message.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`forward`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.messages.forward(targets)`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "MSG-OUT-15",
+      "domain": "outbound-messages",
+      "outcome": "Create a poll.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.send.poll`",
+      "requirements": "Durable command/data; deferred"
+    },
+    {
+      "id": "MSG-OUT-16",
+      "domain": "outbound-messages",
+      "outcome": "Send an album.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.send.album`",
+      "requirements": "Durable command/media; deferred"
+    },
+    {
+      "id": "MSG-OUT-17",
+      "domain": "outbound-messages",
+      "outcome": "Send event, group invite, product, button/list reply, phone-number request/share, or PTV.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "Separate typed send operations only when each product outcome is selected",
+      "requirements": "Deferred; business/group domains where applicable"
+    },
+    {
+      "id": "MSG-OUT-18",
+      "domain": "outbound-messages",
+      "outcome": "Send as view-once, set disappearing expiration, or limit forwarding/sharing.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "Typed send options after semantics proof",
+      "requirements": "Deferred"
+    },
+    {
+      "id": "MSG-OUT-19",
+      "domain": "outbound-messages",
+      "outcome": "Supply or suppress a link preview on text.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`linkPreview`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; current text outbound has no preview option"
+      },
+      "target": "`conversation.send.text(text, { linkPreview })`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "MSG-ACT-01",
+      "domain": "outbound-messages",
+      "outcome": "Observe pending/server-ack/delivery/read/played/error receipts, including group participant.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`messages.update`, `message-receipt.update`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.messages` authoritative state and operation result",
+      "requirements": "Data projection/reconciliation; #22/new issue"
+    },
+    {
+      "id": "MSG-ACT-02",
+      "domain": "outbound-messages",
+      "outcome": "Observe reactions and removals.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same",
+      "requirements": "Data projection/reconciliation; owner assigned by #68"
+    },
+    {
+      "id": "MSG-ACT-03",
+      "domain": "outbound-messages",
+      "outcome": "Observe edits.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same",
+      "requirements": "Data projection parity; owner to be assigned by #68"
+    },
+    {
+      "id": "MSG-ACT-04",
+      "domain": "outbound-messages",
+      "outcome": "Observe revocation.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "internal",
+        "summary": "Current whatsappd uses this internally but does not expose it as an application capability."
+      },
+      "target": "Same",
+      "requirements": "Deletion/tombstone owner to be assigned by #68"
+    },
+    {
+      "id": "MSG-ACT-05",
+      "domain": "outbound-messages",
+      "outcome": "Delete a message only for this linked account.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`deleteForMe`/chat modification)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.messages.deleteLocal`",
+      "requirements": "Durable command + scoped mirror deletion; deferred"
+    },
+    {
+      "id": "MSG-ACT-06",
+      "domain": "outbound-messages",
+      "outcome": "Star or unstar a message.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`star`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.messages.star/unstar`",
+      "requirements": "Durable command + mirror; deferred"
+    },
+    {
+      "id": "MSG-ACT-07",
+      "domain": "outbound-messages",
+      "outcome": "Pin or unpin a message.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`pin` content)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.messages.pin/unpin`",
+      "requirements": "Durable command + mirror; deferred"
+    },
+    {
+      "id": "MSG-ACT-08",
+      "domain": "outbound-messages",
+      "outcome": "Reconcile one optimistic send with its authoritative WhatsApp echo.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a product behavior"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`"
+      },
+      "target": "Built into `conversation.send.*` state",
+      "requirements": "Commands + data transaction identities; #22"
+    },
+    {
+      "id": "MSG-ACT-09",
+      "domain": "outbound-messages",
+      "outcome": "Observe key-scoped or whole-chat message deletion events.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events messages.delete`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; current socket does not subscribe and no deletion projection exists"
+      },
+      "target": "Transparent conversation state",
+      "requirements": "Explicit deletion/tombstone scope; deferred"
+    },
+    {
+      "id": "STATUS-01",
+      "domain": "status-messages",
+      "outcome": "Send a text or media WhatsApp status to an explicit audience.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`broadcast`, `statusJidList`, background/font options)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; current Session send has no status audience/options"
+      },
+      "target": "`account.statuses.publish`",
+      "requirements": "Durable command/media; deferred"
+    },
+    {
+      "id": "STATUS-02",
+      "domain": "status-messages",
+      "outcome": "Observe and page status messages as a distinct expiring product surface.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` through status broadcast messages"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; the current catch-all is not a distinct status-message implementation"
+      },
+      "target": "`account.statuses.list/subscribe`; hook TBD",
+      "requirements": "Data/expiry semantics; deferred"
+    },
+    {
+      "id": "LIVE-01",
+      "domain": "presence",
+      "outcome": "Observe typing.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`presence.update`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.state.presence`; `usePresence`",
+      "requirements": "Volatile Client state; shipped low-level"
+    },
+    {
+      "id": "LIVE-02",
+      "domain": "presence",
+      "outcome": "Observe recording.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same",
+      "requirements": "Volatile Client state"
+    },
+    {
+      "id": "LIVE-03",
+      "domain": "presence",
+      "outcome": "Observe available, idle, and unavailable.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Same",
+      "requirements": "Volatile state; only delivered last-seen instants are durable"
+    },
+    {
+      "id": "LIVE-04",
+      "domain": "presence",
+      "outcome": "Show or clear this account's typing indicator.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`sendPresenceUpdate composing/paused`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`conversation.typing.start/stop`",
+      "requirements": "Durable command only if product needs result; #22 owns typing"
+    },
+    {
+      "id": "LIVE-05",
+      "domain": "presence",
+      "outcome": "Show or clear recording state.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`recording/paused`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; current boolean method exposes typing only"
+      },
+      "target": "`conversation.recording.start/stop`",
+      "requirements": "Command/live worker; deferred"
+    },
+    {
+      "id": "LIVE-06",
+      "domain": "presence",
+      "outcome": "Subscribe to another address's presence.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`presenceSubscribe`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "Internal demand management behind opened conversations",
+      "requirements": "Live worker; deferred"
+    },
+    {
+      "id": "CALL-01",
+      "domain": "presence",
+      "outcome": "Observe incoming, accepted, ended, rejected, timeout, and offer call events.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events call`/`Types/Call.d.ts`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`calls.subscribe`; `useCalls`",
+      "requirements": "Volatile event, optional accepted source; deferred"
+    },
+    {
+      "id": "CALL-02",
+      "domain": "presence",
+      "outcome": "Reject an incoming call.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`rejectCall`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`calls.reject(callId)`",
+      "requirements": "Durable command with ambiguity semantics; deferred"
+    },
+    {
+      "id": "CALL-03",
+      "domain": "presence",
+      "outcome": "Create an audio or video call link.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`createCallLink`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`calls.createLink`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "CALL-04",
+      "domain": "presence",
+      "outcome": "Place or answer a WhatsApp call through a stable public socket API.",
+      "upstream": {
+        "status": "unsupported",
+        "summary": "`unsupported-upstream` in the pinned public high-level socket"
+      },
+      "current": {
+        "status": "unsupported",
+        "summary": "`unsupported-upstream`"
+      },
+      "target": "No operation",
+      "requirements": "Revisit only after upstream contract exists"
+    },
+    {
+      "id": "CONTACT-01",
+      "domain": "contacts",
+      "outcome": "Observe synced WhatsApp contact upserts/updates.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`contacts.upsert/update`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`contacts.list/get/subscribe`; `useContacts`",
+      "requirements": "Data mirror; shipped low-level"
+    },
+    {
+      "id": "CONTACT-02",
+      "domain": "contacts",
+      "outcome": "Consolidate PN and LID forms only when WhatsApp delivers equivalence.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` through delivered addressing data"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Transparent in `contacts` and message sender lookup",
+      "requirements": "Data mirror; shipped"
+    },
+    {
+      "id": "CONTACT-03",
+      "domain": "contacts",
+      "outcome": "Look up whether phone numbers are registered on WhatsApp.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`onWhatsApp`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`contacts.lookupRegistration(numbers)`",
+      "requirements": "Live trusted worker; deferred"
+    },
+    {
+      "id": "CONTACT-04",
+      "domain": "contacts",
+      "outcome": "Save or edit a contact in WhatsApp's synced contact list.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`addOrEditContact`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`contacts.save({ address, name })`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "CONTACT-05",
+      "domain": "contacts",
+      "outcome": "Remove a contact from WhatsApp's synced contact list.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`removeContact`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`contacts.remove(address)`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "CONTACT-06",
+      "domain": "contacts",
+      "outcome": "Read a contact's about/status, picture, or disappearing duration.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`fetchStatus`, `profilePictureUrl`, `fetchDisappearingDuration`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "The Session reads a profile-picture URL only; about/status and disappearing duration are absent."
+      },
+      "target": "`contacts.profile(address)`",
+      "requirements": "Live worker; deferred"
+    },
+    {
+      "id": "CONTACT-07",
+      "domain": "contacts",
+      "outcome": "Create or update an operating-system contact.",
+      "upstream": {
+        "status": "unsupported",
+        "summary": "`unsupported-upstream`"
+      },
+      "current": {
+        "status": "application-owned",
+        "summary": "`application-owned`"
+      },
+      "target": "No whatsappd Client operation",
+      "requirements": "OS permission/API owned by host application"
+    },
+    {
+      "id": "CONTACT-08",
+      "domain": "contacts",
+      "outcome": "Merge WhatsApp addresses into a CRM/person/address-book identity.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "application-owned",
+        "summary": "`application-owned`; ADR-0001 forbids inferred persons"
+      },
+      "target": "Host repository, not `client.contacts`",
+      "requirements": "Application database and policy"
+    },
+    {
+      "id": "CONTACT-09",
+      "domain": "contacts",
+      "outcome": "Observe a standalone LID-to-PN mapping update.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events lid-mapping.update`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "`available-in-baileys`; current aliases arise only from contact/message evidence"
+      },
+      "target": "Transparent contact alias resolution",
+      "requirements": "Data projection; deferred"
+    },
+    {
+      "id": "GROUP-01",
+      "domain": "groups",
+      "outcome": "Read normalized metadata and observe subject, add, remove, promote, demote, and modify changes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groups.*`, `group-participants.update`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`groups.get/subscribe`; `useGroup`",
+      "requirements": "Data mirror; exact adapter coverage lives in the atomic claims"
+    },
+    {
+      "id": "GROUP-02",
+      "domain": "groups",
+      "outcome": "List participating groups.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupFetchAllParticipating`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`; snapshots list groups already observed"
+      },
+      "target": "`groups.list()`",
+      "requirements": "Data mirror/live refresh; deferred"
+    },
+    {
+      "id": "GROUP-03",
+      "domain": "groups",
+      "outcome": "Create a group.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupCreate`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.create`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "GROUP-04",
+      "domain": "groups",
+      "outcome": "Leave a group.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupLeave`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.leave`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "GROUP-05",
+      "domain": "groups",
+      "outcome": "Update group subject or description.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.update({ subject, description })`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "GROUP-06",
+      "domain": "groups",
+      "outcome": "Add, remove, promote, or demote participants.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupParticipantsUpdate`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys` for actions; observe-only normalization exists"
+      },
+      "target": "`groups.participants.add/remove/promote/demote`",
+      "requirements": "Durable commands; deferred"
+    },
+    {
+      "id": "GROUP-07",
+      "domain": "groups",
+      "outcome": "List, approve, or reject join requests.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupRequestParticipantsList/Update`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.joinRequests.list/approve/reject`",
+      "requirements": "Durable command/data; deferred"
+    },
+    {
+      "id": "GROUP-08",
+      "domain": "groups",
+      "outcome": "Read, revoke, inspect, or accept a group invite.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupInviteCode`, revoke/accept/info and v4 forms)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.invites.*`",
+      "requirements": "Durable commands; protected invite handling where needed; deferred"
+    },
+    {
+      "id": "GROUP-09",
+      "domain": "groups",
+      "outcome": "Configure announcement/edit-lock, member-add, and join-approval modes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.settings.update`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "GROUP-10",
+      "domain": "groups",
+      "outcome": "Configure group disappearing messages.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupToggleEphemeral`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.disappearing.set`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "GROUP-11",
+      "domain": "groups",
+      "outcome": "Read every rich upstream metadata field as a stable normalized contract.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`GroupMetadata.d.ts`)"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "Current normalized metadata contains group id, subject, participants, and participant roles only; richer upstream fields remain deferred."
+      },
+      "target": "Extend `groups.get` only per consumer need",
+      "requirements": "Data model; deferred"
+    },
+    {
+      "id": "GROUP-12",
+      "domain": "groups",
+      "outcome": "Observe join requests and member-tag events.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events group.join-request`, `group.member-tag`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.joinRequests.subscribe`, `groups.memberTags.subscribe` if selected",
+      "requirements": "Data/events; deferred"
+    },
+    {
+      "id": "GROUP-13",
+      "domain": "groups",
+      "outcome": "Assign or update a member label/tag.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`updateMemberLabel`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`groups.memberTags.update`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "GROUP-14",
+      "domain": "groups",
+      "outcome": "Fetch live normalized metadata for one group.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`groupMetadata`)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`groups.refresh(groupId)` or an internal refresh behind `groups.get`",
+      "requirements": "Live trusted worker; release undecided"
+    },
+    {
+      "id": "COMM-01",
+      "domain": "communities",
+      "outcome": "Read community metadata.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`communityMetadata`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`communities.get`; `useCommunity`",
+      "requirements": "Data model; deferred"
+    },
+    {
+      "id": "COMM-02",
+      "domain": "communities",
+      "outcome": "Create or leave a community.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`communityCreate/Leave`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`communities.create/leave`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "COMM-03",
+      "domain": "communities",
+      "outcome": "Update community subject or description.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`communities.update`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "COMM-04",
+      "domain": "communities",
+      "outcome": "Link a group to, or unlink it from, a community.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`communityLinkGroup`, `communityUnlinkGroup`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`communities.groups.link/unlink`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "COMM-05",
+      "domain": "communities",
+      "outcome": "List linked groups.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`communityFetchLinkedGroups`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`communities.groups.list`",
+      "requirements": "Data/live worker; deferred"
+    },
+    {
+      "id": "COMM-06",
+      "domain": "communities",
+      "outcome": "Manage participants, join requests, invites, disappearing settings, announcement/edit-lock, member-add, and join-approval modes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` in `B:communities`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "Mirror the typed `groups` subnamespaces under one community",
+      "requirements": "Durable commands/data; owner to be assigned by #68"
+    },
+    {
+      "id": "COMM-07",
+      "domain": "communities",
+      "outcome": "Create a linked group or list participating communities.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`communityCreateGroup`, `communityFetchAllParticipating`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`communities.groups.create`, `communities.list`",
+      "requirements": "Durable command/data; deferred"
+    },
+    {
+      "id": "CHAN-01",
+      "domain": "channels",
+      "outcome": "Read channel metadata and subscriber/admin counts.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`newsletterMetadata/Subscribers/AdminCount`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.get/stats`; `useChannel`",
+      "requirements": "Data/live worker; deferred"
+    },
+    {
+      "id": "CHAN-02",
+      "domain": "channels",
+      "outcome": "Create, update, or delete a channel.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`newsletterCreate/Update/Delete`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.create/update/delete`",
+      "requirements": "Durable commands; deferred"
+    },
+    {
+      "id": "CHAN-03",
+      "domain": "channels",
+      "outcome": "Follow or unfollow a channel.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.follow/unfollow`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "CHAN-04",
+      "domain": "channels",
+      "outcome": "Mute or unmute a channel.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.mute/unmute`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "CHAN-05",
+      "domain": "channels",
+      "outcome": "Update/remove channel name, description, or picture.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.profile.*`",
+      "requirements": "Durable command/media input; deferred"
+    },
+    {
+      "id": "CHAN-06",
+      "domain": "channels",
+      "outcome": "Fetch channel messages.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`newsletterFetchMessages`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.messages.page`",
+      "requirements": "Separate channel data model/paging; deferred"
+    },
+    {
+      "id": "CHAN-07",
+      "domain": "channels",
+      "outcome": "React to a channel message.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.messages.react`",
+      "requirements": "Durable command; deferred"
+    },
+    {
+      "id": "CHAN-08",
+      "domain": "channels",
+      "outcome": "Subscribe to channel updates.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`subscribeNewsletterUpdates`, newsletter events)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.subscribe`; `useChannels`",
+      "requirements": "Live events/data; deferred"
+    },
+    {
+      "id": "CHAN-09",
+      "domain": "channels",
+      "outcome": "Change owner or demote an admin.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.admin.changeOwner/demote`",
+      "requirements": "High-risk durable command; deferred"
+    },
+    {
+      "id": "CHAN-10",
+      "domain": "channels",
+      "outcome": "Observe channel reactions, view counts, participant roles, and settings updates.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events newsletter.*`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`channels.subscribe` and message state",
+      "requirements": "Data/events; deferred"
+    },
+    {
+      "id": "BIZ-01",
+      "domain": "business",
+      "outcome": "Read a business profile.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`getBusinessProfile`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.profile.get`",
+      "requirements": "Live worker/data cache; deferred"
+    },
+    {
+      "id": "BIZ-02",
+      "domain": "business",
+      "outcome": "Update business profile or cover photo.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`updateBussinesProfile`, cover-photo methods)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.profile.update/setCover/removeCover`",
+      "requirements": "Durable command/media input; deferred"
+    },
+    {
+      "id": "BIZ-03",
+      "domain": "business",
+      "outcome": "Page a catalog and list collections.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`getCatalog`, `getCollections`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.catalog.page/collections`",
+      "requirements": "Data/live worker; deferred"
+    },
+    {
+      "id": "BIZ-04",
+      "domain": "business",
+      "outcome": "Create, update, or delete products.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.products.create/update/delete`",
+      "requirements": "Durable command/media; deferred"
+    },
+    {
+      "id": "BIZ-05",
+      "domain": "business",
+      "outcome": "Read order details.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`getOrderDetails`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.orders.get`",
+      "requirements": "Live worker/data; deferred"
+    },
+    {
+      "id": "BIZ-06",
+      "domain": "business",
+      "outcome": "Create/update labels and add/remove chat labels.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`addLabel`, chat-label methods)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.labels.*`, `chats.labels.*`",
+      "requirements": "Durable commands/data; deferred"
+    },
+    {
+      "id": "BIZ-07",
+      "domain": "business",
+      "outcome": "Add/remove message labels.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`conversation.messages.labels.*`",
+      "requirements": "Durable command/data; deferred"
+    },
+    {
+      "id": "BIZ-08",
+      "domain": "business",
+      "outcome": "Add/edit/remove quick replies.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.quickReplies.*`",
+      "requirements": "Durable command/data; deferred"
+    },
+    {
+      "id": "BIZ-09",
+      "domain": "business",
+      "outcome": "Observe label definitions and chat/message label associations.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`B:events labels.edit/association`)"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`available-in-baileys`"
+      },
+      "target": "`business.labels.subscribe`",
+      "requirements": "Data/events; deferred"
+    },
+    {
+      "id": "DATA-01",
+      "domain": "durability",
+      "outcome": "Persist credentials and signal keys and clear only that account's credentials.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "Baileys requires auth state; not an application API"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Internal Runtime composition",
+      "requirements": "Credentials capability; shipped"
+    },
+    {
+      "id": "DATA-02",
+      "domain": "durability",
+      "outcome": "Atomically append accepted normalized source and update the current mirror.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a product architecture"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Internal Runtime ingestion",
+      "requirements": "Data capability; shipped"
+    },
+    {
+      "id": "DATA-03",
+      "domain": "durability",
+      "outcome": "Follow accepted source independently from mirror revisions.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Not friendly Client state; advanced backend consumer only",
+      "requirements": "Data capability; shipped low-level"
+    },
+    {
+      "id": "DATA-04",
+      "domain": "durability",
+      "outcome": "Read a consistent account snapshot and revision.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Internal Client hydration",
+      "requirements": "Data capability; shipped low-level"
+    },
+    {
+      "id": "DATA-05",
+      "domain": "durability",
+      "outcome": "Apply only contiguous patches and replace state after a gap.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Friendly Client owns it completely",
+      "requirements": "Data + live Runtime; owner to be assigned by #68"
+    },
+    {
+      "id": "DATA-06",
+      "domain": "durability",
+      "outcome": "Isolate accounts in shared storage.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Transparent",
+      "requirements": "Every capability is account-scoped; shipped"
+    },
+    {
+      "id": "DATA-07",
+      "domain": "durability",
+      "outcome": "Enforce one database-time account holder with monotonic fencing after release/expiry.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Internal Runtime ownership",
+      "requirements": "Lease capability; shipped"
+    },
+    {
+      "id": "DATA-08",
+      "domain": "durability",
+      "outcome": "Persist all currently normalized message kinds in the Current Mirror.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "Text, image, video, audio, document, and sticker reach the Current Mirror; location, contacts, poll, and unsupported are normalized by the Session but rejected at durable acceptance."
+      },
+      "target": "Transparent message state",
+      "requirements": "Projection coverage for location, contacts, poll, and unsupported; owner to be assigned by #68"
+    },
+    {
+      "id": "DATA-09",
+      "domain": "durability",
+      "outcome": "Delete/tombstone current chats, messages, groups, or contacts when WhatsApp semantics require it.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "Upstream emits deletion/update families"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "Current projection deletes only a duplicate contact during PN/LID consolidation; chat, message, and group tombstones are absent."
+      },
+      "target": "Transparent domain state",
+      "requirements": "Per-domain owners to be assigned by #68"
+    },
+    {
+      "id": "DATA-10",
+      "domain": "durability",
+      "outcome": "Expose raw protocol nodes, app-state patches, retry plumbing, signal sessions, prekeys, socket mutexes, or crypto primitives.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys`"
+      },
+      "current": {
+        "status": "internal",
+        "summary": "`intentionally-internal`"
+      },
+      "target": "No Client namespace",
+      "requirements": "Adapter internals; never promoted by catalogue coverage"
+    },
+    {
+      "id": "MEDIA-01",
+      "domain": "durability",
+      "outcome": "Capture inbound image/video/audio/document/sticker bytes before publishing accepted state.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "Baileys download/reupload is available"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Transparent message media state",
+      "requirements": "Injected Media Store; replacement gaps are explicit in the atomic claims"
+    },
+    {
+      "id": "MEDIA-02",
+      "domain": "durability",
+      "outcome": "Read durable bytes later by opaque account-scoped reference.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "`client.media.read(ref)` or an authorized application URL",
+      "requirements": "Media capability; shipped trusted read"
+    },
+    {
+      "id": "MEDIA-03",
+      "domain": "durability",
+      "outcome": "Reuse immutable content-addressed media and preserve old bytes after edits.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Transparent",
+      "requirements": "Media capability shipped; no file-backed edit/restart observation recorded"
+    },
+    {
+      "id": "MEDIA-04",
+      "domain": "durability",
+      "outcome": "Record explicit download/store failure without blocking later messages.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Message attachment failure state",
+      "requirements": "Data + media; shipped current boundary"
+    },
+    {
+      "id": "MEDIA-05",
+      "domain": "durability",
+      "outcome": "Queue pending capture, resume after restart, and sweep crash-created orphans.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`"
+      },
+      "target": "Message attachment lifecycle state",
+      "requirements": "Durable media jobs; #68 will replace or rewrite #39"
+    },
+    {
+      "id": "MEDIA-06",
+      "domain": "durability",
+      "outcome": "Store attachment bytes inside libSQL.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "application-owned",
+        "summary": "`application-owned`: whatsappd requires an injected Media Store rather than promising SQL blobs"
+      },
+      "target": "No operation",
+      "requirements": "Pair libSQL structured state with file/S3 media"
+    },
+    {
+      "id": "MEDIA-07",
+      "domain": "durability",
+      "outcome": "Decide browser URL signing, authorization, range responses, caching, and download headers.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "application-owned",
+        "summary": "`application-owned`"
+      },
+      "target": "React receives application-safe media access, not filesystem refs",
+      "requirements": "Browser delivery adapter/host policy"
+    },
+    {
+      "id": "MEDIA-08",
+      "domain": "durability",
+      "outcome": "Recover an expired upstream media reference before reading bytes.",
+      "upstream": {
+        "status": "available",
+        "summary": "`available-in-baileys` (`updateMediaMessage`, media-update event)"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Transparent media read; failures remain explicit",
+      "requirements": "Live worker plus injected media; live observation deferred"
+    },
+    {
+      "id": "MEDIA-09",
+      "domain": "durability",
+      "outcome": "Derive a voice transcript without replacing or downgrading the retained PTT audio.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a application derivation"
+      },
+      "current": {
+        "status": "application-owned",
+        "summary": "`application-owned` (ADR-0015); whatsappd stores the raw source, not a transcript pipeline"
+      },
+      "target": "A host may attach a separate artifact or observation",
+      "requirements": "Transcription/model policy; failure cannot alter raw audio"
+    },
+    {
+      "id": "OPS-01",
+      "domain": "durability",
+      "outcome": "Submit an idempotent account-scoped durable side effect and observe its result.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a product architecture"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`; current Session commands are immediate promises"
+      },
+      "target": "`client.operations.get/subscribe`, typed namespace methods",
+      "requirements": "Commands capability; #22/#23 and successor issues"
+    },
+    {
+      "id": "OPS-02",
+      "domain": "durability",
+      "outcome": "Distinguish queued, claimed, executing, succeeded, failed, and `outcome_unknown`.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`"
+      },
+      "target": "`WhatsAppOperation<T>`; `useOperation`",
+      "requirements": "Commands capability; #22 correction"
+    },
+    {
+      "id": "OPS-03",
+      "domain": "durability",
+      "outcome": "Protect pairing challenges from ordinary snapshots and consume them once before expiry.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "not-implemented",
+        "summary": "`deferred`"
+      },
+      "target": "`account.pair`, protected application route",
+      "requirements": "Challenge capability; #23"
+    },
+    {
+      "id": "TEST-01",
+      "domain": "durability",
+      "outcome": "Construct a deterministic text message with correct sender semantics.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Test-only subpath",
+      "requirements": "Shipped"
+    },
+    {
+      "id": "TEST-02",
+      "domain": "durability",
+      "outcome": "Emit any normalized current session event through an awaited deterministic subscription.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Test-only driver",
+      "requirements": "Shipped"
+    },
+    {
+      "id": "TEST-03",
+      "domain": "durability",
+      "outcome": "Record sends, reads, typing, and history submissions through the Session seam.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Test-only driver",
+      "requirements": "Shipped"
+    },
+    {
+      "id": "TEST-04",
+      "domain": "durability",
+      "outcome": "Construct every inbound message family and drive the friendly Client/operation lifecycle deterministically.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "partial",
+        "summary": "The testing subpath constructs text and drives the low-level Session; other message constructors and the friendly Client/operation lifecycle are absent."
+      },
+      "target": "Extend the testing subpath in the same vertical issue as each capability",
+      "requirements": "No separate verification harness; successor DX/capability issues"
+    },
+    {
+      "id": "OBS-01",
+      "domain": "observability",
+      "outcome": "Count or time connection transitions, inbound message/update/contact/group/presence, sends, and reconnects without parsing logs.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a product seam"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Keep a composition-level metrics hook; do not put telemetry in React",
+      "requirements": "Application-owned metrics sink; shipped"
+    },
+    {
+      "id": "OBS-02",
+      "domain": "observability",
+      "outcome": "Prevent a failing metrics sink from disrupting WhatsApp processing.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
+      },
+      "target": "Transparent",
+      "requirements": "Application-owned sink; shipped"
+    },
+    {
+      "id": "OBS-03",
+      "domain": "observability",
+      "outcome": "Collect product analytics, traces, alerts, or message-content search.",
+      "upstream": {
+        "status": "not-applicable",
+        "summary": "n/a"
+      },
+      "current": {
+        "status": "application-owned",
+        "summary": "`application-owned`"
+      },
+      "target": "No required Client namespace",
+      "requirements": "Host observability/search systems; never ingest private content by default"
+    }
+  ],
+  "backends": [
+    {
+      "adapter": "Memory",
+      "credentials": "yes",
+      "data": "yes",
+      "leases": "yes",
+      "commands": "no",
+      "media": "yes",
+      "trustedWorker": "yes",
+      "browser": "no durability claim",
+      "status": "shipped"
+    },
+    {
+      "adapter": "File credential store",
+      "credentials": "yes",
+      "data": "no",
+      "leases": "no",
+      "commands": "no",
+      "media": "no",
+      "trustedWorker": "yes",
+      "browser": "no",
+      "status": "shipped; legacy migration residual #63"
+    },
+    {
+      "adapter": "libSQL backend",
+      "credentials": "yes",
+      "data": "yes",
+      "leases": "yes",
+      "commands": "no",
+      "media": "injected only",
+      "trustedWorker": "Node/application worker",
+      "browser": "no: credentials, leases, and writer access are trusted",
+      "status": "shipped"
+    },
+    {
+      "adapter": "Filesystem media",
+      "credentials": "no",
+      "data": "no",
+      "leases": "no",
+      "commands": "no",
+      "media": "yes",
+      "trustedWorker": "Node/application worker",
+      "browser": "no direct path exposure",
+      "status": "shipped"
+    },
+    {
+      "adapter": "Postgres structured adapter",
+      "credentials": "target",
+      "data": "target",
+      "leases": "target using database time",
+      "commands": "target",
+      "media": "injected only",
+      "trustedWorker": "server/worker",
+      "browser": "no direct credential/writer access",
+      "status": "`deferred`; concrete need, issue to be created by #68"
+    },
+    {
+      "adapter": "S3-compatible media",
+      "credentials": "no",
+      "data": "no",
+      "leases": "no",
+      "commands": "no",
+      "media": "target, including immutable put/read",
+      "trustedWorker": "server/worker or scoped signer",
+      "browser": "only through application authorization and signed/proxied delivery",
+      "status": "`deferred`; issue to be created by #68"
+    },
+    {
+      "adapter": "PocketBase",
+      "credentials": "target",
+      "data": "target",
+      "leases": "target/worker ownership",
+      "commands": "target",
+      "media": "target/protected files",
+      "trustedWorker": "worker plus native rules",
+      "browser": "application-authorized reads/realtime",
+      "status": "`deferred`; #26-#29 require DAG repair"
+    },
+    {
+      "adapter": "Convex",
+      "credentials": "target",
+      "data": "target",
+      "leases": "target/worker ownership",
+      "commands": "target",
+      "media": "target/protected storage",
+      "trustedWorker": "worker/actions",
+      "browser": "application-authorized queries/subscriptions",
+      "status": "`deferred`; #33-#37 require DAG repair"
+    },
+    {
+      "adapter": "Browser-safe delivery",
+      "credentials": "no live WhatsApp credentials",
+      "data": "authorized current state",
+      "leases": "no lease mutation",
+      "commands": "authorized submission only",
+      "media": "authorized URL/stream policy",
+      "trustedWorker": "server owns worker",
+      "browser": "yes",
+      "status": "`deferred`; separate delivery/auth lane from React"
+    }
+  ],
+  "reactBindings": [
+    {
+      "behavior": "Client lifetime and subscription",
+      "shared": "`WhatsAppProvider`, `useWhatsAppClient`, `useAccount`",
+      "rendererOwned": "Process/server composition and Runtime ownership"
+    },
+    {
+      "behavior": "Chat list and selection state",
+      "shared": "`useChats`, `useChatSelection`",
+      "rendererOwned": "List markup, keyboard/mouse interaction, terminal focus"
+    },
+    {
+      "behavior": "Opened conversation state and actions",
+      "shared": "`useConversation`",
+      "rendererOwned": "Transcript rows, bubbles, layout, colors, typography"
+    },
+    {
+      "behavior": "Stored-page request state",
+      "shared": "`useConversation().loadOlder`",
+      "rendererOwned": "Browser/terminal scroller anchoring and viewport measurement"
+    },
+    {
+      "behavior": "Connection/pairing/operation state",
+      "shared": "`useConnection`, `usePairing`, `useOperation`",
+      "rendererOwned": "Modal/screen/dialog presentation and secret transport route"
+    },
+    {
+      "behavior": "Reusable behavior-only workflows proven twice",
+      "shared": "Render-slot Module with state/actions only",
+      "rendererOwned": "DOM elements, CSS, ARIA wiring, OpenTUI nodes, platform effects"
+    }
+  ]
+}

@@ -4,6 +4,10 @@ status: accepted
 
 # Proof claims climb an explicit ladder
 
+> ADR-0024 clarifies the catalogue boundary: P0-P6 still govern implementation
+> acceptance claims, but the capability inventory uses plain environment
+> statuses rather than assigning every capability a proof rung.
+
 Every implementation ticket declares an agreed public seam, first failing
 behavior, minimum end-to-end green behavior, required proof rung, retained
 evidence, and Database Oracle boundary.
@@ -34,5 +38,7 @@ not enter published evidence.
   released without the corresponding rung.
 - The private live-account harness keeps one canonical database-backed
   credential store and never clones credentials with disposable corpus data.
-- React tickets require deterministic behavior and real-browser proof; backend
-  tickets additionally require the native and durability rungs they claim.
+- React tickets require deterministic behavior through their claimed renderer.
+  A browser claim additionally requires P5 real-browser proof; an OpenTUI proof
+  establishes terminal React behavior only. Backend tickets additionally
+  require the native and durability rungs they claim.

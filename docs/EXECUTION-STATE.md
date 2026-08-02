@@ -1,10 +1,9 @@
 # Execution state — WhatsApp application substrate
 
-Last updated: 2026-08-01. Issue #61 is the sole stabilization integration lane
-after the board/code audit found runtime, credential, session, and WhatsApp
-Address defects beneath the product frontier. Product dispatch remains held
-until #61 merges with its exact-head proof gate; only then may #21 and #38
-reopen.
+Last updated: 2026-08-01. Issue #67 is the sole claimed planning lane. Product
+dispatch is held while it establishes the capability source of truth. Issue #68
+then replaces the stale execution graph and presents the repaired frontier for
+an owner release checkpoint.
 
 ## Where everything lives
 
@@ -12,18 +11,18 @@ reopen.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0022`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0024`                                   |
 | Published build specification    | GitHub issue #15                                           |
-| Locked executable graph          | Issue #15, comment of 2026-07-31                           |
+| Capability source of truth       | `docs/sdk-capabilities.json`, rendered as Markdown         |
+| Execution-graph repair           | GitHub issue #68                                           |
 | Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
-| Shipped product path             | `src/runtime/`, merged to `master` by PR #54               |
-| Stabilization integration lane   | GitHub issue #61 / `agent/stabilization-integration`       |
+| Shipped product path             | `src/session.ts`, `src/runtime/`, and root exports         |
 
-The architecture document is grill output: a single coherent target with code
-sketches, consequences, implementation slices, and proof boundaries. The
-ask-matt route is now complete: issue #15 is the published specification and
-issues #16 through #41 are the approved dependency graph.
+The architecture document preserves the original target and proof boundaries.
+Accepted ADRs and the capability catalogue supersede it where the implementation
+and later owner decisions moved on. Issue #68, not the historical slice list,
+will become the next executable dependency graph.
 
 ## Accepted decision ledger
 
@@ -42,31 +41,31 @@ issues #16 through #41 are the approved dependency graph.
 
 ### Rescued frontier
 
-| Decision                                                                                 | ADR / artifact |
-| ---------------------------------------------------------------------------------------- | -------------- |
-| Account-scoped backend lease is required; duplicate account start fails closed           | 0009           |
-| Summary snapshots, stored paging, and WhatsApp backfill are distinct                     | 0010           |
-| Patches require contiguous `fromRevision`; a gap replaces state with a snapshot          | 0011           |
-| Pair/unlink use the command queue; raw challenge secrets use a protected capability      | 0012           |
-| `session.subscribe({ ...handlers })` is the sole awaited live-session API                | 0013           |
-| Accepted source batches are durable, cursor-followable, and distinct from current mirror | 0014           |
-| Every inbound media attachment attempts immediate durable byte capture                   | 0015           |
-| Ambient Brain follows accepted source batches, not live callbacks or mirror patches      | Architecture   |
-| Voice transcription is derived from retained raw PTT audio and cannot replace it         | 0015           |
-| No compatibility aliases or wrappers ship in the hard-cut package line                   | 0013 / spec    |
-| `whatsappd/testing` provides awaited event driving and command recording without sleeps  | 0013 / spec    |
-| Changesets releases the package family as a fixed lockstep group                         | Spec           |
-| Headless React owns WhatsApp state while shadcn owns optional chat presentation          | 0016           |
-| Every ticket declares TDD seam, acceptance, proof rung, and database-oracle boundary     | 0017           |
-| Connection and presence remain ephemeral; remote connection truth expires with its lease | PR #12 review  |
-| Conversation-sync deletion requires explicit, scope-bounded replacement metadata         | PR #12 review  |
-| Executing command claims expire to terminal `outcome_unknown`, never automatic retry     | PR #12 review  |
-| Actorless receipts use a non-null aggregate subject for idempotent projection            | PR #12 review  |
-| Acceptance has its own cursor and the writer's fencing token                             | 0018           |
-| A patch carries only upserts until something produces a delete                           | 0019           |
-| Observed instants are durable; live statuses are not                                     | 0020           |
-| Session failures rank subscriber, teardown, then ordinary run                            | 0021           |
-| Delivered PN/LID equivalence may consolidate redundant current contacts                  | 0022           |
+| Decision                                                                                     | ADR / artifact |
+| -------------------------------------------------------------------------------------------- | -------------- |
+| Account-scoped backend lease is required; duplicate account start fails closed               | 0009           |
+| Summary snapshots, stored paging, and WhatsApp backfill are distinct                         | 0010           |
+| Patches require contiguous `fromRevision`; a gap replaces state with a snapshot              | 0011           |
+| Pair/unlink use the command queue; raw challenge secrets use a protected capability          | 0012           |
+| `session.subscribe({ ...handlers })` is the sole awaited live-session API                    | 0013           |
+| Accepted source batches are durable, cursor-followable, and distinct from current mirror     | 0014           |
+| Every inbound media attachment attempts immediate durable byte capture                       | 0015           |
+| Ambient Brain follows accepted source batches, not live callbacks or mirror patches          | Architecture   |
+| Voice transcription is derived from retained raw PTT audio and cannot replace it             | 0015           |
+| No compatibility aliases or wrappers ship in the hard-cut package line                       | 0013 / spec    |
+| `whatsappd/testing` provides awaited event driving and command recording without sleeps      | 0013 / spec    |
+| Changesets releases the package family as a fixed lockstep group                             | Spec           |
+| Framework-independent Client owns WhatsApp state; React binds it; renderers own presentation | 0023           |
+| Every ticket declares TDD seam, acceptance, proof rung, and database-oracle boundary         | 0017           |
+| Connection and presence remain ephemeral; remote connection truth expires with its lease     | PR #12 review  |
+| Conversation-sync deletion requires explicit, scope-bounded replacement metadata             | PR #12 review  |
+| Executing command claims expire to terminal `outcome_unknown`, never automatic retry         | PR #12 review  |
+| Actorless receipts use a non-null aggregate subject for idempotent projection                | PR #12 review  |
+| Acceptance has its own cursor and the writer's fencing token                                 | 0018           |
+| A patch carries only upserts until something produces a delete                               | 0019           |
+| Observed instants are durable; live statuses are not                                         | 0020           |
+| Session failures rank subscriber, teardown, then ordinary run                                | 0021           |
+| Delivered PN/LID equivalence may consolidate redundant current contacts                      | 0022           |
 
 ## Semantics that must not be collapsed
 
@@ -140,43 +139,30 @@ WhatsApp messages”, or report a delivered count tied to the request.
   failures, detached starts, startup-stop state, and falsy-safe precedence.
 - Accepted updates are retained and page by source `seq`; their receipt/edit/
   revocation current-mirror projection remains a later product slice.
-- `fileStore()` is restart-safe and migration-safe, but libSQL remains the first
-  backend intended to persist the whole runtime (#38).
+- `libsqlBackend()` now persists credentials, accepted/current data, and leases;
+  `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - The Ambient Agent v3 PocketBase spike remains fixture evidence on the old
   package. Production integration still waits for a published release with
   durable media and a persistent runtime backend.
 
 ## Next step
 
-The executable graph is temporarily held at the stabilization gate:
-
 ```text
-#61 stabilization ─┬─→ #21 durable media
-                   └─→ #38 persistent libSQL runtime ─→ #25 background history
-                                                        (also blocked by #50)
+#67 capability catalogue
+  -> #68 execution-graph reconciliation
+       -> owner release checkpoint
+            -> repaired product frontier
 ```
 
-While #61 is open, it is the only dispatchable node. Its post-merge DAG receipt
-may relabel #21 and #38 `ready-for-agent`; #25 remains deferred behind #38 and
-the unanswered-phone research in #50. The integration does not silently start
-either product slice.
-
-This graph is the whole graph. It is narrowed by owner decision, not only by
-dependency edges: the 2026-07-30 and 2026-07-31 re-plan receipts on issue #15
-deferred the command matrix (#22), browser pairing (#23), PocketBase (#26–#29),
-the browser proof app (#30–#32), Convex (#33–#37), and release (#40–#41), and
-closed #19 and #52 `wontfix`. Several deferred issues still carry a `Blocked by`
-edge that is satisfied — #22 is dependency-clear today — so reading bodies alone
-overstates the frontier. `ready-for-agent` means fully specified
-(`docs/agents/triage-labels.md`); it does not mean available. Do not start a
-descendant merely because the documentation PR is mechanically green, and do not
-start a deferred node merely because its blockers closed.
+Only #67 is claimed. Issues #30 and #39 are frozen under `needs-triage`; #68 is
+blocked until the catalogue merges. No product implementation is dispatchable
+from this file before the owner accepts #68's replacement graph.
 
 ## Resuming in a new session
 
-Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0022,
+Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0024,
 specification issue #15 **including its comments** — the 2026-07-31 re-plan
-and the 2026-08-01 #61 hold receipt supersede earlier frontier receipts — then
-read #61 and the conditionally next ticket bodies. `src/runtime/` is real
-product code. Reopening an accepted decision requires an explicit superseding
-ADR.
+and the 2026-08-01 #67/#68 planning receipts supersede earlier frontier receipts
+— then read #67 and #68. Do not resume #61 or its conditionally-next tickets.
+`src/runtime/` is real product code. Reopening an accepted decision requires an
+explicit superseding ADR.

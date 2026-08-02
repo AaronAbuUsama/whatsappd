@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # Headless React owns WhatsApp state, not chat presentation
+
+> Superseded by ADR-0023. React binds the framework-independent Client; the
+> Client owns synchronized WhatsApp application state.
 
 `@whatsappd/react` owns WhatsApp Client synchronization, snapshot and patch
 state, saved paging, explicit history-backfill state, commands, reconciliation,

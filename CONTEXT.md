@@ -64,9 +64,22 @@ without merging their contracts.
 _Avoid_: Generic database abstraction, application repository
 
 **WhatsApp Client**:
-The backend-independent snapshot, patch, stored-message-page, history-request,
-and command contract consumed by applications and the headless React bindings.
+The backend-independent, synchronized application view of one WhatsApp Account.
+It exposes named domain state and actions, reconciles live changes with stored
+pages, and owns opened conversations for applications and UI bindings.
 _Avoid_: HTTP client, backend SDK
+
+**Opened Conversation**:
+A client-scoped view of one chat that combines current and saved messages,
+stored paging state, live presence, and message actions until the caller closes
+it. Closing the view releases resources; it does not delete or leave the chat.
+_Avoid_: WhatsApp session, transport channel, selected React component
+
+**WhatsApp Operation**:
+The durable, account-scoped receipt for a requested side effect. Its identity
+supports idempotent submission, and its terminal result distinguishes success,
+failure, and an outcome that became unknowable after execution may have begun.
+_Avoid_: Promise completion, transport request, automatic retry
 
 **Stored Message Page**:
 An indexed read of messages already present in the Current Mirror for one chat,
@@ -172,8 +185,14 @@ deterministic tests of state behavior.
 _Avoid_: Screenshot-only acceptance, Storybook rendering, manual claim
 
 **Proof Ladder**:
-The required depth of evidence for a claim: P0 mechanical, P1 deterministic
-behavior, P2 durable integration, P3 native backend, P4 live WhatsApp, P5
-interactive browser, and P6 clean consumer or published release. Passing a
-lower rung never implies a higher one.
+The required depth of evidence for an implementation claim: P0 mechanical, P1
+deterministic behavior, P2 durable integration, P3 native backend, P4 live
+WhatsApp, P5 interactive browser, and P6 clean consumer or published release.
+Passing a lower rung never implies a higher one.
 _Avoid_: Tests passed, visually looks right, mechanically green
+
+**Verification Status**:
+A plain catalogue note saying which environments have actually been exercised.
+Automated tests, live WhatsApp, browser React, and OpenTUI are separate; one
+never implies another. `not-run` means exactly that, not failed or unsupported.
+_Avoid_: Tests passed therefore live, not run therefore unsupported, proof score
