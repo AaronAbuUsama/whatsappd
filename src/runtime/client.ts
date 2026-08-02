@@ -47,6 +47,7 @@ interface OpenConversation {
   replaceWindow(page: StoredMessagePage): void;
   receive(message: MessageRecord): void;
   receivePresence(presence: PresenceUpdate, expiresAt: number): void;
+  clearPresence(): void;
   stage(): void;
   flush(): void;
   close(): void;
@@ -80,6 +81,7 @@ async function createClientState(
   let publishedContacts: readonly ContactRecord[] = [];
   let publishedGroups: readonly GroupRecord[] = [];
   let hydrating = true;
+  let terminated = false;
   let closed = false;
   let closeCause: unknown;
   let recovering: Promise<void> | undefined;
@@ -221,7 +223,7 @@ async function createClientState(
   };
 
   const consume = (frame: WhatsAppClientFrame): void => {
-    if (closed) return;
+    if (closed || terminated) return;
     if (frame.type === "closed") {
       if (hydrating) {
         rejectHydration(
@@ -229,12 +231,20 @@ async function createClientState(
         );
         return;
       }
-      if (connectionTimer) clearTimeout(connectionTimer);
+      terminated = true;
+      queued.length = 0;
+      recovering = undefined;
+      if (connectionTimer) {
+        clearTimeout(connectionTimer);
+        connectionTimer = undefined;
+      }
       accountState = {
         record: account,
         closed: "error" in frame ? { error: frame.error } : {},
       };
+      for (const conversation of conversations) conversation.clearPresence();
       notify(accountListeners, accountState);
+      for (const conversation of conversations) conversation.flush();
       return;
     }
     if (hydrating || recovering) {
@@ -300,7 +310,7 @@ async function createClientState(
             async (conversation) => [conversation, await conversation.readWindow()] as const,
           ),
         );
-        if (closed) return;
+        if (closed || terminated) return;
         const flushGlobal = replace(snapshot);
         for (const [conversation, page] of windows) if (page) conversation.replaceWindow(page);
         flushGlobal();
@@ -309,7 +319,8 @@ async function createClientState(
         closeClient({ error });
       } finally {
         if (recovering === task) recovering = undefined;
-        if (!closed) for (const queuedFrame of queued.splice(0)) consume(queuedFrame);
+        if (!closed && !terminated)
+          for (const queuedFrame of queued.splice(0)) consume(queuedFrame);
       }
     })();
     recovering = task;
@@ -536,6 +547,12 @@ async function createClientState(
         timer.unref?.();
         presences.set(subject, { value: presence, timer });
         publish();
+      },
+      clearPresence() {
+        if (conversationClosed || presences.size === 0) return;
+        for (const presence of presences.values()) clearTimeout(presence.timer);
+        presences.clear();
+        stage();
       },
       stage() {
         if (conversationClosed) return;

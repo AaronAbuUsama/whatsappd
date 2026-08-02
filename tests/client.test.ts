@@ -776,6 +776,93 @@ test("a revision gap publishes only after every fresh conversation window is rea
   await client.close();
 });
 
+test("Runtime termination preempts blocked recovery and preserves the last coherent state", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let snapshotReads = 0;
+  let recoveryReady!: () => void;
+  const recoveryStarted = new Promise<void>((resolve) => {
+    recoveryReady = resolve;
+  });
+  let releaseRecovery!: () => void;
+  const recoveryGate = new Promise<void>((resolve) => {
+    releaseRecovery = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        const snapshot = await base.data.snapshot(...args);
+        snapshotReads += 1;
+        if (snapshotReads === 2) {
+          recoveryReady();
+          await recoveryGate;
+        }
+        return snapshot;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "coherent", chatId: ALPHA, text: "old", timestamp: 100 }),
+  });
+  const conversation = await client.chats.open(ALPHA);
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "typing" } });
+
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 200,
+        event: {
+          type: "message",
+          message: textMessage({ id: "missed", chatId: ALPHA, text: "missed", timestamp: 200 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "after-gap", chatId: ALPHA, text: "new", timestamp: 300 }),
+  });
+  await withDeadline(recoveryStarted);
+
+  const closed = new Promise<void>((resolve) => {
+    client.account.subscribe((state) => {
+      if (state.closed) resolve();
+    });
+  });
+  try {
+    await driver.session.stop?.();
+    await withDeadline(closed);
+    assert.deepEqual(client.account.get().closed, {});
+    assert.equal(client.account.get().connection, undefined);
+    assert.deepEqual(conversation.get().presence, []);
+  } finally {
+    releaseRecovery();
+  }
+  await tick();
+
+  assert.deepEqual(client.account.get().closed, {});
+  assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["coherent"],
+  );
+
+  conversation.close();
+  await client.close();
+});
+
 test("a revision gap racing the first page read leaves only the fresh replacement window", async () => {
   const base = memoryBackend();
   let fencingToken = 0;
