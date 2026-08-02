@@ -803,6 +803,117 @@ test("loadOlder joins the complete recovery before reading from its committed cu
   await client.close();
 });
 
+test("a lease-expired Client recovers page reads from its replacement mirror revision", async () => {
+  const shared = memoryBackend();
+  let oldLeaseExpiresAt = 0;
+  let renewalReady!: () => void;
+  const renewalStarted = new Promise<void>((resolve) => {
+    renewalReady = resolve;
+  });
+  let releaseRenewal!: () => void;
+  const renewalGate = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  const oldBackend = {
+    ...shared,
+    leases: {
+      ...shared.leases,
+      async renew(...args: Parameters<typeof shared.leases.renew>) {
+        oldLeaseExpiresAt = args[0].expiresAt;
+        renewalReady();
+        await renewalGate;
+        return shared.leases.renew(...args);
+      },
+    },
+  };
+  const oldDriver = createTestWhatsAppSession();
+  const oldClient = await openClient(oldBackend, oldDriver, {
+    holderId: "old",
+    leaseTtlMs: 20,
+  });
+  let replacementClient: Awaited<ReturnType<typeof openClient>> | undefined;
+  let alpha: Awaited<ReturnType<typeof oldClient.chats.open>> | undefined;
+  let bravo: Awaited<ReturnType<typeof oldClient.chats.open>> | undefined;
+  try {
+    await oldDriver.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+        chats: [
+          { id: ALPHA, isGroup: false, subject: "Alpha old", lastMessageAt: 200 },
+          { id: BRAVO, isGroup: false, subject: "Bravo old", lastMessageAt: 100 },
+        ],
+        contacts: [],
+        messages: [
+          textMessage({ id: "alpha-old-1", chatId: ALPHA, text: "old 1", timestamp: 100 }),
+          textMessage({ id: "alpha-old-2", chatId: ALPHA, text: "old 2", timestamp: 200 }),
+          textMessage({ id: "bravo-old", chatId: BRAVO, text: "old", timestamp: 100 }),
+        ],
+      },
+    });
+    alpha = await oldClient.chats.open(ALPHA, { pageSize: 1 });
+    await withDeadline(renewalStarted);
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(1, oldLeaseExpiresAt - Date.now() + 2)),
+    );
+
+    const replacementDriver = createTestWhatsAppSession();
+    replacementClient = await openClient(shared, replacementDriver, {
+      holderId: "replacement",
+      leaseTtlMs: 1_000,
+    });
+    await replacementDriver.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "recent", projection: { mode: "upsert" } },
+        chats: [
+          { id: ALPHA, isGroup: false, subject: "Alpha new", lastMessageAt: 300 },
+          { id: BRAVO, isGroup: false, subject: "Bravo new", lastMessageAt: 400 },
+        ],
+        contacts: [],
+        messages: [
+          textMessage({ id: "alpha-new", chatId: ALPHA, text: "new", timestamp: 300 }),
+          textMessage({ id: "bravo-new", chatId: BRAVO, text: "new", timestamp: 400 }),
+        ],
+      },
+    });
+    assert.equal(oldClient.chats.get(ALPHA)?.lastMessageAt, 200);
+    assert.equal(oldClient.chats.get(BRAVO)?.lastMessageAt, 100);
+
+    const opening = oldClient.chats.open(BRAVO);
+    const loading = alpha.loadOlder();
+    const [openedBravo] = await withDeadline(Promise.all([opening, loading]));
+    bravo = openedBravo;
+
+    assert.equal(oldClient.chats.get(ALPHA)?.lastMessageAt, 300);
+    assert.equal(oldClient.chats.get(BRAVO)?.lastMessageAt, 400);
+    assert.deepEqual(alpha.get().chat, oldClient.chats.get(ALPHA));
+    assert.deepEqual(
+      alpha.get().messages.map((message) => message.messageId),
+      ["alpha-new", "alpha-old-2"],
+    );
+    assert.deepEqual(bravo.get().chat, oldClient.chats.get(BRAVO));
+    assert.deepEqual(
+      bravo.get().messages.map((message) => message.messageId),
+      ["bravo-new", "bravo-old"],
+    );
+
+    const closed = new Promise<void>((resolve) => {
+      oldClient.account.subscribe((state) => {
+        if (state.closed) resolve();
+      });
+    });
+    releaseRenewal();
+    await withDeadline(closed);
+  } finally {
+    releaseRenewal();
+    alpha?.close();
+    bravo?.close();
+    await oldClient.close().catch(() => {});
+    await replacementClient?.close().catch(() => {});
+  }
+});
+
 test("a revision gap replaces all global Client state from one fresh Runtime snapshot", async () => {
   const base = memoryBackend();
   let fencingToken = 0;

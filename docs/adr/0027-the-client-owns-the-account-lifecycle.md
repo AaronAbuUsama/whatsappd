@@ -46,6 +46,13 @@ Runtime Closure bypasses hydration and recovery queues. A conversation opened
 during recovery validates the committed generation before `open()` resolves,
 so it cannot return state older than the Client it belongs to.
 
+Each stored message page carries the Current Mirror revision at which it was
+read. A page newer than the Client starts the same recovery transaction used by
+a frame gap; it cannot commit beside older account or chat state. A page older
+than the Client may still merge by message identity because the intervening
+Runtime patches are already committed. Recovery replacement windows commit
+only when every page has exactly the fresh global snapshot revision.
+
 This transition mechanism consumes already projected Current Mirror records.
 It is not a second projection reducer and does not change the Accepted Source
 Batch transaction, source cursor, fencing, or Current Mirror semantics.

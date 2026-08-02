@@ -245,6 +245,7 @@ async function createClientState(
     if (groupsChanged) notify(groupListeners, publishedGroups);
   };
 
+  let recover!: () => Promise<void>;
   const consume = (frame: WhatsAppClientFrame): void => {
     if (closed || terminated) return;
     if (frame.type === "closed") {
@@ -325,6 +326,11 @@ async function createClientState(
       apply(frame.patch);
       return;
     }
+    void recover();
+  };
+
+  recover = (): Promise<void> => {
+    if (recovering) return recovering;
     let task!: Promise<void>;
     task = (async () => {
       try {
@@ -370,6 +376,7 @@ async function createClientState(
       }
     })();
     recovering = task;
+    return task;
   };
 
   off = source.onFrame(consume);
@@ -492,6 +499,10 @@ async function createClientState(
               runtimeTerminated,
             ]);
             if (recovering || generation !== readingGeneration) return;
+            if (page.revision > revision) {
+              await Promise.race([recover(), closedConversation, runtimeTerminated]);
+              return;
+            }
             for (const message of page.messages)
               if (!messages.has(message.messageId)) messages.set(message.messageId, message);
             cursor = page.nextBefore;
@@ -538,6 +549,10 @@ async function createClientState(
                 throw error;
               }
               if (recovering || generation !== readingGeneration) continue;
+              if (page.revision > revision) {
+                await Promise.race([recover(), closedConversation, runtimeTerminated]);
+                continue;
+              }
               for (const message of page.messages)
                 if (!messages.has(message.messageId)) messages.set(message.messageId, message);
               cursor = page.nextBefore;
@@ -652,6 +667,11 @@ async function createClientState(
         const page = await internal.readWindow();
         requireConversation();
         if (!terminated && !recovering && generation === expectedGeneration && page) {
+          if (page.revision > revision) {
+            await Promise.race([recover(), closedConversation, runtimeTerminated]);
+            continue;
+          }
+          if (page.revision < revision) continue;
           internal.replaceWindow(page);
           internal.flush();
           return internal.public;
