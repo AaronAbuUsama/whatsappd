@@ -682,6 +682,27 @@ test("pre-change current message JSON remains readable with additive defaults", 
         }),
       ],
     });
+    await legacy.execute({
+      sql: `INSERT INTO wa_messages
+        (account_id, chat_id, message_id, timestamp, data_json)
+        VALUES (?, ?, ?, ?, ?)`,
+      args: [
+        ACCOUNT,
+        ROOM,
+        "legacy-group",
+        AT,
+        JSON.stringify({
+          accountId: ACCOUNT,
+          chatId: ROOM,
+          messageId: "legacy-group",
+          sender: { id: CHAT, mode: "pn" },
+          fromMe: false,
+          timestamp: AT,
+          kind: "text",
+          text: "Before action refs",
+        }),
+      ],
+    });
     legacy.close();
 
     const replacement = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
@@ -701,6 +722,12 @@ test("pre-change current message JSON remains readable with additive defaults", 
           text: "Before additive fields",
         },
       ]);
+      expect((await replacement.data.messages(ACCOUNT, ROOM)).messages[0]?.ref).toEqual({
+        id: "legacy-group",
+        chatId: ROOM,
+        fromMe: false,
+        participant: CHAT,
+      });
     } finally {
       await replacement.close();
     }

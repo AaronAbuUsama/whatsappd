@@ -3,7 +3,7 @@ import type { ContactUpdate } from "../model/contact.ts";
 import type { GroupUpdate } from "../model/group.ts";
 import type { ConversationSyncSource } from "../model/history.ts";
 import type { MessageContext, MessageFlags } from "../model/message.ts";
-import type { MessageRef } from "../model/outbound.ts";
+import { refOf, type MessageRef } from "../model/outbound.ts";
 import {
   libsqlCredentialStore,
   lazyLibsqlClient,
@@ -376,14 +376,15 @@ function messageRecord(value: unknown): MessageRecord {
   const fromMe = boolean(record.fromMe, "message.fromMe");
   const pushName = optionalString(record.pushName, "message.pushName");
   const editedAt = optionalNumber(record.editedAt, "message.editedAt");
+  const sender = address(record.sender, "message.sender");
   const base = {
     accountId,
     chatId,
     messageId,
-    sender: address(record.sender, "message.sender"),
+    sender,
     ref:
       record.ref === undefined
-        ? { id: messageId, chatId, fromMe }
+        ? refOf({ id: messageId, chatId, sender, fromMe, isGroup: chatId.endsWith("@g.us") })
         : messageRef(record.ref, "message.ref"),
     fromMe,
     timestamp: number(record.timestamp, "message.timestamp"),
