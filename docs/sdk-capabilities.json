@@ -2279,7 +2279,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Internal Runtime composition",
-      "requirements": "Credentials capability ships through memory/libSQL; #63 removes the legacy file credential adapter for 0.3"
+      "requirements": "Credential adapters remain independent; the durable 0.3 Runtime path uses libSQL while fileStore remains available to the standalone Session"
     },
     {
       "id": "DATA-02",
@@ -2654,7 +2654,7 @@
         "summary": "The testing subpath constructs text and drives the low-level Session; other message constructors and the friendly Client/operation lifecycle are absent."
       },
       "target": "Extend the testing subpath in the same vertical issue as each capability",
-      "requirements": "No separate verification harness; extend vertically in #70/#71/#22/#23/#39; release: required for 0.3"
+      "requirements": "No separate verification harness; extend vertically in #70/#71/#22/#23; release: required for 0.3"
     },
     {
       "id": "OBS-01",
@@ -2723,7 +2723,7 @@
       "media": "no",
       "trustedWorker": "yes",
       "browser": "no",
-      "status": "shipped in 0.2; hard-cut removal #63"
+      "status": "shipped for the independently usable Session"
     },
     {
       "adapter": "libSQL backend",
