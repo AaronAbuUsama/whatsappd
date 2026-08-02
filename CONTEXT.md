@@ -32,13 +32,15 @@ QR or by a dynamically supplied phone number and pairing code.
 _Avoid_: Runtime authentication, constructor configuration
 
 **WhatsApp Runtime**:
-The backend-independent service that owns one account’s pairing, live session,
-durable projection, command execution, reconciliation, and lease lifecycle.
-_Avoid_: Sidecar, agent, channel
+The Client-owned internal implementation that runs one account’s pairing, live
+session, durable projection, command execution, reconciliation, and lease
+lifecycle. Applications never construct or control it directly.
+_Avoid_: Public client, application service, sidecar, agent, channel
 
 **Account Worker**:
-An application-owned long-running Node process that runs a WhatsApp Runtime for
-one account; an application may run several workers as separate processes.
+An application-owned long-running Node process that creates and retains one
+WhatsApp Client per account; each Client owns its hidden WhatsApp Runtime. An
+application may run several workers as separate processes.
 _Avoid_: Sidecar, whatsappd daemon, hypervisor
 
 **Current Mirror**:
@@ -65,8 +67,10 @@ _Avoid_: Generic database abstraction, application repository
 
 **WhatsApp Client**:
 The backend-independent, synchronized application view of one WhatsApp Account.
-It exposes named domain state and actions, reconciles live changes with stored
-pages, and owns opened conversations for applications and UI bindings.
+It owns the account's Backend, hidden Runtime, Session, Account Lease, hydration,
+recovery, and teardown; exposes named domain state and actions; reconciles live
+changes with stored pages; and owns opened conversations for applications and
+UI bindings.
 _Avoid_: HTTP client, backend SDK
 
 **Opened Conversation**:
@@ -111,12 +115,12 @@ rather than logging and skipping the event.
 _Avoid_: Silent retry, crash loop
 
 **Runtime Closure**:
-The final frame of a client watch, published when the runtime has stopped
-consuming an account — deliberately, or on the failure that ended it. Without
-it a runtime that died is indistinguishable from a quiet account, and a watch
-waits for ever on an update that cannot come. It is not Degraded State: nothing
-is being retried, and nothing follows it.
-_Avoid_: Silent stream end, disconnect event, error callback
+The terminal internal observation published when the hidden Runtime has stopped
+consuming an account, deliberately or because of failure. The Client exposes it
+through account state immediately, even while hydration or recovery is blocked.
+Without it a dead Runtime is indistinguishable from a quiet account. It is not
+Degraded State: nothing is being retried and no later live change follows it.
+_Avoid_: Public frame, silent stream end, disconnect event, error callback
 
 **Connection Freshness**:
 An account’s live connection state paired with the current Account Lease and a

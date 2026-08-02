@@ -2,6 +2,10 @@
 status: accepted
 ---
 
+> Amended by ADR-0027. The Client now owns the Backend, hidden Runtime, Session,
+> lease, and teardown for its WhatsApp Account; the independent-lifetime
+> paragraph below records the superseded design.
+
 # The Client owns synchronized application state
 
 The framework-independent WhatsApp Client is the application-facing owner of
