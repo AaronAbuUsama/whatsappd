@@ -1,9 +1,10 @@
 # Execution state — WhatsApp application substrate
 
 Last updated: 2026-08-02. The capability catalogue merged at
-`d7923f6cf93c810f8ea660089dd1edbd96523a81`. Issue #68 is the sole claimed
-planning lane and owns the GitHub execution-graph repair. Product work remains
-held until #68 merges; the resulting frontier is #63, #64, and #70.
+`d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the executable
+graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. The owner subsequently removed
+redundant #63/#39 storage-composition work. #64 is merged; #70 is the current
+implementation frontier.
 
 ## Where everything lives
 
@@ -138,14 +139,15 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Known implementation inputs
 
-- #61 closed #49's residual session defects. #64 owns the remaining synchronous
-  custom-session teardown boundary before 0.3.
+- #64 closed the remaining synchronous custom-session teardown boundary in
+  PR #86.
 - Accepted updates are retained and page by source `seq`; #70 owns complete
   normalized message/update projection before the friendly Client.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
-- `fileStore()` is a pre-0.3 credential adapter. #63 removes it from the hard-cut
-  package without an importer, migration layer, deprecation wrapper, or alias.
+- `fileStore()` remains the credential-only option for the independently usable
+  Session. The durable 0.3 Runtime path composes `libsqlBackend()` with an
+  explicitly injected Media Store; no additional local-backend wrapper ships.
 - The Ambient Agent v3 PocketBase spike remains fixture evidence on the old
   package. Production integration still waits for a published release with
   durable media and a persistent runtime backend.
@@ -153,18 +155,19 @@ WhatsApp messages”, or report a delivered count tied to the request.
 ## Next step
 
 The owner locked Postgres, S3-compatible media, and dependent browser delivery
-to post-0.3 and authorized #68 to establish the following local-first graph:
+to post-0.3. #63 and #39 were later removed as redundant because the shipped
+libSQL and filesystem-media composition needs no additional mechanism:
 
 ```text
-#68 ─┬→ #63 remove file credentials ───────────────┐
-     ├→ #64 Runtime teardown ───────────┐          │
-     └→ #70 projection → #71 Client → #22 ─→ #23 ─┴→ #39 composition
-                                                    ↓
-                                 #30 React/OpenTUI → #40 → #41
+✓ #64 Runtime teardown ───────────────────┐
+                                         ↓
+#70 projection → #71 Client → #22 operations → #23 pairing/unlink
+                                                  ↓
+                              #30 React/OpenTUI → #40 → #41
 ```
 
-#23 has two direct blockers (#22 and #64). After #68 closes, the executable
-frontier is **#63 ∥ #64 ∥ #70**.
+#23 has two direct blockers (#22 and the now-merged #64). The executable
+frontier is **#70**.
 
 Post-0.3 and research lanes do not block that spine:
 
