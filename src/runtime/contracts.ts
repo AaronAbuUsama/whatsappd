@@ -17,7 +17,10 @@ import type {
   InboundMessage,
   MediaHandle,
   MediaMeta,
+  MessageContext,
+  MessageFlags,
   PresenceUpdate,
+  ReceiptStatus,
   Status,
   Update,
   WhatsAppAddress,
@@ -117,8 +120,29 @@ interface MessageRecordBase {
   readonly messageId: string;
   /** The actual author's WhatsApp address (ADR-0001) — never the chat. */
   readonly sender: WhatsAppAddress;
+  readonly ref: MessageRef;
   readonly fromMe: boolean;
   readonly timestamp: number;
+  readonly pushName?: string;
+  readonly context?: MessageContext;
+  readonly flags?: MessageFlags;
+  readonly receipts: readonly MessageReceipt[];
+  readonly reactions: readonly MessageReaction[];
+  readonly editedAt?: number;
+}
+
+export interface MessageReceipt {
+  readonly subject: string;
+  readonly status: ReceiptStatus;
+  readonly by?: string;
+  readonly at?: number;
+}
+
+export interface MessageReaction {
+  readonly subject: string;
+  readonly emoji: string;
+  readonly by?: string;
+  readonly at?: number;
 }
 
 /** One message in the current mirror. Identity is `(accountId, chatId, messageId)`. */
@@ -130,6 +154,25 @@ export type MessageRecord = MessageRecordBase &
         readonly media: DurableMedia;
         readonly text?: string;
       }
+    | {
+        readonly kind: "location";
+        readonly lat: number;
+        readonly lng: number;
+        readonly name?: string;
+        readonly address?: string;
+      }
+    | {
+        readonly kind: "contacts";
+        readonly contacts: readonly { readonly name?: string; readonly vcard: string }[];
+      }
+    | {
+        readonly kind: "poll";
+        readonly name: string;
+        readonly options: readonly string[];
+        readonly selectableCount: number;
+      }
+    | { readonly kind: "unsupported"; readonly rawType: string }
+    | { readonly kind: "revoked"; readonly revokedAt?: number; readonly revokedBy?: string }
   );
 
 /** One chat summary in the current mirror. Identity is `(accountId, chatId)`. */

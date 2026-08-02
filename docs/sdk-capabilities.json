@@ -128,6 +128,8 @@
     "MessageContext",
     "MessageFlags",
     "MessageHandlerContext",
+    "MessageReaction",
+    "MessageReceipt",
     "MessageRecord",
     "MessageRef",
     "MetricEvent",
@@ -2380,8 +2382,8 @@
         "summary": "n/a"
       },
       "current": {
-        "status": "partial",
-        "summary": "Text, image, video, audio, document, and sticker reach the Current Mirror; location, contacts, poll, and unsupported are normalized by the Session but rejected at durable acceptance."
+        "status": "implemented",
+        "summary": "Current whatsappd implements this capability."
       },
       "target": "Transparent message state",
       "requirements": "Projection coverage #70, required for 0.3"
@@ -2396,7 +2398,7 @@
       },
       "current": {
         "status": "partial",
-        "summary": "Current projection deletes only a duplicate contact during PN/LID consolidation; chat, message, and group tombstones are absent."
+        "summary": "Current projection emits message revocation tombstones and deletes duplicate contacts during PN/LID consolidation; chat and group tombstones and general contact deletion are absent."
       },
       "target": "Transparent domain state",
       "requirements": "Message scope #70, required for 0.3; remaining chat/contact/group scopes #74/#75/#76, post-0.3"

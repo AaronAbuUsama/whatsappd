@@ -4,10 +4,12 @@ import {
   StaleAccountClaimError,
   type DurableInboundMessage,
   type DurableMedia,
+  type MessageRecord,
   type WhatsAppDataEvent,
   type WhatsAppDataStore,
   type WhatsAppDurableEvent,
 } from "../src/runtime/contracts.ts";
+import { projectCurrentMirror, type CurrentMirrorRecords } from "../src/runtime/projection.ts";
 import { textMessage } from "../src/testing.ts";
 
 const ACCOUNT = "personal";
@@ -58,6 +60,53 @@ const durableMediaMessage = (
           reason: index === 1 ? "download_failed" : "store_failed",
           mimetype: `${kind}/test`,
         },
+});
+
+test("the Current Mirror projection reads only the message key touched by an update", async () => {
+  const current: MessageRecord = {
+    accountId: ACCOUNT,
+    chatId: PN,
+    messageId: "current",
+    sender: { id: PN, mode: "pn" },
+    ref: { id: "current", chatId: PN, fromMe: false },
+    fromMe: false,
+    timestamp: AT,
+    receipts: [],
+    reactions: [],
+    kind: "text",
+    text: "Current",
+  };
+  const reads: Array<readonly [string, string]> = [];
+  const unexpected = async (): Promise<never> => {
+    throw new Error("projection read an unrelated record family");
+  };
+  const records: CurrentMirrorRecords = {
+    account: unexpected,
+    chat: unexpected,
+    contact: unexpected,
+    contactId: unexpected,
+    group: unexpected,
+    async message(chatId, messageId) {
+      reads.push([chatId, messageId]);
+      return chatId === PN && messageId === "current" ? current : undefined;
+    },
+  };
+
+  const projection = await projectCurrentMirror(records, ACCOUNT, [
+    observed({
+      type: "update",
+      update: {
+        kind: "receipt",
+        ref: { id: "current", chatId: PN, fromMe: false },
+        status: "read",
+      },
+    }),
+  ]);
+
+  expect(reads).toEqual([[PN, "current"]]);
+  expect(projection.upserts).toMatchObject([
+    { type: "message", message: { messageId: "current", receipts: [{ status: "read" }] } },
+  ]);
 });
 
 export function dataStoreConformance(name: string, create: DataStoreFactory): void {
@@ -157,6 +206,148 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
     }
   });
 
+  test(`[${name}] a location is readable from the current mirror`, async () => {
+    const resource = await create();
+    try {
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "message",
+            message: {
+              id: "location-1",
+              chatId: PN,
+              sender: { id: PN, mode: "pn" },
+              fromMe: false,
+              timestamp: AT,
+              live: true,
+              isGroup: false,
+              kind: "location",
+              lat: 5.6037,
+              lng: -0.187,
+              name: "Accra",
+              address: "Greater Accra",
+            },
+          }),
+        ],
+        1,
+      );
+
+      expect((await resource.data.messages(ACCOUNT, PN)).messages).toEqual([
+        {
+          accountId: ACCOUNT,
+          chatId: PN,
+          messageId: "location-1",
+          sender: { id: PN, mode: "pn" },
+          ref: { id: "location-1", chatId: PN, fromMe: false },
+          fromMe: false,
+          timestamp: AT,
+          receipts: [],
+          reactions: [],
+          kind: "location",
+          lat: 5.6037,
+          lng: -0.187,
+          name: "Accra",
+          address: "Greater Accra",
+        },
+      ]);
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] a sparse group message keeps an actionable participant fallback`, async () => {
+    const resource = await create();
+    try {
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "message",
+            message: textMessage({
+              id: "group-without-key-participant",
+              chatId: ROOM,
+              sender: PN,
+              text: "Fallback action target",
+              timestamp: AT,
+            }),
+          }),
+        ],
+        1,
+      );
+
+      expect((await resource.data.messages(ACCOUNT, ROOM)).messages[0]?.ref).toEqual({
+        id: "group-without-key-participant",
+        chatId: ROOM,
+        fromMe: false,
+        participant: PN,
+      });
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] contacts, polls, and unsupported content are readable`, async () => {
+    const resource = await create();
+    try {
+      const messages: DurableInboundMessage[] = [
+        {
+          id: "contacts-1",
+          chatId: PN,
+          sender: { id: PN, mode: "pn" },
+          fromMe: false,
+          timestamp: AT,
+          live: true,
+          isGroup: false,
+          kind: "contacts",
+          contacts: [{ name: "Ada", vcard: "BEGIN:VCARD\nFN:Ada\nEND:VCARD" }],
+        },
+        {
+          id: "poll-1",
+          chatId: PN,
+          sender: { id: PN, mode: "pn" },
+          fromMe: false,
+          timestamp: AT + 1,
+          live: true,
+          isGroup: false,
+          kind: "poll",
+          name: "Lunch?",
+          options: ["Waakye", "Jollof"],
+          selectableCount: 1,
+        },
+        {
+          id: "future-1",
+          chatId: PN,
+          sender: { id: PN, mode: "pn" },
+          fromMe: false,
+          timestamp: AT + 2,
+          live: true,
+          isGroup: false,
+          kind: "unsupported",
+          rawType: "futureMessage",
+        },
+      ];
+      await resource.data.accept(
+        ACCOUNT,
+        messages.map((message) => observed({ type: "message", message })),
+        1,
+      );
+
+      expect(
+        (await resource.data.messages(ACCOUNT, PN)).messages.map((message) => ({
+          messageId: message.messageId,
+          kind: message.kind,
+        })),
+      ).toEqual([
+        { messageId: "future-1", kind: "unsupported" },
+        { messageId: "poll-1", kind: "poll" },
+        { messageId: "contacts-1", kind: "contacts" },
+      ]);
+    } finally {
+      await resource.close();
+    }
+  });
+
   test(`[${name}] source sequence is independent from mirror revision and accounts are isolated`, async () => {
     const resource = await create();
     try {
@@ -179,7 +370,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
             type: "update",
             update: {
               kind: "receipt",
-              ref: { id: "personal-message", chatId: PN, fromMe: false },
+              ref: { id: "missing-message", chatId: PN, fromMe: false },
               status: "read",
             },
           }),
@@ -201,6 +392,160 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       ).toEqual(["work-message"]);
       expect((await resource.data.accepted(ACCOUNT, 0)).map(({ seq }) => seq)).toEqual([1, 2]);
       expect((await resource.data.accepted(OTHER_ACCOUNT, 0)).map(({ seq }) => seq)).toEqual([1]);
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] message updates keep one current record and independent source sequence`, async () => {
+    const resource = await create();
+    try {
+      const accept = (event: WhatsAppDurableEvent) =>
+        resource.data.accept(ACCOUNT, [observed(event)], 1);
+      const versions: Array<readonly [number, number]> = [];
+      const record = async (event: WhatsAppDurableEvent) => {
+        const batch = await accept(event);
+        versions.push([batch.seq, batch.revision]);
+      };
+
+      const original = {
+        ...textMessage({ id: "current", chatId: PN, text: "Before", timestamp: AT }),
+        pushName: "Ada",
+      };
+      await record({ type: "message", message: original });
+      const receipt = {
+        type: "update" as const,
+        update: {
+          kind: "receipt" as const,
+          ref: { id: "current", chatId: PN, fromMe: false },
+          status: "read" as const,
+          at: AT + 1,
+        },
+      };
+      await record(receipt);
+      await record(receipt);
+      await record({
+        type: "update",
+        update: {
+          kind: "reaction",
+          ref: { id: "current", chatId: PN, fromMe: false },
+          emoji: "👍",
+          by: "alice@s.whatsapp.net",
+          removed: false,
+          at: AT + 2,
+        },
+      });
+      await record({
+        type: "update",
+        update: {
+          kind: "reaction",
+          ref: { id: "current", chatId: PN, fromMe: false },
+          emoji: "🔥",
+          by: "alice@s.whatsapp.net",
+          removed: false,
+          at: AT + 3,
+        },
+      });
+      await record({
+        type: "update",
+        update: {
+          kind: "reaction",
+          ref: { id: "current", chatId: PN, fromMe: false },
+          by: "missing@s.whatsapp.net",
+          removed: true,
+        },
+      });
+      const edit = {
+        type: "update",
+        update: {
+          kind: "edit",
+          ref: { id: "current", chatId: PN, fromMe: false },
+          at: AT + 4,
+          message: {
+            id: "ignored-edit-id",
+            chatId: PN,
+            sender: { id: "ignored@s.whatsapp.net", mode: "pn" },
+            fromMe: true,
+            timestamp: AT + 99,
+            live: true,
+            isGroup: false,
+            kind: "location",
+            lat: 5.6037,
+            lng: -0.187,
+          },
+        },
+      } satisfies WhatsAppDurableEvent;
+      await record(edit);
+      await record({
+        type: "update",
+        update: {
+          kind: "revoke",
+          ref: { id: "current", chatId: PN, fromMe: false },
+          by: "moderator@s.whatsapp.net",
+          at: AT + 5,
+        },
+      });
+      await record(edit);
+      await record({
+        type: "conversation_sync",
+        batch: {
+          context: { source: "recent", projection: { mode: "upsert" } },
+          chats: [],
+          contacts: [],
+          messages: [original],
+        },
+      });
+      await record({
+        type: "update",
+        update: {
+          kind: "receipt",
+          ref: { id: "missing", chatId: PN, fromMe: false },
+          status: "delivered",
+        },
+      });
+
+      expect(versions).toEqual([
+        [1, 1],
+        [2, 2],
+        [3, 2],
+        [4, 3],
+        [5, 4],
+        [6, 4],
+        [7, 5],
+        [8, 6],
+        [9, 6],
+        [10, 6],
+        [11, 6],
+      ]);
+      expect((await resource.data.messages(ACCOUNT, PN)).messages).toEqual([
+        {
+          accountId: ACCOUNT,
+          chatId: PN,
+          messageId: "current",
+          sender: { id: PN, mode: "pn" },
+          ref: { id: "current", chatId: PN, fromMe: false },
+          fromMe: false,
+          timestamp: AT,
+          pushName: "Ada",
+          receipts: [{ subject: "aggregate", status: "read", at: AT + 1 }],
+          reactions: [
+            {
+              subject: "alice@s.whatsapp.net",
+              emoji: "🔥",
+              by: "alice@s.whatsapp.net",
+              at: AT + 3,
+            },
+          ],
+          editedAt: AT + 4,
+          kind: "revoked",
+          revokedAt: AT + 5,
+          revokedBy: "moderator@s.whatsapp.net",
+        },
+      ]);
+      expect((await resource.data.snapshot(ACCOUNT)).chats[0]?.lastMessageAt).toBe(AT);
+      expect((await resource.data.accepted(ACCOUNT, 0)).map(({ seq }) => seq)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+      ]);
     } finally {
       await resource.close();
     }
@@ -389,7 +734,9 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       assert.ok(delivered?.type === "message");
       Object.assign(delivered.message, { text: "mutated output" });
 
-      expect((await resource.data.messages(ACCOUNT, PN)).messages[0]?.text).toBe("original");
+      const current = (await resource.data.messages(ACCOUNT, PN)).messages[0];
+      assert.equal(current?.kind, "text");
+      expect(current.text).toBe("original");
       const retained = (await resource.data.accepted(ACCOUNT, 0))[0]?.events[0]?.event;
       assert.ok(retained?.type === "message" && retained.message.kind === "text");
       expect(retained.message.text).toBe("original");

@@ -208,8 +208,8 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `DATA-05` | durability | Apply only contiguous patches and replace state after a gap. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Friendly Client owns it completely | Friendly Client #71, required for 0.3 |
 | `DATA-06` | durability | Isolate accounts in shared storage. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Transparent | Every capability is account-scoped; shipped |
 | `DATA-07` | durability | Enforce one database-time account holder with monotonic fencing after release/expiry. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Internal Runtime ownership | Lease capability; shipped; execution: #64; release: required for 0.3 release safety |
-| `DATA-08` | durability | Persist all currently normalized message kinds in the Current Mirror. | not-applicable: n/a | partial | Text, image, video, audio, document, and sticker reach the Current Mirror; location, contacts, poll, and unsupported are normalized by the Session but rejected at durable acceptance. | Transparent message state | Projection coverage #70, required for 0.3 |
-| `DATA-09` | durability | Delete/tombstone current chats, messages, groups, or contacts when WhatsApp semantics require it. | not-applicable: Upstream emits deletion/update families | partial | Current projection deletes only a duplicate contact during PN/LID consolidation; chat, message, and group tombstones are absent. | Transparent domain state | Message scope #70, required for 0.3; remaining chat/contact/group scopes #74/#75/#76, post-0.3 |
+| `DATA-08` | durability | Persist all currently normalized message kinds in the Current Mirror. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Transparent message state | Projection coverage #70, required for 0.3 |
+| `DATA-09` | durability | Delete/tombstone current chats, messages, groups, or contacts when WhatsApp semantics require it. | not-applicable: Upstream emits deletion/update families | partial | Current projection emits message revocation tombstones and deletes duplicate contacts during PN/LID consolidation; chat and group tombstones and general contact deletion are absent. | Transparent domain state | Message scope #70, required for 0.3; remaining chat/contact/group scopes #74/#75/#76, post-0.3 |
 | `DATA-10` | durability | Expose raw protocol nodes, app-state patches, retry plumbing, signal sessions, prekeys, socket mutexes, or crypto primitives. | available: `available-in-baileys` | internal | `intentionally-internal` | No Client namespace | Adapter internals; never promoted by catalogue coverage |
 | `MEDIA-01` | durability | Capture inbound image/video/audio/document/sticker bytes before publishing accepted state. | not-applicable: Baileys download/reupload is available | implemented | Current whatsappd implements this capability. | Transparent message media state | Injected Media Store; replacement gaps are explicit in the atomic claims |
 | `MEDIA-02` | durability | Read durable bytes later by opaque account-scoped reference. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | `client.media.read(ref)` or an authorized application URL | Media capability; shipped trusted read |
@@ -296,6 +296,8 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `MessageContext`
 - `MessageFlags`
 - `MessageHandlerContext`
+- `MessageReaction`
+- `MessageReceipt`
 - `MessageRecord`
 - `MessageRef`
 - `MetricEvent`

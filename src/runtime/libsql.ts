@@ -3,7 +3,7 @@ import type { ContactUpdate } from "../model/contact.ts";
 import type { GroupUpdate } from "../model/group.ts";
 import type { ConversationSyncSource } from "../model/history.ts";
 import type { MessageContext, MessageFlags } from "../model/message.ts";
-import type { MessageRef } from "../model/outbound.ts";
+import { refOf, type MessageRef } from "../model/outbound.ts";
 import {
   libsqlCredentialStore,
   lazyLibsqlClient,
@@ -23,6 +23,8 @@ import {
   type DurableUpdate,
   type GroupRecord,
   type MediaStore,
+  type MessageReaction,
+  type MessageReceipt,
   type MessageRecord,
   type MirrorDelete,
   type MirrorRecord,
@@ -322,15 +324,78 @@ function address(value: unknown, label: string): MessageRecord["sender"] {
   };
 }
 
+function messageReceipts(value: unknown): readonly MessageReceipt[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("invalid libSQL message.receipts");
+  return value.map((entry, index) => {
+    const label = `message.receipts[${index}]`;
+    const receipt = object(entry, label);
+    const status = string(receipt.status, `${label}.status`);
+    if (
+      status !== "pending" &&
+      status !== "server_ack" &&
+      status !== "delivered" &&
+      status !== "read" &&
+      status !== "played" &&
+      status !== "error"
+    )
+      throw new Error(`invalid libSQL ${label}.status`);
+    const by = optionalString(receipt.by, `${label}.by`);
+    const at = optionalNumber(receipt.at, `${label}.at`);
+    return {
+      subject: string(receipt.subject, `${label}.subject`),
+      status,
+      ...(by !== undefined && { by }),
+      ...(at !== undefined && { at }),
+    };
+  });
+}
+
+function messageReactions(value: unknown): readonly MessageReaction[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("invalid libSQL message.reactions");
+  return value.map((entry, index) => {
+    const label = `message.reactions[${index}]`;
+    const reaction = object(entry, label);
+    const by = optionalString(reaction.by, `${label}.by`);
+    const at = optionalNumber(reaction.at, `${label}.at`);
+    return {
+      subject: string(reaction.subject, `${label}.subject`),
+      emoji: string(reaction.emoji, `${label}.emoji`),
+      ...(by !== undefined && { by }),
+      ...(at !== undefined && { at }),
+    };
+  });
+}
+
 function messageRecord(value: unknown): MessageRecord {
   const record = object(value, "message record");
+  const accountId = string(record.accountId, "message.accountId");
+  const chatId = string(record.chatId, "message.chatId");
+  const messageId = string(record.messageId, "message.messageId");
+  const fromMe = boolean(record.fromMe, "message.fromMe");
+  const pushName = optionalString(record.pushName, "message.pushName");
+  const editedAt = optionalNumber(record.editedAt, "message.editedAt");
+  const sender = address(record.sender, "message.sender");
   const base = {
-    accountId: string(record.accountId, "message.accountId"),
-    chatId: string(record.chatId, "message.chatId"),
-    messageId: string(record.messageId, "message.messageId"),
-    sender: address(record.sender, "message.sender"),
-    fromMe: boolean(record.fromMe, "message.fromMe"),
+    accountId,
+    chatId,
+    messageId,
+    sender,
+    ref:
+      record.ref === undefined
+        ? refOf({ id: messageId, chatId, sender, fromMe, isGroup: chatId.endsWith("@g.us") })
+        : messageRef(record.ref, "message.ref"),
+    fromMe,
     timestamp: number(record.timestamp, "message.timestamp"),
+    ...(pushName !== undefined && { pushName }),
+    ...(record.context !== undefined && {
+      context: messageContext(record.context, "message.context"),
+    }),
+    ...(record.flags !== undefined && { flags: messageFlags(record.flags, "message.flags") }),
+    receipts: messageReceipts(record.receipts),
+    reactions: messageReactions(record.reactions),
+    ...(editedAt !== undefined && { editedAt }),
   };
   switch (record.kind) {
     case "text":
@@ -346,6 +411,52 @@ function messageRecord(value: unknown): MessageRecord {
         kind: record.kind,
         media: durableMedia(record.media, "message.media"),
         ...(text !== undefined && { text }),
+      };
+    }
+    case "location": {
+      const name = optionalString(record.name, "message.name");
+      const locationAddress = optionalString(record.address, "message.address");
+      return {
+        ...base,
+        kind: "location",
+        lat: number(record.lat, "message.lat"),
+        lng: number(record.lng, "message.lng"),
+        ...(name !== undefined && { name }),
+        ...(locationAddress !== undefined && { address: locationAddress }),
+      };
+    }
+    case "contacts":
+      if (!Array.isArray(record.contacts)) throw new Error("invalid libSQL message.contacts");
+      return {
+        ...base,
+        kind: "contacts",
+        contacts: record.contacts.map((value, index) => {
+          const contact = object(value, `message.contacts[${index}]`);
+          const name = optionalString(contact.name, `message.contacts[${index}].name`);
+          return {
+            ...(name !== undefined && { name }),
+            vcard: string(contact.vcard, `message.contacts[${index}].vcard`),
+          };
+        }),
+      };
+    case "poll":
+      return {
+        ...base,
+        kind: "poll",
+        name: string(record.name, "message.name"),
+        options: strings(record.options, "message.options"),
+        selectableCount: number(record.selectableCount, "message.selectableCount"),
+      };
+    case "unsupported":
+      return { ...base, kind: "unsupported", rawType: string(record.rawType, "message.rawType") };
+    case "revoked": {
+      const revokedAt = optionalNumber(record.revokedAt, "message.revokedAt");
+      const revokedBy = optionalString(record.revokedBy, "message.revokedBy");
+      return {
+        ...base,
+        kind: "revoked",
+        ...(revokedAt !== undefined && { revokedAt }),
+        ...(revokedBy !== undefined && { revokedBy }),
       };
     }
     default:

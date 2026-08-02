@@ -82,6 +82,8 @@ export type {
   DurableUpdate,
   GroupRecord,
   MediaStore,
+  MessageReaction,
+  MessageReceipt,
   MessageRecord,
   MirrorRecord,
   ObservedInstant,
