@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type { PresenceUpdate } from "../model/index.ts";
-import type { Unsubscribe } from "../subscription.ts";
+import type { CredentialStore } from "../ports.ts";
+import type { WhatsAppSession } from "../session.ts";
+import type { Awaitable, Unsubscribe } from "../subscription.ts";
 import { WhatsAppClientClosedError } from "./contracts.ts";
 import type {
   AccountRecord,
@@ -21,12 +23,7 @@ import type {
   WhatsAppPatch,
   WhatsAppSnapshot,
 } from "./contracts.ts";
-import {
-  createWhatsAppRuntime,
-  getWhatsAppClientSource,
-  type WhatsAppRuntime,
-  type WhatsAppRuntimeConfig,
-} from "./runtime.ts";
+import { createWhatsAppRuntime, getWhatsAppClientSource, type WhatsAppRuntime } from "./runtime.ts";
 
 const compareId = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
@@ -53,10 +50,22 @@ interface OpenConversation {
   close(): void;
 }
 
-export type WhatsAppClientOptions = Omit<WhatsAppRuntimeConfig, "backend"> & {
+export interface WhatsAppClientOptions {
+  /** The WhatsApp Account this Client owns. */
+  readonly accountId: string;
   /** Open the Backend instance this Client owns and closes. */
   openBackend(): WhatsAppBackendResource | Promise<WhatsAppBackendResource>;
-};
+  /** Open the Session instance this Client owns and stops. */
+  openSession(
+    credentials: CredentialStore,
+  ): Awaitable<Pick<WhatsAppSession, "subscribe" | "start" | "stop" | "identity">>;
+  /** Identifies this holder in the account lease. @defaultValue a random UUID */
+  readonly holderId?: string;
+  /** Account-lease TTL, renewed at half this interval. @defaultValue `30_000` */
+  readonly leaseTtlMs?: number;
+  /** How long live connection or presence state stays current. @defaultValue `15_000` */
+  readonly freshnessMs?: number;
+}
 
 async function createClientState(
   runtime: WhatsAppRuntime,

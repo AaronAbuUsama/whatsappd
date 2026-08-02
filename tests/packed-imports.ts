@@ -51,6 +51,8 @@ try {
     "libsqlStore",
     "RuntimeClientFeed",
     "WhatsAppClientFrame",
+    "WhatsAppRuntime",
+    "WhatsAppRuntimeConfig",
   ]) {
     assert.equal(new RegExp(`\\b${removed}\\b`).test(declarations), false);
   }
@@ -72,8 +74,8 @@ try {
       assert.equal(typeof root.createSession, "function");
       assert.equal(typeof createTestWhatsAppSession, "function");
       assert.equal(typeof root.memoryStore, "function");
-      assert.equal(typeof root.createWhatsAppRuntime, "function");
       assert.equal(typeof root.createWhatsAppClient, "function");
+      assert.equal("createWhatsAppRuntime" in root, false);
       assert.equal("createInProcessWhatsAppClient" in root, false);
       assert.equal(typeof root.memoryBackend, "function");
       assert.equal(typeof root.libsqlBackend, "function");
@@ -96,6 +98,14 @@ try {
       });
       assert.equal(typeof backend.close, "function");
       await backend.close();
+      const driver = createTestWhatsAppSession();
+      const client = await root.createWhatsAppClient({
+        accountId: "personal",
+        openBackend: () => root.memoryBackend(),
+        openSession: () => driver.session,
+      });
+      assert.deepEqual(client.account.get().record, { accountId: "personal" });
+      await client.close();
       for (const removed of ["createChannelAdapter", "bindTools"]) {
         assert.equal(removed in root, false);
       }

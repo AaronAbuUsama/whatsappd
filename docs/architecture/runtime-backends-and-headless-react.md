@@ -10,9 +10,11 @@ issue graph. It is not the current execution source of truth. The
 surface as a human-maintained planning guide, including Baileys availability,
 current whatsappd status, the target Client, and plain verification status;
 accepted ADRs govern decisions. In particular, ADR-0023 moves synchronized
-application state from React into the framework-independent Client. The package
-has already completed the hard cut away from the Eve-era adapter, sidecar, and
-agent tools.
+application state from React into the framework-independent Client, and
+ADR-0027 makes that Client the sole ordinary account-lifecycle owner. Runtime
+composition examples retained below describe internal or superseded design;
+applications do not construct a Runtime. The package has already completed the
+hard cut away from the Eve-era adapter, sidecar, and agent tools.
 
 ## Decision
 
@@ -27,9 +29,10 @@ agent tools.
    realtime delivery, migrations, and browser clients for PocketBase, Convex,
    libSQL, Postgres, and Supabase.
 4. A backend-independent client contract feeds a headless React package.
-5. Applications create the runtime inside a long-lived Node process. That
-   application-owned process may be dedicated to one WhatsApp account, but
-   `whatsappd` does not initially ship a generic daemon or HTTP transport.
+5. Applications create one Client inside a long-lived Node process. The Client
+   owns its hidden Runtime, Backend, Session, and lease. That application-owned
+   process may be dedicated to one WhatsApp account, but `whatsappd` does not
+   initially ship a generic daemon or HTTP transport.
 6. Pairing is an account lifecycle command issued after account creation, not
    immutable runtime-constructor configuration.
 7. `ChannelEvent`, `WhatsAppChannelAdapter`, the Eve adapter, the current
@@ -781,7 +784,11 @@ React and application code consume friendly state rather than transport or
 storage mechanics:
 
 ```ts
-const client = await createWhatsAppClient(runtime);
+const client = await createWhatsAppClient({
+  accountId,
+  openBackend,
+  openSession,
+});
 
 client.account.get();
 client.account.subscribe(renderAccount, { signal });
@@ -804,11 +811,12 @@ cursor, and merges by message identity. An exhausted saved page never claims
 that WhatsApp has no older messages. Phone-history requests and commands are
 separate capabilities, not part of this state seam.
 
-`await createWhatsAppClient(runtime)` resolves only after the store-backed
-snapshot is applied. Runtime frames, patches, revisions, and stored-page cursors
-stay inside the Client implementation. The friendly Client owns gap recovery,
-deterministic account/chat/contact/group state, and saved/live message merging;
-React components and applications do not.
+`await createWhatsAppClient(options)` starts the owned account lifecycle and
+resolves only after the store-backed snapshot is applied. Runtime frames,
+patches, revisions, and stored-page cursors stay inside the Client
+implementation. The friendly Client owns gap recovery, deterministic
+account/chat/contact/group state, and saved/live message merging; React
+components and applications do not.
 
 `await client.chats.open(chatId)` returns one coherent conversation controller.
 Its `get()`/`subscribe()` state contains newest-first messages and expiring live
@@ -822,13 +830,14 @@ does not expose them.
 The local application seam is:
 
 ```ts
-const client = await createWhatsAppClient(runtime);
+const client = await createWhatsAppClient({ accountId, openBackend, openSession });
 ```
 
-The Backend, Runtime, and Client are chosen and owned independently at the
-application composition root. The UI contains no backend-specific query code.
-A future remote transport may preserve this friendly contract, but it is not
-part of the initial package family.
+Backend and Session factories are chosen at the application composition root,
+but each returned instance transfers to the Client. The hidden Runtime and all
+lifecycle ordering remain package-private. The UI contains no backend-specific
+query code. A future remote transport may preserve this friendly contract, but
+it is not part of the initial package family.
 
 ## Headless React
 

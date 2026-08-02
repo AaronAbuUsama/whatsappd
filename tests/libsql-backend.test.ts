@@ -9,14 +9,13 @@ import { promisify } from "node:util";
 import { expect, test } from "./_expect.ts";
 import {
   createWhatsAppClient,
-  createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   memoryMediaStore,
   AccountAlreadyClaimedError,
   StaleAccountClaimError,
 } from "../src/index.ts";
-import { getWhatsAppClientSource } from "../src/runtime/runtime.ts";
+import { createWhatsAppRuntime, getWhatsAppClientSource } from "../src/runtime/runtime.ts";
 import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";

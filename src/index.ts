@@ -51,9 +51,7 @@ export type {
 } from "./model/index.ts";
 export { isTerminal, isOnline, refOf } from "./model/index.ts";
 
-// ── Runtime, backends, and client ──
-export { createWhatsAppRuntime } from "./runtime/runtime.ts";
-export type { WhatsAppRuntime, WhatsAppRuntimeConfig } from "./runtime/runtime.ts";
+// ── Client and its owned backend adapters ──
 export { createWhatsAppClient } from "./runtime/client.ts";
 export type { WhatsAppClientOptions } from "./runtime/client.ts";
 export {

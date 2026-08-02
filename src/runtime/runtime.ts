@@ -171,7 +171,7 @@ export interface WhatsAppRuntimeConfig {
   readonly freshnessMs?: number;
 }
 
-/** One account's runtime. Create it with {@link createWhatsAppRuntime}. */
+/** One Client-owned account runtime. @internal */
 export interface WhatsAppRuntime {
   readonly accountId: string;
   /**
@@ -186,25 +186,14 @@ export interface WhatsAppRuntime {
 }
 
 /**
- * Create one account's runtime.
+ * Create one internal account runtime.
  *
  * @param config - Account, backend, and how to open the session — see
  * {@link WhatsAppRuntimeConfig}.
  * @returns A runtime that has claimed nothing until
  * {@link WhatsAppRuntime.start | start} is called.
  *
- * @example
- * ```ts
- * const runtime = createWhatsAppRuntime({
- *   accountId: "personal",
- *   backend: memoryBackend(),
- *   openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
- * });
- *
- * await runtime.start();
- * const client = await createWhatsAppClient(runtime);
- * console.log(client.chats.list());
- * ```
+ * @internal
  */
 export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRuntime {
   const { accountId, backend } = config;

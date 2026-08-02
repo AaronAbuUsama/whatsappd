@@ -20,7 +20,11 @@ Selected interface: `namespaces-plus-opened-conversation` (ADR-0023).
 ### Current state seam
 
 ```ts
-const client = await createWhatsAppClient(runtime);
+const client = await createWhatsAppClient({
+  accountId,
+  openBackend,
+  openSession,
+});
 client.account.subscribe(renderAccount, { signal });
 client.chats.list();
 client.contacts.list();
@@ -61,8 +65,9 @@ recording are separate planned capabilities.
 
 ### Resource ownership
 
-- client.close releases Client subscriptions and opened conversations.
-- client.close does not stop an application-owned Runtime or close an application-owned Backend.
+- Backend and Session factories transfer each returned resource to the Client.
+- `client.close()` releases subscriptions and conversations, stops its hidden Runtime and Session, releases the Account Lease, and closes its Backend.
+- Concurrent `client.close()` calls join the same teardown; failed creation attempts every acquired cleanup step.
 - Closing an opened conversation cancels its page reads and subscriptions without deleting messages or leaving the chat.
 
 ## Capability inventory
@@ -73,7 +78,7 @@ recording are separate planned capabilities.
 | `ACC-02` | accounts | Pair by QR and observe expiring challenge state. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `account.pair({ method: "qr" })`; `usePairing` | Commands + protected challenge + trusted worker; #23, 0.3 target; release: required for 0.3 |
 | `ACC-03` | accounts | Pair by validated phone number and pairing code. | available: `available-in-baileys` (`requestPairingCode`) | implemented | Current whatsappd implements this capability. | `account.pair({ method: "code", phoneNumber })`; `usePairing` | Commands + protected challenge; #23, 0.3 target; release: required for 0.3 |
 | `ACC-04` | accounts | Unlink WhatsApp while retaining saved chats and other accounts. | available: `available-in-baileys` (`logout`) | not-implemented | Credential clear exists but no authorized lifecycle operation | `account.unlink()`; `useUnlink` only if shared workflow emerges | Commands + credentials; trusted worker #23, required for 0.3 |
-| `ACC-05` | accounts | Start and stop the application-owned live worker. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `runtime.start/stop`; `client.close` releases Client resources | Credentials + lease + data + media; shipped lower-level; execution: #64; release: required for 0.3 release safety |
+| `ACC-05` | accounts | Start and stop the application-owned live worker. | available: `available-in-baileys` | implemented | An awaited Client starts its hidden account lifecycle; closing it stops every owned resource. | `createWhatsAppClient(options)` / `client.close()` | Credentials + lease + data + media are Client-owned; execution: #71; release: required for 0.3 release safety |
 | `ACC-06` | accounts | Read the connected account identity. | available: `available-in-baileys` (`socket.user`) | implemented | Current whatsappd implements this capability. | `account.get().identity` / `useAccount` | Live trusted worker; execution: #71; release: required for 0.3 |
 | `ACC-07` | accounts | Read a profile picture URL. | available: `available-in-baileys` (`profilePictureUrl`) | implemented | Current whatsappd implements this capability. | `account.profile.picture(jid)` | Friendly account operation #73, post-0.3 |
 | `ACC-08` | accounts | Set or remove a profile picture. | available: `available-in-baileys` (`updateProfilePicture`, `removeProfilePicture`) | not-implemented | `available-in-baileys` | `account.profile.setPicture/removePicture` | Durable command; deferred; execution: #73; release: post-0.3 |
@@ -332,14 +337,14 @@ recording are separate planned capabilities.
 - `WhatsAppAccountState`
 - `WhatsAppAddress`
 - `WhatsAppBackend`
+- `WhatsAppBackendResource`
 - `WhatsAppClient`
 - `WhatsAppClientClosedError`
 - `WhatsAppClientConnectionState`
+- `WhatsAppClientOptions`
 - `WhatsAppConversation`
 - `WhatsAppConversationState`
 - `WhatsAppFault`
-- `WhatsAppRuntime`
-- `WhatsAppRuntimeConfig`
 - `WhatsAppSession`
 - `WhatsAppSessionHandlers`
 - `assertE164`
@@ -347,7 +352,6 @@ recording are separate planned capabilities.
 - `createSession`
 - `createTestWhatsAppSession`
 - `createWhatsAppClient`
-- `createWhatsAppRuntime`
 - `dispositionFor`
 - `fileMediaStore`
 - `fileStore`

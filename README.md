@@ -73,33 +73,22 @@ per-key files are migrated on first read. A later `clear()` removes every
 recognized old Baileys credential file—even one never read—from a replacement
 process while preserving other caller-owned entries.
 
-## Runtime, backend, and client
+## Client
 
-The runtime owns one account: it claims the account lease before WhatsApp is
-opened, durably accepts each WhatsApp change, and publishes what changed to
-clients only after that acceptance commits.
+One Client owns one WhatsApp Account. Its Backend, Session, account lease,
+hydration, recovery, and shutdown are internal lifecycle details; the
+application creates and closes one resource.
 
 ```ts
-import {
-  createSession,
-  createWhatsAppClient,
-  createWhatsAppRuntime,
-  memoryBackend,
-  qrAuth,
-} from "whatsappd";
+import { createSession, createWhatsAppClient, memoryBackend, qrAuth } from "whatsappd";
 
-const backend = memoryBackend();
-const runtime = createWhatsAppRuntime({
+const client = await createWhatsAppClient({
   accountId: "personal",
-  backend,
+  openBackend: () => memoryBackend(),
   openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
 });
 
-// Returns once the account is being consumed; the session keeps running.
-await runtime.start();
-
-// Resolves only after durable account, chat, contact, and group state is hydrated.
-const client = await createWhatsAppClient(runtime);
+// Creation resolves after the durable account, chats, contacts, and groups are coherent.
 console.log(client.chats.list());
 
 const conversation = await client.chats.open("15551234567@s.whatsapp.net");
@@ -114,8 +103,12 @@ await conversation.loadOlder();
 unsubscribe();
 conversation.close();
 await client.close();
-await runtime.stop();
 ```
+
+Factories transfer ownership of the returned Backend and Session to the Client.
+If creation fails, acquired resources are unwound. Concurrent `close()` calls
+join one teardown that stops the Session, releases the lease, and closes the
+Backend.
 
 For a Current Mirror, credentials, and Account Leases that survive process
 replacement, install the optional libSQL client and inject the independent
@@ -128,38 +121,33 @@ pnpm add whatsappd @libsql/client
 ```ts
 import {
   createSession,
-  createWhatsAppRuntime,
+  createWhatsAppClient,
   fileMediaStore,
   libsqlBackend,
   qrAuth,
 } from "whatsappd";
 
-const backend = libsqlBackend({
-  url: "file:./whatsapp.db",
+const client = await createWhatsAppClient({
   accountId: "personal",
-  media: fileMediaStore({ directory: "./whatsapp-media" }),
-});
-
-const runtime = createWhatsAppRuntime({
-  accountId: "personal",
-  backend,
+  openBackend: () =>
+    libsqlBackend({
+      url: "file:./whatsapp.db",
+      accountId: "personal",
+      media: fileMediaStore({ directory: "./whatsapp-media" }),
+    }),
   openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
 });
-await runtime.start();
 
-// A replacement backend opened on the same URL reconstructs the accepted
-// source, mirror, stored pages, and attachment bytes.
+// A replacement Client opened on the same URL reconstructs durable state.
 
-await runtime.stop(); // releases the account; does not close a shared backend
-await backend.close(); // the application owns the libSQL client's lifetime
+await client.close();
 ```
 
 Images, videos, audio and voice notes, documents, and stickers are downloaded
 while the live WhatsApp handle is usable. `fileMediaStore()` writes their bytes
 as private immutable local objects; libSQL stores only the message's opaque
-media reference and its `stored` or typed `failed` state. Read bytes explicitly
-with `backend.media.read({ accountId, ref })`. The package does not invent a
-filesystem URL or browser delivery policy.
+media reference and its `stored` or typed `failed` state. The friendly state
+seam does not invent a filesystem URL or browser delivery policy.
 
 The Client owns snapshot hydration, revision recovery, and saved/live message
 merging. Applications read or subscribe to account, chat, contact, and group
@@ -172,11 +160,11 @@ joins concurrent reads and merges the next saved page without exposing its
 cursor. When `hasOlderSaved` is false, it means only that no older messages are
 currently stored — never that WhatsApp has no more.
 
-Credentials, WhatsApp data, the account lease, and media bytes are four separate
-capabilities. `memoryBackend()` groups in-memory implementations of all four;
-each one — `memoryDataStore()`, `memoryLeaseStore()`, `memoryMediaStore()` — can
-be replaced individually. Starting a second runtime for an account another one
-holds rejects with `AccountAlreadyClaimedError` before any socket opens.
+Credentials, WhatsApp data, the account lease, and media bytes remain separate
+Backend capabilities. `memoryBackend()` groups in-memory implementations;
+`libsqlBackend()` provides durable credentials, data, and leases with an
+explicit media adapter. A second Client for an already-held account rejects
+with `AccountAlreadyClaimedError` before another socket opens.
 
 The Current Mirror projects text and durable media messages, the chats they
 belong to, contacts, and groups. Normalized updates such as receipts are retained
@@ -188,11 +176,10 @@ processing; a structured data-store failure still stops the session and
 publishes no patch. Accepted-source reads are bounded and resume from their own
 `seq`.
 
-Snapshots expose `contactAliases`, mapping every WhatsApp-delivered PN or LID
-form to its owning contact record. When later evidence explicitly links two
-previously separate contact records, the patch upserts the consolidated record
-and deletes only the redundant current-mirror contact; accepted source evidence
-is never deleted.
+Address resolution maps every WhatsApp-delivered PN or LID form to its owning
+contact record. When later evidence explicitly links two previously separate
+contact records, the Client publishes one consolidated current contact;
+accepted source evidence is never deleted.
 
 Connection and presence are live signals with an expiry: no status is ever
 stored, and none is replayed as current truth. The _instant_ each was observed
@@ -200,9 +187,10 @@ at is durable, so `lastSeenAt` on a contact and `lastConnectedAt` /
 `lastDisconnectedAt` on the account survive a restart as history — a timestamp
 never claims anyone is online now.
 
-When the runtime stops consuming the account, `client.account` publishes
-`closed` state. An unexpected session failure includes its `error`; deliberate
-runtime shutdown does not, so failure is never mistaken for a quiet account.
+When the hidden Runtime stops consuming the account, `client.account` publishes
+`closed` state immediately and clears live connection/presence. An unexpected
+Session failure includes its `error`; deliberate termination does not. The last
+coherent durable state stays readable until `client.close()`.
 
 ## Deterministic application tests
 
