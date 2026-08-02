@@ -1946,6 +1946,45 @@ test("each live-state listener revalidates expiry after an earlier listener retu
   await client.close();
 });
 
+test("a re-entrant connection listener close cancels its owned deadline", async () => {
+  const freshnessMs = 5_000;
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver, { freshnessMs });
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const deadlines = new Set<ReturnType<typeof setTimeout>>();
+  globalThis.setTimeout = ((callback: () => void, delay?: number) => {
+    const timer = realSetTimeout(callback, delay);
+    if ((delay ?? 0) >= freshnessMs - 10) deadlines.add(timer);
+    return timer;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer: Parameters<typeof clearTimeout>[0]) => {
+    deadlines.delete(timer as ReturnType<typeof setTimeout>);
+    realClearTimeout(timer);
+  }) as typeof clearTimeout;
+
+  let closing: Promise<void> | undefined;
+  const closeStarted = new Promise<void>((resolve) => {
+    client.account.subscribe((state) => {
+      if (!state.connection || closing) return;
+      closing = client.close();
+      resolve();
+    });
+  });
+  try {
+    await driver.emit({ type: "connection", status: { phase: "online" } }).catch(() => {});
+    await withDeadline(closeStarted);
+    await withDeadline(closing ?? Promise.reject(new Error("Client close did not start")));
+    assert.equal(deadlines.size, 0);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+    for (const timer of deadlines) realClearTimeout(timer);
+    await client.close().catch(() => {});
+  }
+});
+
 test("identity and live state are sampled, replaced, expired, and never hydrated after restart", async () => {
   const backend = memoryBackend();
   const identity = {

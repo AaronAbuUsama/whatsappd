@@ -350,11 +350,11 @@ async function createClientState(
         connection: frame.state,
         ...(identity ? { identity } : {}),
       };
-      notifyAccount();
       const observed = frame.state;
       connectionTimer = wakeAt(observed.expiresAt, () => {
         if (!closed) expireConnection(observed);
       });
+      notifyAccount();
       return;
     }
     if (frame.type === "presence") {
