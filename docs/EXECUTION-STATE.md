@@ -3,8 +3,8 @@
 Last updated: 2026-08-02. The capability catalogue merged at
 `d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the executable
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. The owner subsequently removed
-redundant #63/#39 storage-composition work. #64 is merged; #70 is the current
-implementation frontier.
+redundant #63/#39 storage-composition work. #64 and #70 are merged; #71 is the
+current implementation frontier.
 
 ## Where everything lives
 
@@ -143,8 +143,9 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 - #64 closed the remaining synchronous custom-session teardown boundary in
   PR #86.
-- Accepted updates are retained and page by source `seq`; #70 owns complete
-  normalized message/update projection before the friendly Client.
+- #70 completed normalized message/update projection in PR #88; accepted
+  updates remain retained and page by source `seq`. #71 owns the friendly
+  Client.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - `fileStore()` remains the credential-only option for the independently usable
@@ -163,13 +164,13 @@ libSQL and filesystem-media composition needs no additional mechanism:
 ```text
 ✓ #64 Runtime teardown ───────────────────┐
                                          ↓
-#70 projection → #71 Client → #22 operations → #23 pairing/unlink
+✓ #70 projection → #71 Client → #22 operations → #23 pairing/unlink
                                                   ↓
                               #30 React/OpenTUI → #40 → #41
 ```
 
-#23 has two direct blockers (#22 and the now-merged #64). The executable
-frontier is **#70**.
+#23 has two direct blockers (#22 and the now-merged #64); #22 remains blocked
+by #71. With #70 merged, the executable frontier is **#71**.
 
 Post-0.3 and research lanes do not block that spine:
 
