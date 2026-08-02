@@ -405,7 +405,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
             }),
           )
         : undefined;
-    const closeOutcome = await settle(Promise.resolve(open?.stop?.()));
+    const closeOutcome = await settle(Promise.resolve().then(() => open?.stop?.()));
     // Nothing awaited the supervisor while the session ran, so its terminal
     // failure — a rejected handler, a dead socket — arrives here. It is joined
     // even when stop() failed.
