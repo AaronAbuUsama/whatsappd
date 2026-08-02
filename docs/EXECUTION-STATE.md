@@ -3,8 +3,8 @@
 Last updated: 2026-08-02. The capability catalogue merged at
 `d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the executable
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. The owner subsequently removed
-redundant #63/#39 storage-composition work. #64 and #70 are merged; #91 removes
-the duplicate machine-readable capability catalogue.
+redundant #63/#39 storage-composition work. #64 is merged; #70 is the current
+implementation frontier.
 
 ## Where everything lives
 
@@ -12,7 +12,7 @@ the duplicate machine-readable capability catalogue.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0025`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0026`                                   |
 | Published build specification    | GitHub issue #15                                           |
 | Capability planning guide        | `docs/sdk-capabilities.md`                                 |
 | Execution-graph repair           | GitHub issue #68                                           |
@@ -59,6 +59,7 @@ the planned and current product surface without governing it.
 | Framework-independent Client owns WhatsApp state; React binds it; renderers own presentation | 0023           |
 | Every ticket declares TDD seam, acceptance, proof rung, and database-oracle boundary         | 0017           |
 | Pre-acceptance process-death replay is unknown and carries no lossless-delivery claim        | 0025           |
+| Capability inventory is a human-maintained planning guide, not a product authority           | 0026           |
 | Connection and presence remain ephemeral; remote connection truth expires with its lease     | PR #12 review  |
 | Conversation-sync deletion requires explicit, scope-bounded replacement metadata             | PR #12 review  |
 | Executing command claims expire to terminal `outcome_unknown`, never automatic retry         | PR #12 review  |
