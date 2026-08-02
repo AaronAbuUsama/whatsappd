@@ -22,6 +22,14 @@ local/deterministic adapters exist. The Client receives factories rather than
 borrowed live instances. Every adapter instance returned by those factories is
 owned by that Client, including cleanup when creation fails.
 
+Adapter ownership is also a value boundary, in both directions. A conforming
+adapter may retain or reuse the mutable records it returns or receives, so the
+private Runtime-to-Client source owns fulfilled Session identity samples,
+Current Mirror snapshots, stored message pages, and nested paging options
+before Client state can retain them. This rule changes neither the public
+Backend contracts nor Current Mirror projection. Rejection reasons are not
+copied: opaque failures retain identity across the boundary.
+
 `client.close()` latches the Client closed, cancels subscriptions and Client
 waits, closes every Opened Conversation, stops the internal Runtime and Session,
 releases the Account Lease, and closes the Backend last. Concurrent calls join
@@ -42,6 +50,12 @@ reads or recovery. The deadline is authoritative, not a timer wake-up: an early
 wake re-arms until the wall clock reaches it, while account and conversation
 reads and each listener delivery derive the live view at that instant. Timers
 publish the eventual expiry transition but never authorize stale state.
+
+The Runtime similarly owns each successful Account Lease value immediately
+after acquisition or renewal. Backend code cannot mutate the Runtime's cached
+fencing or expiry authority through a retained result or an in-place renewal
+argument. Values handed back to the lease adapter are independent copies while
+the Runtime still owns the claim.
 
 ## One transition authority
 

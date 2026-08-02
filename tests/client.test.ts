@@ -6,6 +6,7 @@ import {
   createWhatsAppClient,
   memoryBackend,
   WhatsAppClientClosedError,
+  type AccountLease,
   type WhatsAppBackendResource,
   type WhatsAppClientOptions,
 } from "../src/index.ts";
@@ -210,6 +211,235 @@ test("every public Client reader and listener owns its mutable state", async () 
 
   conversation.close();
   await client.close();
+});
+
+test("the owned Client isolates every mutable synchronization input", async () => {
+  const base = memoryBackend();
+  const seedDriver = createTestWhatsAppSession();
+  const seed = await openClient(base, seedDriver);
+  await seedDriver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [
+        { id: ALPHA, isGroup: false, subject: "Alpha" },
+        {
+          id: ROOM,
+          isGroup: true,
+          subject: "Room",
+          participants: [{ id: ALPHA, role: "admin" }],
+        },
+      ],
+      contacts: [{ id: ALPHA, nativeIds: [ALPHA, LID], displayName: "Alpha" }],
+      messages: [1, 2, 3, 4].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `message ${number}`,
+          timestamp: 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  await seed.close();
+
+  let retainedSnapshot!: Awaited<ReturnType<typeof base.data.snapshot>>;
+  const retainedPages: Awaited<ReturnType<typeof base.data.messages>>[] = [];
+  let retainedOptions!: Parameters<typeof base.data.messages>[2];
+  let messageReads = 0;
+  const pagingFailure = new Error("retaining adapter page failure");
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        retainedSnapshot = await base.data.snapshot(...args);
+        return retainedSnapshot;
+      },
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        messageReads += 1;
+        if (messageReads === 3) {
+          retainedOptions = args[2];
+          throw pagingFailure;
+        }
+        const page = await base.data.messages(...args);
+        retainedPages.push(page);
+        return page;
+      },
+    },
+  };
+  const identity = {
+    jid: "233200000000:1@s.whatsapp.net",
+    pushName: "Personal",
+  };
+  const driver = createTestWhatsAppSession({ identity });
+  const client = await openClient(backend, driver);
+  const conversation = await client.chats.open(ALPHA, { pageSize: 1 });
+  let accountNotifications = 0;
+  let chatNotifications = 0;
+  let conversationNotifications = 0;
+  client.account.subscribe(() => {
+    accountNotifications += 1;
+  });
+  client.chats.subscribe(() => {
+    chatNotifications += 1;
+  });
+  conversation.subscribe(() => {
+    conversationNotifications += 1;
+  });
+
+  try {
+    (identity as { pushName: string }).pushName = "Changed outside a transition";
+    (retainedSnapshot.account as { accountId: string }).accountId = "mutated";
+    const retainedChat = retainedSnapshot.chats.find((chat) => chat.chatId === ALPHA);
+    assert(retainedChat);
+    (retainedChat as { subject?: string }).subject = "mutated";
+    const retainedContact = retainedSnapshot.contacts.find(
+      (contact) => contact.contactId === ALPHA,
+    );
+    assert(retainedContact);
+    (retainedContact as { displayName?: string }).displayName = "mutated";
+    (retainedContact.nativeIds as { length: number }).length = 0;
+    (retainedSnapshot.contactAliases as Record<string, string>)[LID] = BRAVO;
+    const retainedGroup = retainedSnapshot.groups.find((group) => group.groupId === ROOM);
+    assert(retainedGroup);
+    (retainedGroup.participants as { length: number }).length = 0;
+    const firstPage = retainedPages[0];
+    const retainedMessage = firstPage?.messages[0];
+    assert(retainedMessage?.kind === "text");
+    (retainedMessage as { text: string }).text = "mutated";
+    assert(firstPage.nextBefore);
+    (firstPage.nextBefore as { messageId: string }).messageId = "m1";
+
+    assert.equal(client.account.get().record.accountId, ACCOUNT);
+    assert.equal(client.account.get().identity?.pushName, "Personal");
+    assert.equal(client.chats.get(ALPHA)?.subject, "Alpha");
+    assert.equal(client.contacts.get(ALPHA)?.displayName, "Alpha");
+    assert.deepEqual(client.contacts.get(ALPHA)?.nativeIds, [ALPHA, LID]);
+    assert.equal(client.contacts.resolve(LID)?.contactId, ALPHA);
+    assert.deepEqual(client.groups.get(ROOM)?.participants, [{ id: ALPHA, role: "admin" }]);
+    const visibleMessage = conversation.get().messages[0];
+    assert.equal(visibleMessage?.kind === "text" ? visibleMessage.text : undefined, "message 4");
+    assert.deepEqual(
+      { accountNotifications, chatNotifications, conversationNotifications },
+      { accountNotifications: 0, chatNotifications: 0, conversationNotifications: 0 },
+    );
+
+    await conversation.loadOlder();
+    assert.deepEqual(
+      conversation.get().messages.map((message) => message.messageId),
+      ["m4", "m3"],
+    );
+
+    await assert.rejects(conversation.loadOlder(), (error) => error === pagingFailure);
+    assert.equal(conversation.get().error, pagingFailure);
+    assert(retainedOptions?.before);
+    (retainedOptions.before as { messageId: string }).messageId = "m1";
+    await conversation.loadOlder();
+    assert.deepEqual(
+      conversation.get().messages.map((message) => message.messageId),
+      ["m4", "m3", "m2"],
+    );
+
+    await driver.emit({ type: "connection", status: { phase: "online" } });
+    assert.equal(client.account.get().identity?.pushName, "Changed outside a transition");
+  } finally {
+    conversation.close();
+    await client.close().catch(() => {});
+  }
+});
+
+test("the owned Client isolates its acquired Account Lease from its Backend", async () => {
+  const base = memoryBackend();
+  let retainedLease!: AccountLease;
+  const backend = {
+    ...base,
+    leases: {
+      ...base.leases,
+      async acquire(...args: Parameters<typeof base.leases.acquire>) {
+        const result = await base.leases.acquire(...args);
+        if (!result.acquired) return result;
+        retainedLease = { ...result.lease };
+        return { acquired: true as const, lease: retainedLease };
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver, { leaseTtlMs: 10_000 });
+  try {
+    (retainedLease as { expiresAt: number }).expiresAt = 0;
+    await driver.emit({
+      type: "message",
+      message: textMessage({ id: "owned", chatId: ALPHA, text: "owned", timestamp: 100 }),
+    });
+    assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
+  } finally {
+    await client.close().catch(() => {});
+  }
+});
+
+test("the owned Client isolates Account Lease renewal inputs and results", async () => {
+  const base = memoryBackend();
+  let renewalReady!: () => void;
+  const renewalStarted = new Promise<void>((resolve) => {
+    renewalReady = resolve;
+  });
+  let releaseRenewal!: () => void;
+  const renewalGate = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  let renewedReady!: () => void;
+  const renewed = new Promise<void>((resolve) => {
+    renewedReady = resolve;
+  });
+  let retainedRenewed!: AccountLease;
+  let renewals = 0;
+  const backend = {
+    ...base,
+    leases: {
+      ...base.leases,
+      acquire: (accountId: string, holderId: string) =>
+        base.leases.acquire(accountId, holderId, 10_000),
+      async renew(input: AccountLease) {
+        renewals += 1;
+        if (renewals > 1) return new Promise<never>(() => {});
+        const stableInput = { ...input };
+        (input as { expiresAt: number }).expiresAt = 0;
+        renewalReady();
+        await renewalGate;
+        const result = await base.leases.renew(stableInput, 10_000);
+        assert(result.renewed);
+        retainedRenewed = { ...result.lease };
+        renewedReady();
+        return { renewed: true as const, lease: retainedRenewed };
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver, {
+    freshnessMs: 10_000,
+    leaseTtlMs: 10,
+  });
+  try {
+    await withDeadline(renewalStarted);
+    await driver.emit({ type: "connection", status: { phase: "online" } });
+    assert.deepEqual(client.account.get().connection?.status, { phase: "online" });
+
+    releaseRenewal();
+    await withDeadline(renewed);
+    await tick();
+    (retainedRenewed as { expiresAt: number }).expiresAt = 0;
+    await driver.emit({
+      type: "message",
+      message: textMessage({ id: "renewed", chatId: ALPHA, text: "renewed", timestamp: 100 }),
+    });
+    assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
+  } finally {
+    releaseRenewal();
+    await client.close().catch(() => {});
+  }
+  assert.equal((await base.leases.acquire(ACCOUNT, "replacement", 10_000)).acquired, true);
 });
 
 test("Runtime termination rejects Client creation while initial hydration is blocked", async () => {

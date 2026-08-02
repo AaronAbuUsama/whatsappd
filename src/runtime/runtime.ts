@@ -471,7 +471,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     if (!held || stopped) return;
     let result: Awaited<ReturnType<AccountLeaseStore["renew"]>>;
     try {
-      result = await backend.leases.renew(held, leaseTtlMs);
+      result = await backend.leases.renew(structuredClone(held), leaseTtlMs);
     } catch (error) {
       failure ??= { error };
       await halt();
@@ -480,7 +480,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // A stop or a later claim may have cleared/replaced this lease while the
     // backend call was in flight. Its stale result must not resurrect either.
     if (stopped || lease !== held) return;
-    if (result.renewed) lease = result.lease;
+    if (result.renewed) lease = structuredClone(result.lease);
     else {
       lease = undefined; // gone; releasing it would evict its new holder
       await halt();
@@ -507,16 +507,17 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // second socket on the account and diverge its Signal state.
     const claimed = await backend.leases.acquire(accountId, holderId, leaseTtlMs);
     if (!claimed.acquired) throw new AccountAlreadyClaimedError(accountId, claimed.heldUntil);
+    const acquired = structuredClone(claimed.lease);
     // Recorded before the liveness check, never after: `release()` gives back
     // whatever startup got this far, and something held only in a local when a
     // stop() lands is something nothing can give back.
-    lease = claimed.lease;
+    lease = acquired;
     if (stopped) throw stoppedWhileStarting();
 
     // Announce the claim at the acceptance boundary before WhatsApp is opened,
     // so a superseded worker's writes are refused from this moment rather than
     // from whenever this one first writes (ADR-0009).
-    await backend.data.claim(accountId, claimed.lease.fencingToken);
+    await backend.data.claim(accountId, acquired.fencingToken);
     if (stopped) throw stoppedWhileStarting();
 
     heartbeat = setInterval(
@@ -580,9 +581,10 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
 
   const runtime: WhatsAppRuntime = { accountId, start, stop };
   const source: WhatsAppClientSource = {
-    snapshot: () => backend.data.snapshot(accountId),
-    messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
-    identity: () => session?.identity?.(),
+    snapshot: async () => structuredClone(await backend.data.snapshot(accountId)),
+    messages: async (chatId, options) =>
+      structuredClone(await backend.data.messages(accountId, chatId, structuredClone(options))),
+    identity: () => structuredClone(session?.identity?.()),
     onFrame: (listener) => {
       if (terminal) {
         listener({ ...terminal });
