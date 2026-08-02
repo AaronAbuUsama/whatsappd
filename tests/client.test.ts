@@ -544,6 +544,58 @@ test("loadOlder joins concurrent reads, preserves state on failure, retries, and
   await client.close();
 });
 
+test("a re-entrant loading listener joins the owned read and close prevents storage start", async () => {
+  const base = memoryBackend();
+  let reads = 0;
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        reads += 1;
+        return base.data.messages(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2, 3].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  const conversation = await client.chats.open(ALPHA, { pageSize: 1 });
+  const readsAfterOpen = reads;
+  let reentered = false;
+  let joined: Promise<void> | undefined;
+  conversation.subscribe((state) => {
+    if (!state.loadingOlder || reentered) return;
+    reentered = true;
+    joined = conversation.loadOlder();
+    conversation.close();
+  });
+
+  const loading = conversation.loadOlder();
+  const [result] = await Promise.allSettled([loading, joined ?? Promise.resolve()]);
+
+  assert.equal(joined, loading);
+  assert(result.status === "rejected" && result.reason instanceof WhatsAppClientClosedError);
+  assert.equal(reads, readsAfterOpen);
+  await client.close();
+});
+
 test("loadOlder waits for recovery instead of publishing an obsolete generation", async () => {
   const base = memoryBackend();
   let fencingToken = 0;

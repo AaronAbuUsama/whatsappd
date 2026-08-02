@@ -588,7 +588,7 @@ async function createClientState(
         if (terminated) return Promise.reject(terminationError);
         if (pageRead) return pageRead;
         let task!: Promise<void>;
-        task = (async () => {
+        task = Promise.resolve().then(async () => {
           try {
             for (;;) {
               while (recovering)
@@ -599,6 +599,8 @@ async function createClientState(
               const readingGeneration = generation;
               const before = cursor;
               publish({ loadingOlder: true, error: undefined });
+              if (conversationClosed) throw new WhatsAppClientClosedError("conversation");
+              if (terminated) throw terminationError;
               let page: StoredMessagePage;
               try {
                 page = await Promise.race([
@@ -634,7 +636,7 @@ async function createClientState(
           } finally {
             if (pageRead === task) pageRead = undefined;
           }
-        })();
+        });
         pageRead = task;
         return task;
       },
