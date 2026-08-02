@@ -132,6 +132,11 @@ test("the checked-in catalogue is complete and generated without drift", async (
   ).toEqual([]);
   expect((input.capabilities as unknown[]).length).toBe(167);
   expect((input.publicExports as unknown[]).length).toBe(104);
+  const messagePersistence = (input.capabilities as Record<string, unknown>[]).find(
+    ({ id }) => id === "DATA-08",
+  ) as { current: { status: string; summary: string } };
+  expect(messagePersistence.current.status).toBe("partial");
+  expect(messagePersistence.current.summary).toContain("location, contacts, poll, and unsupported");
   expect(Object.keys(input).sort()).toEqual([
     "audit",
     "backends",

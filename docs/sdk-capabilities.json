@@ -2380,11 +2380,11 @@
         "summary": "n/a"
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current whatsappd implements this capability."
+        "status": "partial",
+        "summary": "Text, image, video, audio, document, and sticker reach the Current Mirror; location, contacts, poll, and unsupported are normalized by the Session but rejected at durable acceptance."
       },
       "target": "Transparent message state",
-      "requirements": "Data/projection owner to be assigned by #68"
+      "requirements": "Projection coverage for location, contacts, poll, and unsupported; owner to be assigned by #68"
     },
     {
       "id": "DATA-09",
