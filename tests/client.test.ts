@@ -863,6 +863,110 @@ test("Runtime termination preempts blocked recovery and preserves the last coher
   await client.close();
 });
 
+test("a conversation opened during recovery resolves in the recovered Client generation", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let recovering = false;
+  let recoveryWindowReady!: () => void;
+  const recoveryWindowStarted = new Promise<void>((resolve) => {
+    recoveryWindowReady = resolve;
+  });
+  let releaseRecoveryWindow!: () => void;
+  const recoveryWindowGate = new Promise<void>((resolve) => {
+    releaseRecoveryWindow = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        const page = await base.data.messages(...args);
+        if (recovering && args[1] === BRAVO) {
+          recoveryWindowReady();
+          await recoveryWindowGate;
+        }
+        return page;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [
+        { id: ALPHA, isGroup: false, subject: "Old", lastMessageAt: 100 },
+        { id: BRAVO, isGroup: false, subject: "Bravo", lastMessageAt: 100 },
+      ],
+      contacts: [],
+      messages: [
+        textMessage({ id: "old", chatId: ALPHA, text: "old", timestamp: 100, live: false }),
+        textMessage({ id: "bravo", chatId: BRAVO, text: "bravo", timestamp: 100, live: false }),
+      ],
+    },
+  });
+  const bravo = await client.chats.open(BRAVO);
+
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 200,
+        event: {
+          type: "conversation_sync",
+          batch: {
+            context: { source: "recent", projection: { mode: "upsert" } },
+            chats: [{ id: ALPHA, isGroup: false, subject: "Recovered", lastMessageAt: 200 }],
+            contacts: [],
+            messages: [
+              textMessage({
+                id: "recovered",
+                chatId: ALPHA,
+                text: "recovered",
+                timestamp: 200,
+                live: false,
+              }),
+            ],
+          },
+        },
+      },
+    ],
+    fencingToken,
+  );
+  recovering = true;
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "after-gap", chatId: BRAVO, text: "new", timestamp: 300 }),
+  });
+  await withDeadline(recoveryWindowStarted);
+
+  const opening = client.chats.open(ALPHA);
+  let opened = false;
+  void opening.then(() => {
+    opened = true;
+  });
+  await tick();
+  assert.equal(opened, false);
+  releaseRecoveryWindow();
+  const alpha = await withDeadline(opening);
+
+  assert.deepEqual(alpha.get().chat, client.chats.get(ALPHA));
+  assert.equal(alpha.get().chat?.subject, "Recovered");
+  assert.deepEqual(
+    alpha.get().messages.map((message) => message.messageId),
+    ["recovered", "old"],
+  );
+
+  alpha.close();
+  bravo.close();
+  await client.close();
+});
+
 test("a revision gap racing the first page read leaves only the fresh replacement window", async () => {
   const base = memoryBackend();
   let fencingToken = 0;

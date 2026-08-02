@@ -74,6 +74,7 @@ async function createClientState(
   const conversations = new Set<OpenConversation>();
   const clientSubscriptions = new Set<Unsubscribe>();
   const queued: WhatsAppClientFrame[] = [];
+  let generation = 0;
   let revision = -1;
   let account: AccountRecord;
   let accountState: WhatsAppAccountState;
@@ -149,6 +150,7 @@ async function createClientState(
     publishedContacts = [...contacts.values()].sort(byContactId);
     publishedGroups = [...groups.values()].sort(byGroupId);
     revision = snapshot.revision;
+    generation += 1;
     return () => {
       if (!isDeepStrictEqual(previousAccount, accountState)) notify(accountListeners, accountState);
       if (!isDeepStrictEqual(previousChats, publishedChats)) notify(chatListeners, publishedChats);
@@ -363,6 +365,7 @@ async function createClientState(
     options?: { readonly pageSize?: number },
   ): Promise<WhatsAppConversation> => {
     requireClient();
+    const openingGeneration = generation;
     const pageSize = options?.pageSize ?? 25;
     if (!Number.isInteger(pageSize) || pageSize < 1)
       throw new RangeError(`pageSize must be a positive integer, got ${pageSize}`);
@@ -577,9 +580,19 @@ async function createClientState(
     conversations.add(internal);
     try {
       await internal.hydrate();
-      while (recovering) await recovering;
-      requireConversation();
-      return internal.public;
+      for (;;) {
+        while (recovering) await recovering;
+        requireConversation();
+        if (terminated || generation === openingGeneration) return internal.public;
+        const expectedGeneration = generation;
+        const page = await internal.readWindow();
+        requireConversation();
+        if (!terminated && !recovering && generation === expectedGeneration && page) {
+          internal.replaceWindow(page);
+          internal.flush();
+          return internal.public;
+        }
+      }
     } catch (error) {
       internal.close();
       throw error;
