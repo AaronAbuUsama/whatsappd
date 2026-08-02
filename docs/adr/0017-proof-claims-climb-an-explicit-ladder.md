@@ -1,8 +1,12 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # Proof claims climb an explicit ladder
+
+> Superseded by ADR-0024. P0-P6 may still classify the acceptance work a ticket
+> requests, but the capability catalogue records independent observations and
+> never computes a scalar proof rung or global support verdict.
 
 Every implementation ticket declares an agreed public seam, first failing
 behavior, minimum end-to-end green behavior, required proof rung, retained

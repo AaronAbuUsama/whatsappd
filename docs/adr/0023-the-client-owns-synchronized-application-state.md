@@ -60,7 +60,6 @@ does not delete stored messages or leave the WhatsApp chat.
 - React and OpenTUI share WhatsApp behavior without sharing presentation.
 - Non-React applications receive the same friendly synchronized state rather
   than a lower-level protocol.
-- A browser support claim requires browser-safe delivery and P5 browser proof.
-  An OpenTUI proof establishes terminal React behavior, not browser behavior.
-- ADR-0016 is superseded. ADR-0017's proof ladder remains in force with the
-  renderer-specific clarification above.
+- Browser and OpenTUI observations remain independent because they exercise
+  different renderers and platform behavior.
+- ADR-0016 is superseded. ADR-0024 governs capability observations.

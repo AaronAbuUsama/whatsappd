@@ -184,9 +184,11 @@ privacy-safe screenshots. It proves rendered integration rather than replacing
 deterministic tests of state behavior.
 _Avoid_: Screenshot-only acceptance, Storybook rendering, manual claim
 
-**Proof Ladder**:
-The required depth of evidence for a claim: P0 mechanical, P1 deterministic
-behavior, P2 durable integration, P3 native backend, P4 live WhatsApp, P5
-interactive browser, and P6 clean consumer or published release. Passing a
-lower rung never implies a higher one.
-_Avoid_: Tests passed, visually looks right, mechanically green
+**Verification Observation**:
+One exact scenario recorded at an immutable git commit with its surface,
+environment, lifecycle, and receipt. Deterministic, durability, native-backend,
+live-WhatsApp, browser, OpenTUI, and packed-consumer observations are
+independent; one never transfers to another. Absence means not observed, not
+failed.
+_Avoid_: Global supported/proven verdict, source anchor presented as behavior,
+tests passed therefore live
