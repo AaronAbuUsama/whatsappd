@@ -507,39 +507,47 @@ async function createClientState(
         if (conversationClosed)
           return Promise.reject(new WhatsAppClientClosedError("conversation"));
         if (terminated) return Promise.reject(terminationError);
-        if (replacementRead) return replacementRead.then(() => {});
         if (pageRead) return pageRead;
-        if (!cursor) return Promise.resolve();
-        const readingGeneration = generation;
-        const before = cursor;
-        publish({ loadingOlder: true, error: undefined });
         let task!: Promise<void>;
         task = (async () => {
           try {
-            const page = await Promise.race([
-              source.messages(chatId, { limit: pageSize, before }),
-              closedConversation,
-              runtimeTerminated,
-            ]);
-            if (conversationClosed) return;
-            if (recovering || generation !== readingGeneration) {
-              const recovery = recovering;
-              if (recovery) await Promise.race([recovery, closedConversation, runtimeTerminated]);
+            for (;;) {
+              while (recovering)
+                await Promise.race([recovering, closedConversation, runtimeTerminated]);
+              if (conversationClosed) throw new WhatsAppClientClosedError("conversation");
+              if (terminated) throw terminationError;
+              if (!cursor) return;
+              const readingGeneration = generation;
+              const before = cursor;
+              publish({ loadingOlder: true, error: undefined });
+              let page: StoredMessagePage;
+              try {
+                page = await Promise.race([
+                  source.messages(chatId, { limit: pageSize, before }),
+                  closedConversation,
+                  runtimeTerminated,
+                ]);
+              } catch (error) {
+                if (
+                  !conversationClosed &&
+                  !terminated &&
+                  !recovering &&
+                  generation === readingGeneration
+                )
+                  publish({ loadingOlder: false, error });
+                throw error;
+              }
+              if (recovering || generation !== readingGeneration) continue;
+              for (const message of page.messages)
+                if (!messages.has(message.messageId)) messages.set(message.messageId, message);
+              cursor = page.nextBefore;
+              publish({
+                loadingOlder: false,
+                hasOlderSaved: cursor !== undefined,
+                error: undefined,
+              });
               return;
             }
-            for (const message of page.messages)
-              if (!messages.has(message.messageId)) messages.set(message.messageId, message);
-            cursor = page.nextBefore;
-            publish({ loadingOlder: false, hasOlderSaved: cursor !== undefined, error: undefined });
-          } catch (error) {
-            if (
-              !conversationClosed &&
-              !terminated &&
-              !recovering &&
-              generation === readingGeneration
-            )
-              publish({ loadingOlder: false, error });
-            throw error;
           } finally {
             if (pageRead === task) pageRead = undefined;
           }
@@ -555,9 +563,7 @@ async function createClientState(
             if (conversationClosed) return;
             try {
               return await Promise.race([
-                source.messages(chatId, {
-                  limit: Math.max(pageSize, messages.size + (pageRead ? pageSize : 0)),
-                }),
+                source.messages(chatId, { limit: Math.max(pageSize, messages.size) }),
                 closedConversation,
                 runtimeTerminated,
               ]);

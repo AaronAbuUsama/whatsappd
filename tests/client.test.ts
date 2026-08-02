@@ -676,6 +676,133 @@ test("loadOlder waits for recovery instead of publishing an obsolete generation"
   await client.close();
 });
 
+test("loadOlder joins the complete recovery before reading from its committed cursor", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let blockRecoveryWindow = false;
+  let recoveryWindowReady!: () => void;
+  const recoveryWindowStarted = new Promise<void>((resolve) => {
+    recoveryWindowReady = resolve;
+  });
+  let releaseRecoveryWindow!: () => void;
+  const recoveryWindowGate = new Promise<void>((resolve) => {
+    releaseRecoveryWindow = resolve;
+  });
+  let snapshotReads = 0;
+  let secondRecoveryReady!: () => void;
+  const secondRecoveryStarted = new Promise<void>((resolve) => {
+    secondRecoveryReady = resolve;
+  });
+  let releaseSecondRecovery!: () => void;
+  const secondRecoveryGate = new Promise<void>((resolve) => {
+    releaseSecondRecovery = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        const snapshot = await base.data.snapshot(...args);
+        snapshotReads += 1;
+        if (snapshotReads === 3) {
+          secondRecoveryReady();
+          await secondRecoveryGate;
+        }
+        return snapshot;
+      },
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        if (blockRecoveryWindow) {
+          blockRecoveryWindow = false;
+          recoveryWindowReady();
+          await recoveryWindowGate;
+        }
+        return base.data.messages(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2, 3, 4].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  const conversation = await client.chats.open(ALPHA, { pageSize: 2 });
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 500,
+        event: {
+          type: "message",
+          message: textMessage({ id: "m5", chatId: ALPHA, text: "m5", timestamp: 500 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  blockRecoveryWindow = true;
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m6", chatId: ALPHA, text: "m6", timestamp: 600 }),
+  });
+  await withDeadline(recoveryWindowStarted);
+
+  const loading = conversation.loadOlder();
+  const joined = conversation.loadOlder();
+  let loadingSettled = false;
+  void loading.then(
+    () => {
+      loadingSettled = true;
+    },
+    () => {
+      loadingSettled = true;
+    },
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m7", chatId: ALPHA, text: "m7", timestamp: 700 }),
+  });
+  releaseRecoveryWindow();
+  await withDeadline(secondRecoveryStarted);
+  try {
+    await tick();
+    assert.equal(joined, loading);
+    assert.equal(loadingSettled, false);
+    assert.deepEqual(
+      conversation.get().messages.map((message) => message.messageId),
+      ["m4", "m3"],
+    );
+  } finally {
+    releaseSecondRecovery();
+  }
+  await withDeadline(loading);
+
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m7", "m6", "m5", "m4"],
+  );
+
+  conversation.close();
+  await client.close();
+});
+
 test("a revision gap replaces all global Client state from one fresh Runtime snapshot", async () => {
   const base = memoryBackend();
   let fencingToken = 0;
@@ -1233,7 +1360,7 @@ test("Runtime termination rejects a blocked conversation open without changing d
   await client.close();
 });
 
-test("Runtime termination rejects a conversation waiting on blocked recovery", async () => {
+test("Runtime termination rejects conversation operations waiting on blocked recovery", async () => {
   const base = memoryBackend();
   let fencingToken = 0;
   let snapshotReads = 0;
@@ -1267,9 +1394,23 @@ test("Runtime termination rejects a conversation waiting on blocked recovery", a
   const driver = createTestWhatsAppSession();
   const client = await openClient(backend, driver);
   await driver.emit({
-    type: "message",
-    message: textMessage({ id: "coherent", chatId: ALPHA, text: "old", timestamp: 100 }),
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
   });
+  const conversation = await client.chats.open(ALPHA, { pageSize: 1 });
   await base.data.accept(
     ACCOUNT,
     [
@@ -1277,7 +1418,7 @@ test("Runtime termination rejects a conversation waiting on blocked recovery", a
         observedAt: 200,
         event: {
           type: "message",
-          message: textMessage({ id: "missed", chatId: ALPHA, text: "missed", timestamp: 200 }),
+          message: textMessage({ id: "missed", chatId: ALPHA, text: "missed", timestamp: 300 }),
         },
       },
     ],
@@ -1285,20 +1426,25 @@ test("Runtime termination rejects a conversation waiting on blocked recovery", a
   );
   await driver.emit({
     type: "message",
-    message: textMessage({ id: "after-gap", chatId: BRAVO, text: "new", timestamp: 300 }),
+    message: textMessage({ id: "after-gap", chatId: BRAVO, text: "new", timestamp: 400 }),
   });
   await withDeadline(recoveryStarted);
 
   const opening = client.chats.open(ALPHA);
+  const loading = conversation.loadOlder();
   await tick();
   try {
     await driver.session.stop?.();
-    await assert.rejects(withDeadline(opening), WhatsAppClientClosedError);
+    await Promise.all([
+      assert.rejects(withDeadline(opening), WhatsAppClientClosedError),
+      assert.rejects(withDeadline(loading), WhatsAppClientClosedError),
+    ]);
   } finally {
     releaseRecovery();
   }
   assert.deepEqual(client.account.get().closed, {});
 
+  conversation.close();
   await client.close();
 });
 
