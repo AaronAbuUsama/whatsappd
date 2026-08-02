@@ -475,6 +475,31 @@ test("message metadata and the exact delivered group action ref reach the Client
   await runtime.stop();
 });
 
+test("a sparse group message keeps an actionable participant fallback", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+
+  await driver.emit({
+    type: "message",
+    message: textMessage({
+      id: "group-without-key-participant",
+      chatId: ROOM,
+      sender: PERSON,
+      text: "Fallback action target",
+      timestamp: AT,
+    }),
+  });
+
+  expect((await client.messages(ROOM)).messages[0]?.ref).toEqual({
+    id: "group-without-key-participant",
+    chatId: ROOM,
+    fromMe: false,
+    participant: PERSON,
+  });
+
+  await runtime.stop();
+});
+
 test("a receipt becomes the current aggregate receipt on its existing message", async () => {
   const { driver, runtime, client } = lane("personal");
   await runtime.start();
@@ -711,6 +736,30 @@ test("a text edit replaces content while preserving identity, action targeting, 
     text: "Edited",
   });
   expect((await runtime.snapshot()).chats[0]?.lastMessageAt).toBe(AT);
+
+  await runtime.stop();
+});
+
+test("a sparse edit preserves the existing sender display name", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({ type: "message", message: { ...hello(), pushName: "Ada" } });
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "edit",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      message: hello("ignored-edit-id", "Edited without sender metadata"),
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages[0]).toMatchObject({
+    messageId: "m1",
+    pushName: "Ada",
+    kind: "text",
+    text: "Edited without sender metadata",
+  });
 
   await runtime.stop();
 });

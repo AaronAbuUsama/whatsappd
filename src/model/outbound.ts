@@ -52,7 +52,9 @@ export interface SendOptions {
  * existed. They coincide for incoming messages; for own messages `sender` is
  * the account's stable address while the key may carry another native form.
  */
-export function refOf(m: InboundMessage): MessageRef {
+export function refOf(
+  m: Pick<InboundMessage, "id" | "chatId" | "sender" | "keyParticipant" | "fromMe" | "isGroup">,
+): MessageRef {
   const participant = m.keyParticipant ?? m.sender.id;
   return {
     id: m.id,

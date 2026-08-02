@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { GroupParticipant, GroupUpdate } from "../model/group.ts";
 import type { HistoryChat } from "../model/history.ts";
+import { refOf } from "../model/outbound.ts";
 import {
   UnsupportedDurableEventError,
   type AccountRecord,
@@ -307,15 +308,7 @@ async function projectMessage(
       chatId: message.chatId,
       messageId: message.id,
       sender: message.sender,
-      ref: {
-        id: message.id,
-        chatId: message.chatId,
-        fromMe: message.fromMe,
-        ...(message.isGroup &&
-          message.keyParticipant !== undefined && {
-            participant: message.keyParticipant,
-          }),
-      },
+      ref: refOf(message),
       fromMe: message.fromMe,
       timestamp: message.timestamp,
       ...(message.pushName !== undefined && { pushName: message.pushName }),
@@ -393,6 +386,7 @@ async function projectMessageUpdate(state: ProjectionState, update: DurableUpdat
   if (update.kind === "edit") {
     if (existing.kind === "revoked") return;
     const editedAt = update.at ?? existing.editedAt;
+    const pushName = update.message.pushName ?? existing.pushName;
     const message = withCurrentContent(
       {
         accountId: existing.accountId,
@@ -402,7 +396,7 @@ async function projectMessageUpdate(state: ProjectionState, update: DurableUpdat
         ref: existing.ref,
         fromMe: existing.fromMe,
         timestamp: existing.timestamp,
-        ...(update.message.pushName !== undefined && { pushName: update.message.pushName }),
+        ...(pushName !== undefined && { pushName }),
         ...(update.message.context !== undefined && { context: update.message.context }),
         ...(update.message.flags !== undefined && { flags: update.message.flags }),
         receipts: existing.receipts,

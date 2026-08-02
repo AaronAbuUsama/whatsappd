@@ -256,6 +256,37 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
     }
   });
 
+  test(`[${name}] a sparse group message keeps an actionable participant fallback`, async () => {
+    const resource = await create();
+    try {
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "message",
+            message: textMessage({
+              id: "group-without-key-participant",
+              chatId: ROOM,
+              sender: PN,
+              text: "Fallback action target",
+              timestamp: AT,
+            }),
+          }),
+        ],
+        1,
+      );
+
+      expect((await resource.data.messages(ACCOUNT, ROOM)).messages[0]?.ref).toEqual({
+        id: "group-without-key-participant",
+        chatId: ROOM,
+        fromMe: false,
+        participant: PN,
+      });
+    } finally {
+      await resource.close();
+    }
+  });
+
   test(`[${name}] contacts, polls, and unsupported content are readable`, async () => {
     const resource = await create();
     try {
@@ -377,7 +408,10 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         versions.push([batch.seq, batch.revision]);
       };
 
-      const original = textMessage({ id: "current", chatId: PN, text: "Before", timestamp: AT });
+      const original = {
+        ...textMessage({ id: "current", chatId: PN, text: "Before", timestamp: AT }),
+        pushName: "Ada",
+      };
       await record({ type: "message", message: original });
       const receipt = {
         type: "update" as const,
@@ -492,6 +526,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
           ref: { id: "current", chatId: PN, fromMe: false },
           fromMe: false,
           timestamp: AT,
+          pushName: "Ada",
           receipts: [{ subject: "aggregate", status: "read", at: AT + 1 }],
           reactions: [
             {
