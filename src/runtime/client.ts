@@ -482,6 +482,7 @@ async function createClientState(
         close: () => internal.close(),
       },
       hydrate() {
+        const readingGeneration = generation;
         let task!: Promise<void>;
         task = (async () => {
           try {
@@ -490,6 +491,7 @@ async function createClientState(
               closedConversation,
               runtimeTerminated,
             ]);
+            if (recovering || generation !== readingGeneration) return;
             for (const message of page.messages)
               if (!messages.has(message.messageId)) messages.set(message.messageId, message);
             cursor = page.nextBefore;
@@ -508,6 +510,7 @@ async function createClientState(
         if (replacementRead) return replacementRead.then(() => {});
         if (pageRead) return pageRead;
         if (!cursor) return Promise.resolve();
+        const readingGeneration = generation;
         const before = cursor;
         publish({ loadingOlder: true, error: undefined });
         let task!: Promise<void>;
@@ -519,12 +522,23 @@ async function createClientState(
               runtimeTerminated,
             ]);
             if (conversationClosed) return;
+            if (recovering || generation !== readingGeneration) {
+              const recovery = recovering;
+              if (recovery) await Promise.race([recovery, closedConversation, runtimeTerminated]);
+              return;
+            }
             for (const message of page.messages)
               if (!messages.has(message.messageId)) messages.set(message.messageId, message);
             cursor = page.nextBefore;
             publish({ loadingOlder: false, hasOlderSaved: cursor !== undefined, error: undefined });
           } catch (error) {
-            if (!conversationClosed && !terminated) publish({ loadingOlder: false, error });
+            if (
+              !conversationClosed &&
+              !terminated &&
+              !recovering &&
+              generation === readingGeneration
+            )
+              publish({ loadingOlder: false, error });
             throw error;
           } finally {
             if (pageRead === task) pageRead = undefined;
@@ -538,17 +552,12 @@ async function createClientState(
         let task!: Promise<StoredMessagePage | undefined>;
         task = (async () => {
           try {
-            const pending = pageRead;
-            if (pending)
-              try {
-                await pending;
-              } catch {
-                if (conversationClosed) return;
-              }
             if (conversationClosed) return;
             try {
               return await Promise.race([
-                source.messages(chatId, { limit: Math.max(pageSize, messages.size) }),
+                source.messages(chatId, {
+                  limit: Math.max(pageSize, messages.size + (pageRead ? pageSize : 0)),
+                }),
                 closedConversation,
                 runtimeTerminated,
               ]);

@@ -544,6 +544,138 @@ test("loadOlder joins concurrent reads, preserves state on failure, retries, and
   await client.close();
 });
 
+test("loadOlder waits for recovery instead of publishing an obsolete generation", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let blockOlder = false;
+  let olderReady!: () => void;
+  const olderStarted = new Promise<void>((resolve) => {
+    olderReady = resolve;
+  });
+  let releaseOlder!: () => void;
+  const olderGate = new Promise<void>((resolve) => {
+    releaseOlder = resolve;
+  });
+  let snapshotReads = 0;
+  let recoveryReady!: () => void;
+  const recoveryStarted = new Promise<void>((resolve) => {
+    recoveryReady = resolve;
+  });
+  let releaseRecovery!: () => void;
+  const recoveryGate = new Promise<void>((resolve) => {
+    releaseRecovery = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        const snapshot = await base.data.snapshot(...args);
+        snapshotReads += 1;
+        if (snapshotReads === 2) {
+          recoveryReady();
+          await recoveryGate;
+        }
+        return snapshot;
+      },
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        const page = await base.data.messages(...args);
+        if (blockOlder && args[2]?.before) {
+          blockOlder = false;
+          olderReady();
+          await olderGate;
+        }
+        return page;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2, 3, 4, 5].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  const conversation = await client.chats.open(ALPHA, { pageSize: 2 });
+  let obsoletePublications = 0;
+  conversation.subscribe((state) => {
+    if (
+      state.messages.some((message) => message.messageId === "m3") &&
+      client.chats.get(ALPHA)?.lastMessageAt !== 700
+    )
+      obsoletePublications += 1;
+  });
+
+  blockOlder = true;
+  const loading = conversation.loadOlder();
+  let loadingSettled = false;
+  void loading.then(
+    () => {
+      loadingSettled = true;
+    },
+    () => {
+      loadingSettled = true;
+    },
+  );
+  await withDeadline(olderStarted);
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 600,
+        event: {
+          type: "message",
+          message: textMessage({ id: "m6", chatId: ALPHA, text: "m6", timestamp: 600 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m7", chatId: ALPHA, text: "m7", timestamp: 700 }),
+  });
+  await withDeadline(recoveryStarted);
+  releaseOlder();
+  try {
+    await tick();
+    assert.equal(loadingSettled, false);
+    assert.equal(obsoletePublications, 0);
+    assert.deepEqual(
+      conversation.get().messages.map((message) => message.messageId),
+      ["m5", "m4"],
+    );
+  } finally {
+    releaseRecovery();
+  }
+  await withDeadline(loading);
+
+  assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 700);
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m7", "m6", "m5", "m4"],
+  );
+
+  conversation.close();
+  await client.close();
+});
+
 test("a revision gap replaces all global Client state from one fresh Runtime snapshot", async () => {
   const base = memoryBackend();
   let fencingToken = 0;
