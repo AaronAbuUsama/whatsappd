@@ -36,6 +36,31 @@ const byGroupId = (left: GroupRecord, right: GroupRecord): number =>
 const messageOrder = (left: MessageRecord, right: MessageRecord): number =>
   right.timestamp - left.timestamp || compareId(right.messageId, left.messageId);
 
+const wakeAt = (deadline: number, onDeadline: () => void): Unsubscribe => {
+  let active = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = (): void => {
+    timer = setTimeout(
+      () => {
+        if (!active) return;
+        if (deadline > Date.now()) {
+          arm();
+          return;
+        }
+        active = false;
+        onDeadline();
+      },
+      Math.max(0, deadline - Date.now()),
+    );
+    timer.unref?.();
+  };
+  arm();
+  return () => {
+    active = false;
+    if (timer) clearTimeout(timer);
+  };
+};
+
 interface OpenConversation {
   readonly public: WhatsAppConversation;
   hydrate(): Promise<void>;
@@ -95,7 +120,7 @@ async function createClientState(
   let closed = false;
   let closeCause: unknown;
   let recovering: Promise<void> | undefined;
-  let connectionTimer: ReturnType<typeof setTimeout> | undefined;
+  let connectionTimer: Unsubscribe | undefined;
   let off: Unsubscribe = () => {};
   let pendingNotifications: Map<object, () => void> | undefined;
   let terminationError: WhatsAppClientClosedError | undefined;
@@ -139,7 +164,7 @@ async function createClientState(
       notify(accountListeners, accountState);
     }
     off();
-    if (connectionTimer) clearTimeout(connectionTimer);
+    connectionTimer?.();
     for (const conversation of conversations) conversation.close();
     for (const unsubscribe of clientSubscriptions) unsubscribe();
   };
@@ -148,7 +173,7 @@ async function createClientState(
     if (!observed || accountState.connection !== observed || observed.expiresAt > Date.now())
       return false;
     if (connectionTimer) {
-      clearTimeout(connectionTimer);
+      connectionTimer();
       connectionTimer = undefined;
     }
     const identity = source.identity();
@@ -277,7 +302,7 @@ async function createClientState(
       queued.length = 0;
       recovering = undefined;
       if (connectionTimer) {
-        clearTimeout(connectionTimer);
+        connectionTimer();
         connectionTimer = undefined;
       }
       accountState = {
@@ -295,7 +320,7 @@ async function createClientState(
     }
     if (frame.type === "connection") {
       if (connectionTimer) {
-        clearTimeout(connectionTimer);
+        connectionTimer();
         connectionTimer = undefined;
       }
       const identity = source.identity();
@@ -314,13 +339,9 @@ async function createClientState(
       };
       notify(accountListeners, accountState);
       const observed = frame.state;
-      connectionTimer = setTimeout(
-        () => {
-          if (!closed) expireConnection(observed);
-        },
-        Math.max(0, observed.expiresAt - Date.now()),
-      );
-      connectionTimer.unref?.();
+      connectionTimer = wakeAt(observed.expiresAt, () => {
+        if (!closed) expireConnection(observed);
+      });
       return;
     }
     if (frame.type === "presence") {
@@ -437,7 +458,7 @@ async function createClientState(
       {
         readonly value: PresenceUpdate;
         readonly expiresAt: number;
-        readonly timer: ReturnType<typeof setTimeout>;
+        readonly cancelExpiry: Unsubscribe;
       }
     >();
     const conversationListeners = new Set<(value: WhatsAppConversationState) => void>();
@@ -465,7 +486,7 @@ async function createClientState(
       const now = Date.now();
       for (const [subject, presence] of presences) {
         if (presence.expiresAt > now) continue;
-        clearTimeout(presence.timer);
+        presence.cancelExpiry();
         presences.delete(subject);
         changed = true;
       }
@@ -639,7 +660,7 @@ async function createClientState(
         if (conversationClosed) return;
         const subject = presence.participant ?? presence.chatId;
         const previous = presences.get(subject);
-        if (previous) clearTimeout(previous.timer);
+        previous?.cancelExpiry();
         if (presence.kind === "unavailable" || expiresAt <= Date.now()) {
           if (previous) {
             presences.delete(subject);
@@ -647,16 +668,15 @@ async function createClientState(
           }
           return;
         }
-        const timer = setTimeout(() => {
+        const cancelExpiry = wakeAt(expiresAt, () => {
           if (!conversationClosed && expirePresences()) publish();
-        }, expiresAt - Date.now());
-        timer.unref?.();
-        presences.set(subject, { value: presence, expiresAt, timer });
+        });
+        presences.set(subject, { value: presence, expiresAt, cancelExpiry });
         publish();
       },
       clearPresence() {
         if (conversationClosed || presences.size === 0) return;
-        for (const presence of presences.values()) clearTimeout(presence.timer);
+        for (const presence of presences.values()) presence.cancelExpiry();
         presences.clear();
         stage();
       },
@@ -672,7 +692,7 @@ async function createClientState(
         if (conversationClosed) return;
         conversationClosed = true;
         rejectClosed(new WhatsAppClientClosedError("conversation"));
-        for (const presence of presences.values()) clearTimeout(presence.timer);
+        for (const presence of presences.values()) presence.cancelExpiry();
         presences.clear();
         for (const unsubscribe of conversationSubscriptions) unsubscribe();
         conversations.delete(internal);

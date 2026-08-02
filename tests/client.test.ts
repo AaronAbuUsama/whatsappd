@@ -829,7 +829,7 @@ test("a lease-expired Client recovers page reads from its replacement mirror rev
   const oldDriver = createTestWhatsAppSession();
   const oldClient = await openClient(oldBackend, oldDriver, {
     holderId: "old",
-    leaseTtlMs: 20,
+    leaseTtlMs: 250,
   });
   let replacementClient: Awaited<ReturnType<typeof openClient>> | undefined;
   let alpha: Awaited<ReturnType<typeof oldClient.chats.open>> | undefined;
@@ -1869,6 +1869,37 @@ test("a connection frame that expires during hydration is never exposed as curre
   assert.equal(client.account.get().connection, undefined);
 
   await client.close();
+});
+
+test("live-state deadlines re-arm until the wall clock reaches expiry", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver, { freshnessMs: 10 });
+  const conversation = await client.chats.open(ALPHA);
+  const connectionExpired = new Promise<void>((resolve) => {
+    client.account.subscribe((state) => {
+      if (!state.connection) resolve();
+    });
+  });
+  const presenceExpired = new Promise<void>((resolve) => {
+    conversation.subscribe((state) => {
+      if (state.presence.length === 0) resolve();
+    });
+  });
+
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "typing" } });
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() - 50;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    Date.now = realNow;
+    await withDeadline(Promise.all([connectionExpired, presenceExpired]), 250);
+  } finally {
+    Date.now = realNow;
+    conversation.close();
+    await client.close();
+  }
 });
 
 test("identity and live state are sampled, replaced, expired, and never hydrated after restart", async () => {
