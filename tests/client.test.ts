@@ -857,9 +857,14 @@ test("a lease-expired Client recovers page reads from its replacement mirror rev
     assert.deepEqual(oldClient.account.get().connection?.status, { phase: "online" });
     assert.deepEqual(alpha.get().presence, [{ chatId: ALPHA, kind: "typing" }]);
     await withDeadline(renewalStarted);
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(1, oldLeaseExpiresAt - Date.now() + 2)),
+    Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)),
+      0,
+      0,
+      Math.max(1, oldLeaseExpiresAt - Date.now() + 2),
     );
+    assert.equal(oldClient.account.get().connection, undefined);
+    assert.deepEqual(alpha.get().presence, []);
 
     const replacementDriver = createTestWhatsAppSession();
     replacementClient = await openClient(shared, replacementDriver, {

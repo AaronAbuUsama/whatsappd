@@ -38,7 +38,9 @@ A live connection or presence observation cannot outlive the Account Lease
 that made it trustworthy. The Runtime caps each live frame's freshness at that
 lease's expiry, so a stalled renewal or replacement holder makes the old
 Client's live state unavailable without adding a second lease query to Client
-reads or recovery.
+reads or recovery. Timers publish that expiry promptly, but timer delivery is
+not the correctness boundary: account and conversation reads synchronously
+prune an elapsed deadline before returning state.
 
 ## One transition authority
 

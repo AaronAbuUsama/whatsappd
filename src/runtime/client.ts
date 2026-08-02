@@ -144,6 +144,19 @@ async function createClientState(
     for (const unsubscribe of clientSubscriptions) unsubscribe();
   };
 
+  const expireConnection = (observed = accountState.connection, notifyChange = true): boolean => {
+    if (!observed || accountState.connection !== observed || observed.expiresAt > Date.now())
+      return false;
+    if (connectionTimer) {
+      clearTimeout(connectionTimer);
+      connectionTimer = undefined;
+    }
+    const identity = source.identity();
+    accountState = { record: account, ...(identity && { identity }) };
+    if (notifyChange) notify(accountListeners, accountState);
+    return true;
+  };
+
   const replace = (snapshot: WhatsAppSnapshot): (() => void) => {
     const previousAccount = accountState;
     const previousChats = publishedChats;
@@ -239,7 +252,10 @@ async function createClientState(
     if (groupsChanged) publishedGroups = [...groups.values()].sort(byGroupId);
     for (const conversation of affectedConversations) conversation.stage();
     for (const conversation of affectedConversations) conversation.flush();
-    if (accountChanged) notify(accountListeners, accountState);
+    if (accountChanged) {
+      expireConnection(accountState.connection, false);
+      notify(accountListeners, accountState);
+    }
     if (chatsChanged) notify(chatListeners, publishedChats);
     if (contactsChanged) notify(contactListeners, publishedContacts);
     if (groupsChanged) notify(groupListeners, publishedGroups);
@@ -300,14 +316,7 @@ async function createClientState(
       const observed = frame.state;
       connectionTimer = setTimeout(
         () => {
-          if (closed || accountState.connection !== observed) return;
-          const currentIdentity = source.identity();
-          accountState = {
-            record: account,
-            ...(currentIdentity && { identity: currentIdentity }),
-          };
-          connectionTimer = undefined;
-          notify(accountListeners, accountState);
+          if (!closed) expireConnection(observed);
         },
         Math.max(0, observed.expiresAt - Date.now()),
       );
@@ -425,7 +434,11 @@ async function createClientState(
     const messages = new Map<string, MessageRecord>();
     const presences = new Map<
       string,
-      { readonly value: PresenceUpdate; readonly timer: ReturnType<typeof setTimeout> }
+      {
+        readonly value: PresenceUpdate;
+        readonly expiresAt: number;
+        readonly timer: ReturnType<typeof setTimeout>;
+      }
     >();
     const conversationListeners = new Set<(value: WhatsAppConversationState) => void>();
     const conversationSubscriptions = new Set<Unsubscribe>();
@@ -447,7 +460,19 @@ async function createClientState(
       hasOlderSaved: false,
     };
     let publishedState = state;
+    const expirePresences = (): boolean => {
+      let changed = false;
+      const now = Date.now();
+      for (const [subject, presence] of presences) {
+        if (presence.expiresAt > now) continue;
+        clearTimeout(presence.timer);
+        presences.delete(subject);
+        changed = true;
+      }
+      return changed;
+    };
     const stage = (next: Partial<WhatsAppConversationState> = {}): void => {
+      expirePresences();
       state = {
         ...state,
         ...next,
@@ -474,6 +499,7 @@ async function createClientState(
         chatId,
         get: () => {
           requireConversation();
+          if (expirePresences()) publish();
           return state;
         },
         subscribe: (listener, subscriptionOptions) => {
@@ -622,12 +648,10 @@ async function createClientState(
           return;
         }
         const timer = setTimeout(() => {
-          if (conversationClosed || presences.get(subject)?.timer !== timer) return;
-          presences.delete(subject);
-          publish();
+          if (!conversationClosed && expirePresences()) publish();
         }, expiresAt - Date.now());
         timer.unref?.();
-        presences.set(subject, { value: presence, timer });
+        presences.set(subject, { value: presence, expiresAt, timer });
         publish();
       },
       clearPresence() {
@@ -687,6 +711,7 @@ async function createClientState(
     account: {
       get: () => {
         requireClient();
+        expireConnection();
         return accountState;
       },
       subscribe: (listener, options) => {
