@@ -161,18 +161,16 @@ media reference and its `stored` or typed `failed` state. Read bytes explicitly
 with `backend.media.read({ accountId, ref })`. The package does not invent a
 filesystem URL or browser delivery policy.
 
-A watch begins with the current snapshot and its revision, then delivers each
-change as a patch whose `fromRevision` is the revision it applies to; a gap
-replaces state with a fresh snapshot rather than applying over it. Replaying a
-message the mirror already holds produces no patch.
+The Client owns snapshot hydration, revision recovery, and saved/live message
+merging. Applications read or subscribe to account, chat, contact, and group
+state, then open only the conversations they need. Runtime frames, patches,
+revisions, and database cursors stay inside the package.
 
-`messages()` and `watch()` are independent data surfaces; the client does not
-maintain an application collection or deduplicate them for you. A consumer
-merges message records on `(chatId, messageId)`. A backdated message can arrive
-as a patch _and_ appear in the older page that now contains it, and that
-identity-based upsert leaves one message. The cursor itself prevents skips or
-duplicates _between stored pages_. An exhausted cursor means nothing older is
-**stored** — never that WhatsApp has no more.
+An opened conversation deduplicates messages by `(chatId, messageId)` and keeps
+them newest-first while saved pages and live updates interleave. `loadOlder()`
+joins concurrent reads and merges the next saved page without exposing its
+cursor. When `hasOlderSaved` is false, it means only that no older messages are
+currently stored — never that WhatsApp has no more.
 
 Credentials, WhatsApp data, the account lease, and media bytes are four separate
 capabilities. `memoryBackend()` groups in-memory implementations of all four;
@@ -202,10 +200,9 @@ at is durable, so `lastSeenAt` on a contact and `lastConnectedAt` /
 `lastDisconnectedAt` on the account survive a restart as history — a timestamp
 never claims anyone is online now.
 
-A watch ends with a `closed` frame when the runtime stops consuming the account.
-It carries the `error` when the session died on its own, and none when it was
-stopped deliberately — so a runtime that failed is never mistaken for a quiet
-account.
+When the runtime stops consuming the account, `client.account` publishes
+`closed` state. An unexpected session failure includes its `error`; deliberate
+runtime shutdown does not, so failure is never mistaken for a quiet account.
 
 ## Deterministic application tests
 

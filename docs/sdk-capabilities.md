@@ -13,23 +13,27 @@ Audit versions: whatsappd `0.2.2`; Baileys `7.0.0-rc14`.
 
 Automated tests do not establish real-account or rendered behavior.
 
-## Target Client shape
+## Client shape
 
 Selected interface: `namespaces-plus-opened-conversation` (ADR-0023).
 
+### Current state seam
+
 ```ts
-const conversation = await client.chats.open(chatId, { signal });
-await conversation.send.text("Hello");
-await conversation.send.document(bytes, { fileName: "invoice.pdf", mimetype: "application/pdf" });
-await conversation.messages.react(messageId, "👍");
-await conversation.markRead();
+const client = await createWhatsAppClient(runtime);
+client.account.subscribe(renderAccount, { signal });
+client.chats.list();
+client.contacts.list();
+client.groups.list();
+
+const conversation = await client.chats.open(chatId, { pageSize: 25 });
+conversation.subscribe(renderConversation, { signal });
 await conversation.loadOlder(); // saved database rows only
-await conversation.requestPhoneHistory(); // distinct phone request
 conversation.close();
 await client.close();
 ```
 
-### Namespaces
+### Planned namespace composition
 
 | Namespace | Scope |
 | --- | --- |
@@ -44,9 +48,11 @@ await client.close();
 | `operations` | durable side-effect receipts and outcomes |
 | `media` | authorized reads of injected durable media |
 
-Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `send`, `messages`, `markRead`, `typing`, `recording`.
+Current opened conversation: `get`, `subscribe`, `loadOlder`, `close`.
+Phone-history requests, sending, message actions, read state, typing, and
+recording are separate planned capabilities.
 
-### Operation semantics
+### Planned operation semantics
 
 - Durable side effects accept an optional idempotency key and return an account-scoped operation receipt.
 - Receipts distinguish queued, claimed, executing, succeeded, failed, and outcome_unknown.
@@ -63,12 +69,12 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 
 | ID | Area | Caller outcome | Baileys | whatsappd now | Current note | Planned friendly interface | Planning note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ACC-01` | accounts | Observe disconnected, connecting, pairing, authenticated, online, backoff, logged-out, and suspended states. | available: `available-in-baileys` (`B:events connection.update`) | implemented | Current whatsappd implements this capability. | `account.state`, `account.subscribe`; `useAccount`, `useConnection` | Volatile live state plus durable observed instants; no public terminal-state observation recorded; execution: #71; release: required for 0.3 |
+| `ACC-01` | accounts | Observe disconnected, connecting, pairing, authenticated, online, backoff, logged-out, and suspended states. | available: `available-in-baileys` (`B:events connection.update`) | implemented | Current whatsappd implements this capability. | `account.get().connection`, `account.subscribe`; `useAccount`, `useConnection` | Volatile live state plus durable observed instants; Client closure is public; execution: #71; release: required for 0.3 |
 | `ACC-02` | accounts | Pair by QR and observe expiring challenge state. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `account.pair({ method: "qr" })`; `usePairing` | Commands + protected challenge + trusted worker; #23, 0.3 target; release: required for 0.3 |
 | `ACC-03` | accounts | Pair by validated phone number and pairing code. | available: `available-in-baileys` (`requestPairingCode`) | implemented | Current whatsappd implements this capability. | `account.pair({ method: "code", phoneNumber })`; `usePairing` | Commands + protected challenge; #23, 0.3 target; release: required for 0.3 |
 | `ACC-04` | accounts | Unlink WhatsApp while retaining saved chats and other accounts. | available: `available-in-baileys` (`logout`) | not-implemented | Credential clear exists but no authorized lifecycle operation | `account.unlink()`; `useUnlink` only if shared workflow emerges | Commands + credentials; trusted worker #23, required for 0.3 |
 | `ACC-05` | accounts | Start and stop the application-owned live worker. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `runtime.start/stop`; `client.close` releases Client resources | Credentials + lease + data + media; shipped lower-level; execution: #64; release: required for 0.3 release safety |
-| `ACC-06` | accounts | Read the connected account identity. | available: `available-in-baileys` (`socket.user`) | implemented | Current whatsappd implements this capability. | `account.identity()` / `useAccount` | Live trusted worker; shipped lower-level; execution: #71; release: required for 0.3 |
+| `ACC-06` | accounts | Read the connected account identity. | available: `available-in-baileys` (`socket.user`) | implemented | Current whatsappd implements this capability. | `account.get().identity` / `useAccount` | Live trusted worker; execution: #71; release: required for 0.3 |
 | `ACC-07` | accounts | Read a profile picture URL. | available: `available-in-baileys` (`profilePictureUrl`) | implemented | Current whatsappd implements this capability. | `account.profile.picture(jid)` | Friendly account operation #73, post-0.3 |
 | `ACC-08` | accounts | Set or remove a profile picture. | available: `available-in-baileys` (`updateProfilePicture`, `removeProfilePicture`) | not-implemented | `available-in-baileys` | `account.profile.setPicture/removePicture` | Durable command; deferred; execution: #73; release: post-0.3 |
 | `ACC-09` | accounts | Read or update profile about/status and display name. | available: `available-in-baileys` (`fetchStatus`, `updateProfileStatus`, `updateProfileName`) | not-implemented | `available-in-baileys` | `account.profile.about/setAbout/setName` | Durable command for writes; deferred; execution: #73; release: post-0.3 |
@@ -80,8 +86,8 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `ACC-15` | accounts | Access raw credentials, signal keys, pairing secrets, prekeys, or crypto operations. | available: `available-in-baileys` | internal | `intentionally-internal` | No friendly Client operation | Credential/protected-challenge capabilities only; never consumer data |
 | `CHAT-01` | chats | List current chat summaries. | available: `available-in-baileys` (`B:events chats.*`, history sync) | implemented | Current whatsappd implements this capability. | `chats.list()`; `useChats` | Data mirror; friendly Client #71, required for 0.3 |
 | `CHAT-02` | chats | Read one current chat. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `chats.get(chatId)`; `useChat` | Data mirror; friendly Client #71, required for 0.3 |
-| `CHAT-03` | chats | Open one synchronized conversation. | not-applicable: n/a product composition | not-implemented | Consumers currently combine `watch()` and `messages()` themselves | `chats.open(chatId)`; `useConversation` | Client-owned state per ADR-0023; #71, required for 0.3 |
-| `CHAT-04` | chats | Page older messages already saved in the backend. | not-applicable: n/a storage read | implemented | Current whatsappd implements this capability. | `conversation.loadOlder()`; `useConversation` | Data store shipped low-level; friendly Client #71 required for 0.3 |
+| `CHAT-03` | chats | Open one synchronized conversation. | not-applicable: n/a product composition | implemented | Current whatsappd implements this capability. | `chats.open(chatId)`; `useConversation` | Client-owned state per ADR-0023; #71, required for 0.3 |
+| `CHAT-04` | chats | Page older messages already saved in the backend. | not-applicable: n/a storage read | implemented | Current whatsappd implements this capability. | `conversation.loadOlder()`; `useConversation` | Data store and friendly Client shipped through #71; required for 0.3 |
 | `CHAT-05` | chats | Ask the phone for older messages and receive a submission receipt only. | partial: `partial-or-unstable` (`fetchMessageHistory`); behavior is unresolved (#18/#50) | implemented | Current whatsappd implements this capability. | `conversation.requestPhoneHistory()`; `usePhoneHistoryRequest` if UI needs shared status | Manual durable operation #22 required for 0.3; automatic scheduler #25/#50 post-0.3 |
 | `CHAT-06` | chats | Automatically and fairly backfill every eligible chat without claiming completeness. | research-required: `research-required` because responses were not observed | not-implemented | `deferred` | `account.history.state/pause/resume`; `useHistoryBackfill` | Durable progress + commands #25/#50, research-gated post-0.3 |
 | `CHAT-07` | chats | Observe initial, recent, full, on-demand, and unlabeled conversation-sync batches. | available: `available-in-baileys` (`messaging-history.set/status`) | implemented | Current whatsappd implements this capability. | Internal Client ingestion, not a UI event | Accepted data; no on-demand integration observation recorded; execution: #71; release: required for 0.3 |
@@ -95,18 +101,18 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `CHAT-15` | chats | Treat saved paging as proof that all phone history is loaded. | unsupported: `unsupported-upstream` | unsupported | `unsupported-upstream`: explicitly prohibited by ADR-0010 and #18 | No operation | No backend can infer this from silence |
 | `CHAT-16` | chats | Mark a chat unread. | available: `available-in-baileys` (`chatModify markRead:false`) | partial | `available-in-baileys`; current `markRead` only marks real references read | `chats.markUnread(chatId)` | Durable command + mirror; deferred; execution: #74; release: post-0.3 |
 | `CHAT-17` | chats | Observe upstream chat upserts, updates, and deletions. | available: `available-in-baileys` (`B:events chats.upsert/update/delete`) | partial | `available-in-baileys`; the current adapter derives chats from messages/history/groups | Transparent `chats` state | Data projection with scoped deletion; deferred; execution: #74; release: post-0.3 |
-| `MSG-IN-01` | inbound-messages | Receive text, including extended text. | available: `available-in-baileys` (`B:messages`) | implemented | Current whatsappd implements this capability. | `conversation.state.messages`; `useConversation` | Data mirror; shipped |
+| `MSG-IN-01` | inbound-messages | Receive text, including extended text. | available: `available-in-baileys` (`B:messages`) | implemented | Current whatsappd implements this capability. | `conversation.get().messages`; `useConversation` | Data mirror; shipped |
 | `MSG-IN-02` | inbound-messages | Receive image metadata and downloadable bytes. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same; attachment render slot may expose metadata/actions | Data + injected media; shipped |
 | `MSG-IN-03` | inbound-messages | Receive video or GIF metadata and bytes. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same attachment behavior | Data + injected media; capture shipped, no process-replacement byte observation |
 | `MSG-IN-04` | inbound-messages | Receive audio or voice-note metadata and bytes. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same attachment behavior | Data + injected media; shipped |
 | `MSG-IN-05` | inbound-messages | Receive document metadata and bytes. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same attachment behavior | Data + injected media; capture shipped, no process-replacement byte observation |
 | `MSG-IN-06` | inbound-messages | Receive sticker metadata and bytes. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same attachment behavior | Data + injected media; capture shipped, no process-replacement byte observation |
-| `MSG-IN-07` | inbound-messages | Receive static location. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `conversation.state.messages` | Current Mirror projection #70, required for 0.3 |
+| `MSG-IN-07` | inbound-messages | Receive static location. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `conversation.get().messages` | Current Mirror projection #70, required for 0.3 |
 | `MSG-IN-08` | inbound-messages | Receive one or many contact cards. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same; contact-card render slot only if behavior repeats | Current Mirror projection #70, required for 0.3 |
 | `MSG-IN-09` | inbound-messages | Receive poll creation. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same; poll module only with shared voting behavior | Current Mirror projection #70, required for 0.3 |
 | `MSG-IN-10` | inbound-messages | Preserve view-once, ephemeral, and edited wrappers as flags. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message metadata | Durable message projection #70, required for 0.3 |
 | `MSG-IN-11` | inbound-messages | Preserve quotes and mentions. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message metadata | Durable message projection #70, required for 0.3 |
-| `MSG-IN-12` | inbound-messages | Receive live location. | available: `available-in-baileys` (`liveLocationMessage`) | partial | The generic unsupported fallback preserves the raw live-location type, but no normalized live-location contract exists. | `conversation.state.messages` | Modeling and data projection; deferred; execution: #74; release: post-0.3 |
+| `MSG-IN-12` | inbound-messages | Receive live location. | available: `available-in-baileys` (`liveLocationMessage`) | partial | The generic unsupported fallback preserves the raw live-location type, but no normalized live-location contract exists. | `conversation.get().messages` | Modeling and data projection; deferred; execution: #74; release: post-0.3 |
 | `MSG-IN-13` | inbound-messages | Receive buttons, list, template, interactive, or native-flow replies/messages. | available: `available-in-baileys` (`B:messages`) | partial | The generic unsupported fallback preserves these raw message types, but no normalized interactive reply/message contracts exist. | Message union after upstream-contract proof | Modeling/data; deferred; execution: #74; release: post-0.3 |
 | `MSG-IN-14` | inbound-messages | Receive product, order, payment, or invoice messages. | available: `available-in-baileys` | partial | The generic unsupported fallback preserves these raw message types, but no normalized commerce message contracts exist. | `business` plus conversation message model | Business/data; deferred; execution: #74; release: post-0.3 |
 | `MSG-IN-15` | inbound-messages | Receive group or newsletter invite messages. | available: `available-in-baileys` | partial | The generic unsupported fallback preserves these raw invite types, but no normalized invite contracts or actions exist. | Conversation message plus target domain action | Data; deferred; execution: #74; release: post-0.3 |
@@ -142,7 +148,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `MSG-ACT-09` | outbound-messages | Observe key-scoped or whole-chat message deletion events. | available: `available-in-baileys` (`B:events messages.delete`) | partial | `available-in-baileys`; current socket does not subscribe and no deletion projection exists | Transparent conversation state | Explicit deletion/tombstone scope; deferred; execution: #74; release: post-0.3 |
 | `STATUS-01` | status-messages | Send a text or media WhatsApp status to an explicit audience. | available: `available-in-baileys` (`broadcast`, `statusJidList`, background/font options) | partial | `available-in-baileys`; current Session send has no status audience/options | `account.statuses.publish` | Durable command/media; deferred; execution: #74; release: post-0.3 |
 | `STATUS-02` | status-messages | Observe and page status messages as a distinct expiring product surface. | available: `available-in-baileys` through status broadcast messages | partial | `available-in-baileys`; the current catch-all is not a distinct status-message implementation | `account.statuses.list/subscribe`; hook TBD | Data/expiry semantics; deferred; execution: #74; release: post-0.3 |
-| `LIVE-01` | presence | Observe typing. | available: `available-in-baileys` (`presence.update`) | implemented | Current whatsappd implements this capability. | `conversation.state.presence`; `usePresence` | Volatile Client state; shipped low-level; execution: #71; release: required for 0.3 |
+| `LIVE-01` | presence | Observe typing. | available: `available-in-baileys` (`presence.update`) | implemented | Current whatsappd implements this capability. | `conversation.get().presence`; `usePresence` | Volatile Client state; execution: #71; release: required for 0.3 |
 | `LIVE-02` | presence | Observe recording. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same | Volatile Client state; execution: #71; release: required for 0.3 |
 | `LIVE-03` | presence | Observe available, idle, and unavailable. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Same | Volatile state; only delivered last-seen instants are durable; execution: #71; release: required for 0.3 |
 | `LIVE-04` | presence | Show or clear this account's typing indicator. | available: `available-in-baileys` (`sendPresenceUpdate composing/paused`) | implemented | Current whatsappd implements this capability. | `conversation.typing.start/stop` | Durable command only if product needs result; #22 owns typing; release: required for 0.3 |
@@ -152,7 +158,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `CALL-02` | presence | Reject an incoming call. | available: `available-in-baileys` (`rejectCall`) | not-implemented | `available-in-baileys` | `calls.reject(callId)` | Durable command with ambiguity semantics; deferred; execution: #79; release: post-0.3 |
 | `CALL-03` | presence | Create an audio or video call link. | available: `available-in-baileys` (`createCallLink`) | not-implemented | `available-in-baileys` | `calls.createLink` | Durable command; deferred; execution: #79; release: post-0.3 |
 | `CALL-04` | presence | Place or answer a WhatsApp call through a stable public socket API. | unsupported: `unsupported-upstream` in the pinned public high-level socket | unsupported | `unsupported-upstream` | No operation | Revisit only after upstream contract exists |
-| `CONTACT-01` | contacts | Observe synced WhatsApp contact upserts/updates. | available: `available-in-baileys` (`contacts.upsert/update`) | implemented | Current whatsappd implements this capability. | `contacts.list/get/subscribe`; `useContacts` | Data mirror; shipped low-level; execution: #71; release: required for 0.3 |
+| `CONTACT-01` | contacts | Observe synced WhatsApp contact upserts/updates. | available: `available-in-baileys` (`contacts.upsert/update`) | implemented | Current whatsappd implements this capability. | `contacts.list/get/subscribe`; `useContacts` | Data mirror and friendly Client shipped through #71; release: required for 0.3 |
 | `CONTACT-02` | contacts | Consolidate PN and LID forms only when WhatsApp delivers equivalence. | available: `available-in-baileys` through delivered addressing data | implemented | Current whatsappd implements this capability. | Transparent in `contacts` and message sender lookup | Data mirror; shipped; execution: #71; release: required for 0.3 |
 | `CONTACT-03` | contacts | Look up whether phone numbers are registered on WhatsApp. | available: `available-in-baileys` (`onWhatsApp`) | not-implemented | `available-in-baileys` | `contacts.lookupRegistration(numbers)` | Live trusted worker; deferred; execution: #75; release: post-0.3 |
 | `CONTACT-04` | contacts | Save or edit a contact in WhatsApp's synced contact list. | available: `available-in-baileys` (`addOrEditContact`) | not-implemented | `available-in-baileys` | `contacts.save({ address, name })` | Durable command; deferred; execution: #75; release: post-0.3 |
@@ -161,7 +167,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `CONTACT-07` | contacts | Create or update an operating-system contact. | unsupported: `unsupported-upstream` | application-owned | `application-owned` | No whatsappd Client operation | OS permission/API owned by host application |
 | `CONTACT-08` | contacts | Merge WhatsApp addresses into a CRM/person/address-book identity. | not-applicable: n/a | application-owned | `application-owned`; ADR-0001 forbids inferred persons | Host repository, not `client.contacts` | Application database and policy |
 | `CONTACT-09` | contacts | Observe a standalone LID-to-PN mapping update. | available: `available-in-baileys` (`B:events lid-mapping.update`) | partial | `available-in-baileys`; current aliases arise only from contact/message evidence | Transparent contact alias resolution | Data projection; deferred; execution: #75; release: post-0.3 |
-| `GROUP-01` | groups | Read normalized metadata and observe subject, add, remove, promote, demote, and modify changes. | available: `available-in-baileys` (`groups.*`, `group-participants.update`) | implemented | Current whatsappd implements this capability. | `groups.get/subscribe`; `useGroup` | Data mirror; exact adapter coverage lives in the atomic claims; execution: #71; release: required for 0.3 |
+| `GROUP-01` | groups | Read normalized metadata and observe subject, add, remove, promote, demote, and modify changes. | available: `available-in-baileys` (`groups.*`, `group-participants.update`) | implemented | Current whatsappd implements this capability. | `groups.list/get/subscribe`; `useGroup` | Data mirror and friendly Client shipped through #71; exact adapter coverage lives in the atomic claims; release: required for 0.3 |
 | `GROUP-02` | groups | List participating groups. | available: `available-in-baileys` (`groupFetchAllParticipating`) | not-implemented | `available-in-baileys`; snapshots list groups already observed | `groups.list()` | Data mirror/live refresh; deferred; execution: #76; release: post-0.3 |
 | `GROUP-03` | groups | Create a group. | available: `available-in-baileys` (`groupCreate`) | not-implemented | `available-in-baileys` | `groups.create` | Durable command; deferred; execution: #76; release: post-0.3 |
 | `GROUP-04` | groups | Leave a group. | available: `available-in-baileys` (`groupLeave`) | not-implemented | `available-in-baileys` | `groups.leave` | Durable command; deferred; execution: #76; release: post-0.3 |
@@ -226,7 +232,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `TEST-01` | durability | Construct a deterministic text message with correct sender semantics. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Test-only subpath | Shipped |
 | `TEST-02` | durability | Emit any normalized current session event through an awaited deterministic subscription. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Test-only driver | Shipped |
 | `TEST-03` | durability | Record sends, reads, typing, and history submissions through the Session seam. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Test-only driver | Shipped |
-| `TEST-04` | durability | Construct every inbound message family and drive the friendly Client/operation lifecycle deterministically. | not-applicable: n/a | partial | The testing subpath constructs text and drives the low-level Session; other message constructors and the friendly Client/operation lifecycle are absent. | Extend the testing subpath in the same vertical issue as each capability | No separate verification harness; extend vertically in #70/#71/#22/#23; release: required for 0.3 |
+| `TEST-04` | durability | Construct every inbound message family and drive the friendly Client/operation lifecycle deterministically. | not-applicable: n/a | partial | The testing subpath constructs text and drives the low-level Session; repository tests now drive the friendly Client lifecycle, while other message constructors and operation lifecycles remain absent. | Extend the testing subpath in the same vertical issue as each capability | No separate verification harness; extend vertically in #70/#71/#22/#23; release: required for 0.3 |
 | `OBS-01` | observability | Count or time connection transitions, inbound message/update/contact/group/presence, sends, and reconnects without parsing logs. | not-applicable: n/a product seam | implemented | Current whatsappd implements this capability. | Keep a composition-level metrics hook; do not put telemetry in React | Application-owned metrics sink; shipped |
 | `OBS-02` | observability | Prevent a failing metrics sink from disrupting WhatsApp processing. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Transparent | Application-owned sink; shipped |
 | `OBS-03` | observability | Collect product analytics, traces, alerts, or message-content search. | not-applicable: n/a | application-owned | `application-owned` | No required Client namespace | Host observability/search systems; never ingest private content by default |

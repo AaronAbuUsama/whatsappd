@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { test } from "./_expect.ts";
 
 import {
@@ -192,6 +193,14 @@ test("one committed message patch publishes one coherent conversation state", as
       ...(state.chat && { lastMessageAt: state.chat.lastMessageAt }),
     });
   });
+  const crossRead: typeof published = [];
+  client.chats.subscribe(() => {
+    const state = conversation.get();
+    crossRead.push({
+      messages: state.messages.map((message) => message.messageId),
+      ...(state.chat && { lastMessageAt: state.chat.lastMessageAt }),
+    });
+  });
 
   await driver.emit({
     type: "message",
@@ -199,6 +208,7 @@ test("one committed message patch publishes one coherent conversation state", as
   });
 
   assert.deepEqual(published, [{ messages: ["m1"], lastMessageAt: 100 }]);
+  assert.deepEqual(crossRead, [{ messages: ["m1"], lastMessageAt: 100 }]);
 
   conversation.close();
   await client.close();
@@ -910,6 +920,15 @@ test("close and AbortSignal cancel Client resources without stopping the Runtime
   });
   const client = await createWhatsAppClient(runtime);
   const conversation = await client.chats.open(ALPHA, { pageSize: 1 });
+  const clientLifetime = new AbortController();
+  client.account.subscribe(() => {}, { signal: clientLifetime.signal });
+  client.chats.subscribe(() => {}, { signal: clientLifetime.signal });
+  client.contacts.subscribe(() => {}, { signal: clientLifetime.signal });
+  client.groups.subscribe(() => {}, { signal: clientLifetime.signal });
+  assert.equal(getEventListeners(clientLifetime.signal, "abort").length, 4);
+  const conversationLifetime = new AbortController();
+  conversation.subscribe(() => {}, { signal: conversationLifetime.signal });
+  assert.equal(getEventListeners(conversationLifetime.signal, "abort").length, 1);
 
   const controller = new AbortController();
   let notified = 0;
@@ -929,12 +948,14 @@ test("close and AbortSignal cancel Client resources without stopping the Runtime
   const loading = conversation.loadOlder();
   await olderReadStarted;
   conversation.close();
+  assert.equal(getEventListeners(conversationLifetime.signal, "abort").length, 0);
   await assert.rejects(loading, WhatsAppClientClosedError);
   assert.throws(() => conversation.get(), WhatsAppClientClosedError);
   assert.throws(() => conversation.subscribe(() => {}), WhatsAppClientClosedError);
   await assert.rejects(conversation.loadOlder(), WhatsAppClientClosedError);
 
   await client.close();
+  assert.equal(getEventListeners(clientLifetime.signal, "abort").length, 0);
   assert.throws(() => client.chats.list(), WhatsAppClientClosedError);
   assert.throws(() => client.contacts.get(ALPHA), WhatsAppClientClosedError);
   await assert.rejects(client.chats.open(ALPHA), WhatsAppClientClosedError);
