@@ -1,9 +1,9 @@
 # Execution state — WhatsApp application substrate
 
-Last updated: 2026-08-01. Issue #67 is the sole claimed planning lane. Product
-dispatch is held while it establishes the capability source of truth. Issue #68
-then replaces the stale execution graph and presents the repaired frontier for
-an owner release checkpoint.
+Last updated: 2026-08-02. The capability catalogue merged at
+`d7923f6cf93c810f8ea660089dd1edbd96523a81`. Issue #68 is the sole claimed
+planning lane and owns the GitHub execution-graph repair. Product work remains
+held until #68 merges; the resulting frontier is #63, #64, and #70.
 
 ## Where everything lives
 
@@ -11,18 +11,17 @@ an owner release checkpoint.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0024`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0025`                                   |
 | Published build specification    | GitHub issue #15                                           |
 | Capability source of truth       | `docs/sdk-capabilities.json`, rendered as Markdown         |
 | Execution-graph repair           | GitHub issue #68                                           |
-| Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
+| Tracer-bullet ticket graph       | GitHub issues linked from #15 and #68                      |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
 | Shipped product path             | `src/session.ts`, `src/runtime/`, and root exports         |
 
 The architecture document preserves the original target and proof boundaries.
-Accepted ADRs and the capability catalogue supersede it where the implementation
-and later owner decisions moved on. Issue #68, not the historical slice list,
-will become the next executable dependency graph.
+Accepted ADRs, the capability catalogue, and the current #15 execution receipt
+supersede it where implementation and owner decisions moved on.
 
 ## Accepted decision ledger
 
@@ -57,6 +56,7 @@ will become the next executable dependency graph.
 | Changesets releases the package family as a fixed lockstep group                             | Spec           |
 | Framework-independent Client owns WhatsApp state; React binds it; renderers own presentation | 0023           |
 | Every ticket declares TDD seam, acceptance, proof rung, and database-oracle boundary         | 0017           |
+| Pre-acceptance process-death replay is unknown and carries no lossless-delivery claim        | 0025           |
 | Connection and presence remain ephemeral; remote connection truth expires with its lease     | PR #12 review  |
 | Conversation-sync deletion requires explicit, scope-bounded replacement metadata             | PR #12 review  |
 | Executing command claims expire to terminal `outcome_unknown`, never automatic retry         | PR #12 review  |
@@ -120,14 +120,17 @@ The build graph must block dependent claims on runnable proof of:
 1. Baileys on-demand history request/result correlation, completion, empty or
    exhausted behavior, boundary inclusivity, multi-chunk ordering, counts above
    50, and phone-offline/error behavior.
-2. The remaining pre-acceptance crash boundary between protocol delivery and
-   the first durable backend transaction.
-3. Contiguous patch gap detection and fresh-snapshot replacement through a real
+2. Contiguous patch gap detection and fresh-snapshot replacement through a real
    backend subscription.
-4. Lease acquire/renew/loss behavior under concurrent processes for each
+3. Lease acquire/renew/loss behavior under concurrent processes for each
    backend, including PocketBase server transactions and fencing tokens.
-5. Immediate media capture, restart durability, failed-capture visibility, and
-   blob-orphan cleanup.
+4. Restartable background media capture and blob-orphan cleanup when #72 is
+   implemented. Immediate capture, restart-safe file bytes, and failed-capture
+   visibility already ship and remain the 0.3 contract.
+
+The pre-acceptance process-death boundary is deliberately not a proof gate.
+ADR-0025 records the unknown replay/loss window and the absence of any lossless,
+at-least-once, or exactly-once claim; #19 remains closed `wontfix`.
 
 Until the first prototype proves otherwise, UI language may say “no older saved
 messages” and “request sent”; it may not say “all history loaded”, “no more
@@ -135,34 +138,53 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Known implementation inputs
 
-- #61 closes #49's residual session defects, including credential-clear
-  failures, detached starts, startup-stop state, and falsy-safe precedence.
-- Accepted updates are retained and page by source `seq`; their receipt/edit/
-  revocation current-mirror projection remains a later product slice.
+- #61 closed #49's residual session defects. #64 owns the remaining synchronous
+  custom-session teardown boundary before 0.3.
+- Accepted updates are retained and page by source `seq`; #70 owns complete
+  normalized message/update projection before the friendly Client.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
+- `fileStore()` is a pre-0.3 credential adapter. #63 removes it from the hard-cut
+  package without an importer, migration layer, deprecation wrapper, or alias.
 - The Ambient Agent v3 PocketBase spike remains fixture evidence on the old
   package. Production integration still waits for a published release with
   durable media and a persistent runtime backend.
 
 ## Next step
 
+The owner locked Postgres, S3-compatible media, and dependent browser delivery
+to post-0.3 and authorized #68 to establish the following local-first graph:
+
 ```text
-#67 capability catalogue
-  -> #68 execution-graph reconciliation
-       -> owner release checkpoint
-            -> repaired product frontier
+#68 ─┬→ #63 remove file credentials ───────────────┐
+     ├→ #64 Runtime teardown ───────────┐          │
+     └→ #70 projection → #71 Client → #22 ─→ #23 ─┴→ #39 composition
+                                                    ↓
+                                 #30 React/OpenTUI → #40 → #41
 ```
 
-Only #67 is claimed. Issues #30 and #39 are frozen under `needs-triage`; #68 is
-blocked until the catalogue merges. No product implementation is dispatchable
-from this file before the owner accepts #68's replacement graph.
+#23 has two direct blockers (#22 and #64). After #68 closes, the executable
+frontier is **#63 ∥ #64 ∥ #70**.
+
+Post-0.3 and research lanes do not block that spine:
+
+```text
+#50 real Android history research ─┐
+#41 published 0.3 ─────────────────┴─→ #25 automatic history
+#41 ─→ #72 restartable media jobs
+#41 ─→ #73 … #80 domain expansion
+#41 ─→ #81 Postgres ─┐
+#41 ─→ #82 S3 ───────┴─→ #83 browser delivery → #84 browser proof
+```
+
+PocketBase (#26–#32) and Convex (#33–#37) remain deferred until a concrete
+consumer is selected. `CHAT-15` and `CALL-04` remain intentionally unsupported;
+`ACC-14`, `CONTACT-07`–`CONTACT-08`, `MEDIA-06`–`MEDIA-07`, `MEDIA-09`, and
+`OBS-03` retain their catalogue application-owned boundaries.
 
 ## Resuming in a new session
 
-Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0024,
-specification issue #15 **including its comments** — the 2026-07-31 re-plan
-and the 2026-08-01 #67/#68 planning receipts supersede earlier frontier receipts
-— then read #67 and #68. Do not resume #61 or its conditionally-next tickets.
-`src/runtime/` is real product code. Reopening an accepted decision requires an
-explicit superseding ADR.
+Read this file, the capability catalogue, `CONTEXT.md`, relevant ADRs, and the
+latest execution receipt on #15, then open the frontier issue bodies. Do not
+reconstruct blockers from older #15 comments. `src/runtime/` is real product
+code; reopening an accepted decision requires an explicit superseding ADR.

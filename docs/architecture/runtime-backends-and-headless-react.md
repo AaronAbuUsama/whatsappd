@@ -549,10 +549,11 @@ visible degraded state; exhaustion stops the socket rather than skipping the
 event. Retries and degraded state do not exist yet: today the first failure
 stops the runtime with the original error, and a `closed` frame carries it to
 every watcher. Retrying cannot be added before an observation identity exists to
-tell a retry from a genuine repeat delivery (ADR-0018). Once accepted, source batches survive process replacement and backend
-consumers resume from their own revision cursor. Fault injection must still
-define the narrow pre-acceptance boundary where the protocol has delivered an
-event but no backend transaction has begun.
+tell a retry from a genuine repeat delivery (ADR-0018). Once accepted, source
+batches survive process replacement and backend consumers resume from their own
+revision cursor. ADR-0025 accepts the narrow pre-acceptance boundary—after
+protocol delivery but before the backend transaction—as unproven for 0.3. The
+Runtime makes no lossless-delivery or replay claim there.
 
 ## Canonical durable mirror
 
@@ -1692,7 +1693,8 @@ Not yet proven:
 
 - the target runtime, awaited typed subscription, and deterministic test driver;
 - durable accepted-source/current projection transactions;
-- process-crash behavior between protocol delivery and local acceptance;
+- process-crash behavior between protocol delivery and local acceptance
+  (an explicit non-claim under ADR-0025, not a 0.3 release gate);
 - on-demand history correlation, completion, exhaustion, and offline behavior;
 - any production PocketBase or Convex adapter;
 - the canonical mirror schema under real replay and restart;
