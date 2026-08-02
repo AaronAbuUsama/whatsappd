@@ -21,14 +21,16 @@ import type {
 } from "./contracts.ts";
 import { getWhatsAppClientSource, type WhatsAppRuntime } from "./runtime.ts";
 
+const compareId = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
 const chatOrder = (left: ChatRecord, right: ChatRecord): number =>
-  right.lastMessageAt - left.lastMessageAt || left.chatId.localeCompare(right.chatId);
+  right.lastMessageAt - left.lastMessageAt || compareId(left.chatId, right.chatId);
 const byContactId = (left: ContactRecord, right: ContactRecord): number =>
-  left.contactId.localeCompare(right.contactId);
+  compareId(left.contactId, right.contactId);
 const byGroupId = (left: GroupRecord, right: GroupRecord): number =>
-  left.groupId.localeCompare(right.groupId);
+  compareId(left.groupId, right.groupId);
 const messageOrder = (left: MessageRecord, right: MessageRecord): number =>
-  right.timestamp - left.timestamp || right.messageId.localeCompare(left.messageId);
+  right.timestamp - left.timestamp || compareId(right.messageId, left.messageId);
 
 interface OpenConversation {
   readonly public: WhatsAppConversation;
@@ -37,7 +39,7 @@ interface OpenConversation {
   replaceWindow(): Promise<void>;
   receive(message: MessageRecord): void;
   receivePresence(presence: PresenceUpdate, expiresAt: number): void;
-  refreshChat(): void;
+  commit(): void;
   close(): void;
 }
 
@@ -61,11 +63,13 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   let publishedGroups: readonly GroupRecord[] = [];
   let hydrating = true;
   let closed = false;
+  let closeCause: unknown;
   let recovering: Promise<void> | undefined;
   let connectionTimer: ReturnType<typeof setTimeout> | undefined;
+  let off: Unsubscribe = () => {};
 
   const requireClient = (): void => {
-    if (closed) throw new WhatsAppClientClosedError("Client");
+    if (closed) throw new WhatsAppClientClosedError("Client", closeCause);
   };
 
   const notify = <Value>(listeners: Set<(value: Value) => void>, value: Value): void => {
@@ -78,6 +82,23 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         });
       }
     }
+  };
+
+  const closeClient = (failure?: { readonly error: unknown }): void => {
+    if (closed) return;
+    closed = true;
+    closeCause = failure?.error;
+    if (failure) {
+      accountState = { record: account, closed: { error: failure.error } };
+      notify(accountListeners, accountState);
+    }
+    off();
+    if (connectionTimer) clearTimeout(connectionTimer);
+    for (const conversation of conversations) conversation.close();
+    accountListeners.clear();
+    chatListeners.clear();
+    contactListeners.clear();
+    groupListeners.clear();
   };
 
   const replace = (snapshot: WhatsAppSnapshot, publishChanges = false): void => {
@@ -130,6 +151,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     let chatsChanged = false;
     let contactsChanged = false;
     let groupsChanged = false;
+    const affectedConversations = new Set<OpenConversation>();
     for (const record of patch.upserts) {
       switch (record.type) {
         case "account":
@@ -140,6 +162,9 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         case "chat":
           chats.set(record.chat.chatId, record.chat);
           chatsChanged = true;
+          for (const conversation of conversations)
+            if (conversation.public.chatId === record.chat.chatId)
+              affectedConversations.add(conversation);
           break;
         case "contact":
           contacts.set(record.contact.contactId, record.contact);
@@ -151,8 +176,10 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
           break;
         case "message":
           for (const conversation of conversations)
-            if (conversation.public.chatId === record.message.chatId)
+            if (conversation.public.chatId === record.message.chatId) {
               conversation.receive(record.message);
+              affectedConversations.add(conversation);
+            }
           break;
       }
     }
@@ -165,7 +192,6 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     if (chatsChanged) {
       publishedChats = [...chats.values()].sort(chatOrder);
       notify(chatListeners, publishedChats);
-      for (const conversation of conversations) conversation.refreshChat();
     }
     if (contactsChanged) {
       rebuildAliases();
@@ -176,6 +202,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       publishedGroups = [...groups.values()].sort(byGroupId);
       notify(groupListeners, publishedGroups);
     }
+    for (const conversation of affectedConversations) conversation.commit();
   };
 
   const consume = (frame: WhatsAppClientFrame): void => {
@@ -185,10 +212,21 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       return;
     }
     if (frame.type === "connection") {
-      if (connectionTimer) clearTimeout(connectionTimer);
+      if (connectionTimer) {
+        clearTimeout(connectionTimer);
+        connectionTimer = undefined;
+      }
       const identity = source.identity();
+      if (frame.state.expiresAt <= Date.now()) {
+        const next = { record: account, ...(identity && { identity }) };
+        if (!isDeepStrictEqual(accountState, next)) {
+          accountState = next;
+          notify(accountListeners, accountState);
+        }
+        return;
+      }
       accountState = {
-        ...accountState,
+        record: account,
         connection: frame.state,
         ...(identity ? { identity } : {}),
       };
@@ -202,6 +240,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
             record: account,
             ...(currentIdentity && { identity: currentIdentity }),
           };
+          connectionTimer = undefined;
           notify(accountListeners, accountState);
         },
         Math.max(0, observed.expiresAt - Date.now()),
@@ -235,16 +274,17 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       try {
         replace(await source.snapshot(), true);
         await Promise.all([...conversations].map((conversation) => conversation.replaceWindow()));
+      } catch (error) {
+        closeClient({ error });
       } finally {
         if (recovering === task) recovering = undefined;
         if (!closed) for (const queuedFrame of queued.splice(0)) consume(queuedFrame);
       }
     })();
     recovering = task;
-    void task.catch(() => {});
   };
 
-  const off = source.onFrame(consume);
+  off = source.onFrame(consume);
   try {
     replace(await source.snapshot());
     hydrating = false;
@@ -311,7 +351,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         ...next,
         messages: [...messages.values()].sort(messageOrder),
         presence: [...presences.entries()]
-          .sort(([left], [right]) => left.localeCompare(right))
+          .sort(([left], [right]) => compareId(left, right))
           .map(([, entry]) => entry.value),
       };
       if (!isDeepStrictEqual(previous, state)) notify(conversationListeners, state);
@@ -425,7 +465,6 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       receive(message) {
         if (conversationClosed) return;
         messages.set(message.messageId, message);
-        publish();
       },
       receivePresence(presence, expiresAt) {
         if (conversationClosed) return;
@@ -448,7 +487,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         presences.set(subject, { value: presence, timer });
         publish();
       },
-      refreshChat() {
+      commit() {
         if (conversationClosed) return;
         publish({ chat: chats.get(chatId) });
       },
@@ -535,15 +574,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       },
     },
     async close() {
-      if (closed) return;
-      closed = true;
-      off();
-      if (connectionTimer) clearTimeout(connectionTimer);
-      for (const conversation of conversations) conversation.close();
-      accountListeners.clear();
-      chatListeners.clear();
-      contactListeners.clear();
-      groupListeners.clear();
+      closeClient();
     },
   };
 }

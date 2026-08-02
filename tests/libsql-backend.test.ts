@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import { createClient } from "@libsql/client";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { expect, test } from "./_expect.ts";
 import {
   createWhatsAppClient,
@@ -23,6 +25,10 @@ const ACCOUNT = "personal";
 const CHAT = "person@s.whatsapp.net";
 const ROOM = "room@g.us";
 const AT = 1_700_000_000_000;
+const execFile = promisify(execFileCallback);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const processReplacementTest =
+  "^a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable state only$";
 
 dataStoreConformance("memory data", async () => ({
   data: (await import("../src/runtime/memory.ts")).memoryDataStore(),
@@ -314,9 +320,49 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
 });
 
 test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable state only", async () => {
+  const replacementUrl = process.env.WHATSAPPD_ISSUE_71_PROCESS_URL;
+  const expectedJson = process.env.WHATSAPPD_ISSUE_71_PROCESS_EXPECTED;
+  const lid = "100000000000001@lid";
+  if (replacementUrl && expectedJson) {
+    const backend = libsqlBackend({
+      url: replacementUrl,
+      accountId: ACCOUNT,
+      media: memoryMediaStore(),
+    });
+    const session = createTestWhatsAppSession();
+    const runtime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend,
+      openSession: () => session.session,
+    });
+    try {
+      await runtime.start();
+      const client = await createWhatsAppClient(runtime);
+      const conversation = await client.chats.open(CHAT);
+      assert.deepEqual(
+        {
+          account: client.account.get().record,
+          chats: client.chats.list(),
+          contacts: client.contacts.list(),
+          resolved: client.contacts.resolve(lid),
+          groups: client.groups.list(),
+          messages: conversation.get().messages,
+        },
+        JSON.parse(expectedJson),
+      );
+      assert.equal(client.account.get().connection, undefined);
+      assert.deepEqual(conversation.get().presence, []);
+      conversation.close();
+      await client.close();
+    } finally {
+      await runtime.stop().catch(() => {});
+      await backend.close();
+    }
+    return;
+  }
+
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-friendly-client-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
-  const lid = "100000000000001@lid";
   const firstBackend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
   const firstSession = createTestWhatsAppSession();
   const firstRuntime = createWhatsAppRuntime({
@@ -365,40 +411,24 @@ test("a fresh libSQL Backend, Runtime, and friendly Client reconstruct durable s
     firstConversation.close();
     await firstClient.close();
     await firstBackend.close();
-
-    const replacementBackend = libsqlBackend({
-      url,
-      accountId: ACCOUNT,
-      media: memoryMediaStore(),
-    });
-    const replacementSession = createTestWhatsAppSession();
-    const replacementRuntime = createWhatsAppRuntime({
-      accountId: ACCOUNT,
-      backend: replacementBackend,
-      openSession: () => replacementSession.session,
-    });
-    await replacementRuntime.start();
-    const replacementClient = await createWhatsAppClient(replacementRuntime);
-    const replacementConversation = await replacementClient.chats.open(CHAT);
-
-    assert.deepEqual(
+    await execFile(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--test",
+        "--test-name-pattern",
+        processReplacementTest,
+        "tests/libsql-backend.test.ts",
+      ],
       {
-        account: replacementClient.account.get().record,
-        chats: replacementClient.chats.list(),
-        contacts: replacementClient.contacts.list(),
-        resolved: replacementClient.contacts.resolve(lid),
-        groups: replacementClient.groups.list(),
-        messages: replacementConversation.get().messages,
+        cwd: root,
+        env: {
+          ...process.env,
+          WHATSAPPD_ISSUE_71_PROCESS_URL: url,
+          WHATSAPPD_ISSUE_71_PROCESS_EXPECTED: JSON.stringify(expected),
+        },
       },
-      expected,
     );
-    assert.equal(replacementClient.account.get().connection, undefined);
-    assert.deepEqual(replacementConversation.get().presence, []);
-
-    replacementConversation.close();
-    await replacementClient.close();
-    await replacementRuntime.stop();
-    await replacementBackend.close();
   } finally {
     await firstRuntime.stop().catch(() => {});
     await firstBackend.close().catch(() => {});

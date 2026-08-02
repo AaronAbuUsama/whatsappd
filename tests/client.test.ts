@@ -171,6 +171,40 @@ test("opening a chat merges its newest saved page with matching live upserts", a
   await runtime.stop();
 });
 
+test("one committed message patch publishes one coherent conversation state", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const conversation = await client.chats.open(ALPHA);
+  const published: Array<{
+    readonly messages: readonly string[];
+    readonly lastMessageAt?: number;
+  }> = [];
+  conversation.subscribe((state) => {
+    published.push({
+      messages: state.messages.map((message) => message.messageId),
+      ...(state.chat && { lastMessageAt: state.chat.lastMessageAt }),
+    });
+  });
+
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m1", chatId: ALPHA, text: "one", timestamp: 100 }),
+  });
+
+  assert.deepEqual(published, [{ messages: ["m1"], lastMessageAt: 100 }]);
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
 test("opening reconciles a page/live collision and keeps a backdated live insertion ordered", async () => {
   const base = memoryBackend();
   let pageReady!: () => void;
@@ -240,6 +274,62 @@ test("opening reconciles a page/live collision and keeps a backdated live insert
       ["late", "late"],
       ["older", "older"],
     ],
+  );
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("Client identifier ordering matches the stores' binary ordering", async () => {
+  const upperContact = "B@s.whatsapp.net";
+  const lowerContact = "a@s.whatsapp.net";
+  const upperGroup = "B@g.us";
+  const lowerGroup = "a@g.us";
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [
+        { id: lowerGroup, isGroup: true, participants: [] },
+        { id: upperGroup, isGroup: true, participants: [] },
+      ],
+      contacts: [
+        { id: lowerContact, nativeIds: [lowerContact] },
+        { id: upperContact, nativeIds: [upperContact] },
+      ],
+      messages: [
+        textMessage({ id: "B", chatId: ALPHA, text: "upper", timestamp: 100, live: false }),
+        textMessage({ id: "a", chatId: ALPHA, text: "lower", timestamp: 100, live: false }),
+      ],
+    },
+  });
+
+  const client = await createWhatsAppClient(runtime);
+  const conversation = await client.chats.open(ALPHA);
+  assert.deepEqual(
+    client.chats.list().map((chat) => chat.chatId),
+    [ALPHA, upperGroup, lowerGroup],
+  );
+  assert.deepEqual(
+    client.contacts.list().map((contact) => contact.contactId),
+    [upperContact, lowerContact],
+  );
+  assert.deepEqual(
+    client.groups.list().map((group) => group.groupId),
+    [upperGroup, lowerGroup],
+  );
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["a", "B"],
   );
 
   conversation.close();
@@ -580,6 +670,128 @@ test("a revision gap racing the first page read leaves only the fresh replacemen
   );
 
   conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("a failed gap read closes only that Client and a fresh Client retries hydration", async () => {
+  const base = memoryBackend();
+  const failure = new Error("recovery snapshot failed");
+  let fencingToken = 0;
+  let snapshotReads = 0;
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        snapshotReads += 1;
+        if (snapshotReads === 2) throw failure;
+        return base.data.snapshot(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [{ id: ALPHA, isGroup: false, subject: "Alpha" }],
+      contacts: [],
+      messages: [],
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+  const failed = new Promise<void>((resolve) => {
+    client.account.subscribe((state) => {
+      if (state.closed?.error === failure) resolve();
+    });
+  });
+
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 100,
+        event: {
+          type: "message",
+          message: textMessage({ id: "m1", chatId: ALPHA, text: "one", timestamp: 100 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m2", chatId: ALPHA, text: "two", timestamp: 200 }),
+  });
+  await withDeadline(failed);
+
+  assert.throws(
+    () => client.chats.list(),
+    (error) => error instanceof WhatsAppClientClosedError && error.cause === failure,
+  );
+  const replacement = await createWhatsAppClient(runtime);
+  const conversation = await replacement.chats.open(ALPHA);
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m2", "m1"],
+  );
+
+  conversation.close();
+  await replacement.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("a connection frame that expires during hydration is never exposed as current", async () => {
+  const base = memoryBackend();
+  let snapshotReady!: () => void;
+  const snapshotStarted = new Promise<void>((resolve) => {
+    snapshotReady = resolve;
+  });
+  let releaseSnapshot!: () => void;
+  const snapshotGate = new Promise<void>((resolve) => {
+    releaseSnapshot = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        const snapshot = await base.data.snapshot(...args);
+        snapshotReady();
+        await snapshotGate;
+        return snapshot;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    freshnessMs: 5,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const creating = createWhatsAppClient(runtime);
+  await snapshotStarted;
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  releaseSnapshot();
+
+  const client = await creating;
+  assert.equal(client.account.get().connection, undefined);
+
   await client.close();
   await runtime.stop();
 });

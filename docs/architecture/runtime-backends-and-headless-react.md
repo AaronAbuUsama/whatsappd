@@ -833,43 +833,31 @@ export type OlderHistoryState =
   | { state: "request_failed"; message: string };
 ```
 
-Every `watch()` starts with a store-backed snapshot. Live patches delivered
-after it are ordered after that snapshot by revision, not by heuristics:
+`await createWhatsAppClient(runtime)` resolves only after the store-backed
+snapshot is applied. Runtime frames, patches, revisions, and stored-page cursors
+stay inside the Client implementation. The friendly Client owns gap recovery,
+deterministic account/chat/contact/group state, and saved/live message merging;
+React components and applications do not.
+
+`await client.chats.open(chatId)` returns one coherent conversation controller.
+Its `get()`/`subscribe()` state contains newest-first messages and expiring live
+presence. `loadOlder()` reads the backend only, merges by message identity, and
+never asks WhatsApp for phone history.
+
+On reconnect, the Client replaces its durable state internally. Backend
+implementations retain their own accepted-source mechanics; application state
+does not expose them.
+
+The local application seam is:
 
 ```ts
-export interface WhatsAppPatch {
-  readonly accountId: string;
-  readonly fromRevision: number;
-  readonly revision: number;
-  readonly upserts: readonly MirrorRecord[];
-  readonly deletes: readonly MirrorRecordKey[];
-}
+const client = await createWhatsAppClient(runtime);
 ```
 
-Patches carry normalized mirror records, not WhatsApp events: projection logic
-runs once, server-side, in the runtime. A client applies a patch only when
-`patch.fromRevision` exactly equals its current revision. Stale patches are
-ignored; a future base is a gap and triggers a fresh snapshot. The contract owns
-that race and recovery; React components do not.
-
-On reconnect, the UI client receives a fresh snapshot. Durable backend
-consumers do not use UI snapshots: they follow accepted source batches through
-the backend package from their own revision cursor.
-
-Concrete clients are:
-
-```ts
-createInProcessWhatsAppClient(runtime)
-createPocketBaseWhatsAppClient({ client: authenticatedPocketBase })
-createConvexWhatsAppClient({ client: authenticatedConvex })
-createSupabaseWhatsAppClient({ client: authenticatedSupabase })
-createMemoryWhatsAppClient(...)
-```
-
-The backend client is chosen once at the application composition root. The UI
-does not contain `if (pocketbase)` or backend-specific query code. A future
-remote transport can implement the same contract without changing React, but
-it is not part of the initial package family.
+The Backend, Runtime, and Client are chosen and owned independently at the
+application composition root. The UI contains no backend-specific query code.
+A future remote transport may preserve this friendly contract, but it is not
+part of the initial package family.
 
 ## Headless React
 

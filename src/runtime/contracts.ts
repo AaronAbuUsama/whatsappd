@@ -607,8 +607,8 @@ export class UnsupportedDurableEventError extends Error {
 
 /** A friendly Client resource was used after its owner closed it. */
 export class WhatsAppClientClosedError extends Error {
-  constructor(resource: "Client" | "conversation") {
-    super(`${resource} is closed`);
+  constructor(resource: "Client" | "conversation", cause?: unknown) {
+    super(`${resource} is closed`, { cause });
     this.name = "WhatsAppClientClosedError";
   }
 }
