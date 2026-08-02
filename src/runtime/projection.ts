@@ -391,6 +391,7 @@ async function projectMessageUpdate(state: ProjectionState, update: DurableUpdat
   }
 
   if (update.kind === "edit") {
+    if (existing.kind === "revoked") return;
     const editedAt = update.at ?? existing.editedAt;
     const message = withCurrentContent(
       {

@@ -421,7 +421,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
           removed: true,
         },
       });
-      await record({
+      const edit = {
         type: "update",
         update: {
           kind: "edit",
@@ -440,7 +440,8 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
             lng: -0.187,
           },
         },
-      });
+      } satisfies WhatsAppDurableEvent;
+      await record(edit);
       await record({
         type: "update",
         update: {
@@ -450,6 +451,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
           at: AT + 5,
         },
       });
+      await record(edit);
       await record({
         type: "conversation_sync",
         batch: {
@@ -479,6 +481,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         [8, 6],
         [9, 6],
         [10, 6],
+        [11, 6],
       ]);
       expect((await resource.data.messages(ACCOUNT, PN)).messages).toEqual([
         {
@@ -506,7 +509,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       ]);
       expect((await resource.data.snapshot(ACCOUNT)).chats[0]?.lastMessageAt).toBe(AT);
       expect((await resource.data.accepted(ACCOUNT, 0)).map(({ seq }) => seq)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
       ]);
     } finally {
       await resource.close();
