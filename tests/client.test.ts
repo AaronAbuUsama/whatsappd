@@ -907,6 +907,49 @@ test("Runtime termination preempts blocked recovery and preserves the last coher
   await client.close();
 });
 
+test("Runtime termination rejects a blocked conversation open without changing durable state", async () => {
+  const base = memoryBackend();
+  let pageReady!: () => void;
+  const pageStarted = new Promise<void>((resolve) => {
+    pageReady = resolve;
+  });
+  let releasePage!: () => void;
+  const pageGate = new Promise<void>((resolve) => {
+    releasePage = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        const page = await base.data.messages(...args);
+        pageReady();
+        await pageGate;
+        return page;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "coherent", chatId: ALPHA, text: "old", timestamp: 100 }),
+  });
+  const opening = client.chats.open(ALPHA);
+  await pageStarted;
+
+  try {
+    await driver.session.stop?.();
+    await assert.rejects(withDeadline(opening), WhatsAppClientClosedError);
+  } finally {
+    releasePage();
+  }
+  assert.deepEqual(client.account.get().closed, {});
+  assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
+
+  await client.close();
+});
+
 test("a conversation opened during recovery resolves in the recovered Client generation", async () => {
   const base = memoryBackend();
   let fencingToken = 0;

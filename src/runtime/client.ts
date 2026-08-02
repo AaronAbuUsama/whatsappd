@@ -97,9 +97,10 @@ async function createClientState(
   let recovering: Promise<void> | undefined;
   let connectionTimer: ReturnType<typeof setTimeout> | undefined;
   let off: Unsubscribe = () => {};
-  let rejectHydration!: (reason: WhatsAppClientClosedError) => void;
-  const hydrationTerminated = new Promise<never>((_, reject) => {
-    rejectHydration = reject;
+  let terminationError: WhatsAppClientClosedError | undefined;
+  let rejectTermination!: (reason: WhatsAppClientClosedError) => void;
+  const runtimeTerminated = new Promise<never>((_, reject) => {
+    rejectTermination = reject;
   });
 
   const requireClient = (): void => {
@@ -236,10 +237,12 @@ async function createClientState(
   const consume = (frame: WhatsAppClientFrame): void => {
     if (closed || terminated) return;
     if (frame.type === "closed") {
+      terminationError = new WhatsAppClientClosedError(
+        "Client",
+        "error" in frame ? frame.error : undefined,
+      );
+      rejectTermination(terminationError);
       if (hydrating) {
-        rejectHydration(
-          new WhatsAppClientClosedError("Client", "error" in frame ? frame.error : undefined),
-        );
         return;
       }
       terminated = true;
@@ -327,7 +330,7 @@ async function createClientState(
         flushGlobal();
         for (const conversation of replacing) conversation.flush();
       } catch (error) {
-        closeClient({ error });
+        if (!terminated) closeClient({ error });
       } finally {
         if (recovering === task) recovering = undefined;
         if (!closed && !terminated)
@@ -339,8 +342,8 @@ async function createClientState(
 
   off = source.onFrame(consume);
   try {
-    await Promise.race([start(), hydrationTerminated]);
-    replace(await Promise.race([source.snapshot(), hydrationTerminated]));
+    await Promise.race([start(), runtimeTerminated]);
+    replace(await Promise.race([source.snapshot(), runtimeTerminated]));
     hydrating = false;
     for (const frame of queued.splice(0)) consume(frame);
   } catch (error) {
@@ -374,6 +377,7 @@ async function createClientState(
     options?: { readonly pageSize?: number },
   ): Promise<WhatsAppConversation> => {
     requireClient();
+    if (terminated) throw terminationError;
     const openingGeneration = generation;
     const pageSize = options?.pageSize ?? 25;
     if (!Number.isInteger(pageSize) || pageSize < 1)
@@ -452,6 +456,7 @@ async function createClientState(
             const page = await Promise.race([
               source.messages(chatId, { limit: pageSize }),
               closedConversation,
+              runtimeTerminated,
             ]);
             for (const message of page.messages)
               if (!messages.has(message.messageId)) messages.set(message.messageId, message);
@@ -467,6 +472,7 @@ async function createClientState(
       loadOlder() {
         if (conversationClosed)
           return Promise.reject(new WhatsAppClientClosedError("conversation"));
+        if (terminated) return Promise.reject(terminationError);
         if (replacementRead) return replacementRead.then(() => {});
         if (pageRead) return pageRead;
         if (!cursor) return Promise.resolve();
@@ -478,6 +484,7 @@ async function createClientState(
             const page = await Promise.race([
               source.messages(chatId, { limit: pageSize, before }),
               closedConversation,
+              runtimeTerminated,
             ]);
             if (conversationClosed) return;
             for (const message of page.messages)
@@ -485,7 +492,7 @@ async function createClientState(
             cursor = page.nextBefore;
             publish({ loadingOlder: false, hasOlderSaved: cursor !== undefined, error: undefined });
           } catch (error) {
-            if (!conversationClosed) publish({ loadingOlder: false, error });
+            if (!conversationClosed && !terminated) publish({ loadingOlder: false, error });
             throw error;
           } finally {
             if (pageRead === task) pageRead = undefined;
@@ -511,9 +518,10 @@ async function createClientState(
               return await Promise.race([
                 source.messages(chatId, { limit: Math.max(pageSize, messages.size) }),
                 closedConversation,
+                runtimeTerminated,
               ]);
             } catch (error) {
-              if (conversationClosed) return;
+              if (conversationClosed || terminated) return;
               throw error;
             }
           } finally {
