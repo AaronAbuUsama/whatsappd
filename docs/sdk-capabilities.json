@@ -1102,8 +1102,8 @@
         "sourceKeys": ["B:messages", "B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves the raw live-location type, but no normalized live-location contract exists."
       },
       "target": "`conversation.state.messages`",
       "requirements": "Modeling and data projection; deferred"
@@ -1118,8 +1118,8 @@
         "sourceKeys": ["B:messages", "B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw message types, but no normalized interactive reply/message contracts exist."
       },
       "target": "Message union after upstream-contract proof",
       "requirements": "Modeling/data; deferred"
@@ -1134,8 +1134,8 @@
         "sourceKeys": ["B:messages", "B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw message types, but no normalized commerce message contracts exist."
       },
       "target": "`business` plus conversation message model",
       "requirements": "Business/data; deferred"
@@ -1150,8 +1150,8 @@
         "sourceKeys": ["B:messages", "B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw invite types, but no normalized invite contracts or actions exist."
       },
       "target": "Conversation message plus target domain action",
       "requirements": "Data; deferred"
@@ -1166,8 +1166,8 @@
         "sourceKeys": ["B:messages", "B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "The generic unsupported fallback preserves these raw message types, but no normalized user-visible family contracts exist."
       },
       "target": "Model each user-visible family; protocol-only notices stay internal",
       "requirements": "Data; deferred"
@@ -1918,8 +1918,8 @@
         "sourceKeys": ["B:socket", "B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "The Session reads a profile-picture URL only; about/status and disappearing duration are absent."
       },
       "target": "`contacts.profile(address)`",
       "requirements": "Live worker; deferred"
@@ -2142,8 +2142,8 @@
         "sourceKeys": ["B:groups", "B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "Current normalized metadata contains group id, subject, participants, and participant roles only; richer upstream fields remain deferred."
       },
       "target": "Extend `groups.get` only per consumer need",
       "requirements": "Data model; deferred"
@@ -2750,8 +2750,8 @@
         "sourceKeys": ["B:events"]
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "Current projection deletes only a duplicate contact during PN/LID consolidation; chat, message, and group tombstones are absent."
       },
       "target": "Transparent domain state",
       "requirements": "Per-domain owners to be assigned by #68"
@@ -3022,8 +3022,8 @@
         "sourceKeys": []
       },
       "current": {
-        "status": "implemented",
-        "summary": "Current implementation slices and recorded observations are listed below."
+        "status": "partial",
+        "summary": "The testing subpath constructs text and drives the low-level Session; other message constructors and the friendly Client/operation lifecycle are absent."
       },
       "target": "Extend the testing subpath in the same vertical issue as each capability",
       "requirements": "No separate verification harness; successor DX/capability issues"
@@ -8961,6 +8961,10 @@
     {
       "symbol": "Disposition",
       "reason": "Disconnect classifications are represented by the account lifecycle and error surface, not independent operations."
+    },
+    {
+      "symbol": "DurableInboundMessage",
+      "reason": "Conditional durable wrapper of the mapped InboundMessage union; it preserves the same message kinds and adds no product variant."
     },
     {
       "symbol": "DurableUpdate",

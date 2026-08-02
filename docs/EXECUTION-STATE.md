@@ -11,7 +11,7 @@ an owner release checkpoint.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0023`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0024`                                   |
 | Published build specification    | GitHub issue #15                                           |
 | Capability source of truth       | `docs/sdk-capabilities.md` plus its atomic evidence ledger |
 | Execution-graph repair           | GitHub issue #68                                           |
@@ -160,7 +160,7 @@ from this file before the owner accepts #68's replacement graph.
 
 ## Resuming in a new session
 
-Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0023,
+Read this file, then the architecture, `CONTEXT.md`, ADR-0001 through ADR-0024,
 specification issue #15 **including its comments** — the 2026-07-31 re-plan
 and the 2026-08-01 #67/#68 planning receipts supersede earlier frontier receipts
 — then read #67 and #68. Do not resume #61 or its conditionally-next tickets.

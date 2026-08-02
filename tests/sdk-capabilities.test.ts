@@ -199,6 +199,48 @@ test("public closed variants are derived from exported TypeScript declarations",
   ]);
 });
 
+test("public closed variants survive distributive conditional aliases", () => {
+  expect(
+    findClosedPublicVariants('export type { DurableInboundMessage } from "./contracts.ts";', "", [
+      {
+        path: "contracts.ts",
+        source: [
+          "type WithDurableMedia<Message> = Message extends { media: unknown }",
+          '  ? Omit<Message, "media"> & { media: string }',
+          "  : Message;",
+          "type InboundMessage =",
+          '  | { kind: "text"; text: string }',
+          '  | { kind: "image"; media: unknown };',
+          "export type DurableInboundMessage = WithDurableMedia<InboundMessage>;",
+        ].join("\n"),
+      },
+    ]),
+  ).toEqual([{ symbol: "DurableInboundMessage", selector: "unresolved", members: [] }]);
+});
+
+test("broad capabilities stay partial while only a subset is implemented", async () => {
+  const catalogue = JSON.parse(
+    await readFile(new URL("../docs/sdk-capabilities.json", import.meta.url), "utf8"),
+  ) as { capabilities: { id: string; current: { status: string } }[] };
+  const capabilities = new Map(
+    catalogue.capabilities.map((capability) => [capability.id, capability.current.status]),
+  );
+
+  for (const id of [
+    "CONTACT-06",
+    "DATA-09",
+    "GROUP-11",
+    "MSG-IN-12",
+    "MSG-IN-13",
+    "MSG-IN-14",
+    "MSG-IN-15",
+    "MSG-IN-16",
+    "TEST-04",
+  ]) {
+    expect(capabilities.get(id)).toBe("partial");
+  }
+});
+
 test("every exported closed variant is mapped or explicitly excluded", () => {
   const errors = validateCapabilityCatalogue(
     emptyCatalogue({
@@ -406,7 +448,7 @@ test("the checked-in catalogue is complete, current, and generated without drift
   expect((catalogue.implementations as unknown[]).length).toBe(291);
   expect((catalogue.observations as unknown[]).length).toBe(123);
   expect((catalogue.variantMappings as unknown[]).length).toBe(19);
-  expect((catalogue.variantExclusions as unknown[]).length).toBe(6);
+  expect((catalogue.variantExclusions as unknown[]).length).toBe(7);
   expect((catalogue.publicSurfaceGroups as unknown[]).length).toBe(10);
   expect((catalogue.backends as unknown[]).length).toBe(9);
   expect((catalogue.reactBindings as unknown[]).length).toBe(6);

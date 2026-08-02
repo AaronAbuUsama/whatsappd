@@ -188,7 +188,7 @@ This is the current code path, not a target architecture or behavioral observati
 | `CONTACT-03` | contacts | Look up whether phone numbers are registered on WhatsApp. | available | `B:socket`, `B:events` | not-implemented | `contacts.lookupRegistration(numbers)` | Live trusted worker; deferred |
 | `CONTACT-04` | contacts | Save or edit a contact in WhatsApp's synced contact list. | available | `B:socket`, `B:events` | not-implemented | `contacts.save({ address, name })` | Durable command; deferred |
 | `CONTACT-05` | contacts | Remove a contact from WhatsApp's synced contact list. | available | `B:socket`, `B:events` | not-implemented | `contacts.remove(address)` | Durable command; deferred |
-| `CONTACT-06` | contacts | Read a contact's about/status, picture, or disappearing duration. | available | `B:socket`, `B:events` | implemented | `contacts.profile(address)` | Live worker; deferred |
+| `CONTACT-06` | contacts | Read a contact's about/status, picture, or disappearing duration. | available | `B:socket`, `B:events` | partial | `contacts.profile(address)` | Live worker; deferred |
 | `CONTACT-07` | contacts | Create or update an operating-system contact. | unsupported | `B:socket`, `B:events` | application-owned | No whatsappd Client operation | OS permission/API owned by host application |
 | `CONTACT-08` | contacts | Merge WhatsApp addresses into a CRM/person/address-book identity. | not-applicable | — | application-owned | Host repository, not `client.contacts` | Application database and policy |
 | `CONTACT-09` | contacts | Observe a standalone LID-to-PN mapping update. | available | `B:socket`, `B:events` | partial | Transparent contact alias resolution | Data projection; deferred |
@@ -200,7 +200,7 @@ This is the current code path, not a target architecture or behavioral observati
 | `DATA-06` | durability | Isolate accounts in shared storage. | not-applicable | — | implemented | Transparent | Every capability is account-scoped; shipped |
 | `DATA-07` | durability | Enforce one database-time account holder with monotonic fencing after release/expiry. | not-applicable | — | implemented | Internal Runtime ownership | Lease capability; shipped |
 | `DATA-08` | durability | Persist all currently normalized message kinds in the Current Mirror. | not-applicable | — | implemented | Transparent message state | Data/projection owner to be assigned by #68 |
-| `DATA-09` | durability | Delete/tombstone current chats, messages, groups, or contacts when WhatsApp semantics require it. | not-applicable | `B:events` | implemented | Transparent domain state | Per-domain owners to be assigned by #68 |
+| `DATA-09` | durability | Delete/tombstone current chats, messages, groups, or contacts when WhatsApp semantics require it. | not-applicable | `B:events` | partial | Transparent domain state | Per-domain owners to be assigned by #68 |
 | `DATA-10` | durability | Expose raw protocol nodes, app-state patches, retry plumbing, signal sessions, prekeys, socket mutexes, or crypto primitives. | available | `B:socket` | internal | No Client namespace | Adapter internals; never promoted by catalogue coverage |
 | `GROUP-01` | groups | Read normalized metadata and observe subject, add, remove, promote, demote, and modify changes. | available | `B:groups`, `B:events` | implemented | `groups.get/subscribe`; `useGroup` | Data mirror; exact adapter coverage lives in the atomic claims |
 | `GROUP-02` | groups | List participating groups. | available | `B:groups`, `B:events` | not-implemented | `groups.list()` | Data mirror/live refresh; deferred |
@@ -212,7 +212,7 @@ This is the current code path, not a target architecture or behavioral observati
 | `GROUP-08` | groups | Read, revoke, inspect, or accept a group invite. | available | `B:groups`, `B:events` | not-implemented | `groups.invites.*` | Durable commands; protected invite handling where needed; deferred |
 | `GROUP-09` | groups | Configure announcement/edit-lock, member-add, and join-approval modes. | available | `B:groups`, `B:events` | not-implemented | `groups.settings.update` | Durable command; deferred |
 | `GROUP-10` | groups | Configure group disappearing messages. | available | `B:groups`, `B:events` | not-implemented | `groups.disappearing.set` | Durable command; deferred |
-| `GROUP-11` | groups | Read every rich upstream metadata field as a stable normalized contract. | available | `B:groups`, `B:events` | implemented | Extend `groups.get` only per consumer need | Data model; deferred |
+| `GROUP-11` | groups | Read every rich upstream metadata field as a stable normalized contract. | available | `B:groups`, `B:events` | partial | Extend `groups.get` only per consumer need | Data model; deferred |
 | `GROUP-12` | groups | Observe join requests and member-tag events. | available | `B:groups`, `B:events` | not-implemented | `groups.joinRequests.subscribe`, `groups.memberTags.subscribe` if selected | Data/events; deferred |
 | `GROUP-13` | groups | Assign or update a member label/tag. | available | `B:groups`, `B:events` | not-implemented | `groups.memberTags.update` | Durable command; deferred |
 | `GROUP-14` | groups | Fetch live normalized metadata for one group. | available | `B:groups`, `B:events` | implemented | `groups.refresh(groupId)` or an internal refresh behind `groups.get` | Live trusted worker; release undecided |
@@ -251,11 +251,11 @@ This is the current code path, not a target architecture or behavioral observati
 | `MSG-IN-09` | inbound-messages | Receive poll creation. | available | `B:messages`, `B:events` | implemented | Same; poll module only with shared voting behavior | Data projection required; owner to be assigned by #68 |
 | `MSG-IN-10` | inbound-messages | Preserve view-once, ephemeral, and edited wrappers as flags. | available | `B:messages`, `B:events` | implemented | Message metadata | Data schema expansion deferred |
 | `MSG-IN-11` | inbound-messages | Preserve quotes and mentions. | available | `B:messages`, `B:events` | implemented | Message metadata | Data schema expansion deferred |
-| `MSG-IN-12` | inbound-messages | Receive live location. | available | `B:messages`, `B:events` | implemented | `conversation.state.messages` | Modeling and data projection; deferred |
-| `MSG-IN-13` | inbound-messages | Receive buttons, list, template, interactive, or native-flow replies/messages. | available | `B:messages`, `B:events` | implemented | Message union after upstream-contract proof | Modeling/data; deferred |
-| `MSG-IN-14` | inbound-messages | Receive product, order, payment, or invoice messages. | available | `B:messages`, `B:events` | implemented | `business` plus conversation message model | Business/data; deferred |
-| `MSG-IN-15` | inbound-messages | Receive group or newsletter invite messages. | available | `B:messages`, `B:events` | implemented | Conversation message plus target domain action | Data; deferred |
-| `MSG-IN-16` | inbound-messages | Receive events, albums, sticker packs, poll results, or protocol notices. | available | `B:messages`, `B:events` | implemented | Model each user-visible family; protocol-only notices stay internal | Data; deferred |
+| `MSG-IN-12` | inbound-messages | Receive live location. | available | `B:messages`, `B:events` | partial | `conversation.state.messages` | Modeling and data projection; deferred |
+| `MSG-IN-13` | inbound-messages | Receive buttons, list, template, interactive, or native-flow replies/messages. | available | `B:messages`, `B:events` | partial | Message union after upstream-contract proof | Modeling/data; deferred |
+| `MSG-IN-14` | inbound-messages | Receive product, order, payment, or invoice messages. | available | `B:messages`, `B:events` | partial | `business` plus conversation message model | Business/data; deferred |
+| `MSG-IN-15` | inbound-messages | Receive group or newsletter invite messages. | available | `B:messages`, `B:events` | partial | Conversation message plus target domain action | Data; deferred |
+| `MSG-IN-16` | inbound-messages | Receive events, albums, sticker packs, poll results, or protocol notices. | available | `B:messages`, `B:events` | partial | Model each user-visible family; protocol-only notices stay internal | Data; deferred |
 | `MSG-IN-17` | inbound-messages | Never silently drop an unknown addressable message type. | not-applicable | — | implemented | Internal compatibility behavior | Data modeling required before durable acceptance |
 | `MSG-OUT-01` | outbound-messages | Send text. | available | `B:messages`, `B:socket` | implemented | `conversation.send.text(text, options)` | Durable commands #22 |
 | `MSG-OUT-02` | outbound-messages | Send image with optional caption. | available | `B:messages`, `B:socket` | implemented | `conversation.send.image(input, options)` | Durable commands #22; media input is caller-owned |
@@ -287,7 +287,7 @@ This is the current code path, not a target architecture or behavioral observati
 | `TEST-01` | durability | Construct a deterministic text message with correct sender semantics. | not-applicable | — | implemented | Test-only subpath | Shipped |
 | `TEST-02` | durability | Emit any normalized current session event through an awaited deterministic subscription. | not-applicable | — | implemented | Test-only driver | Shipped |
 | `TEST-03` | durability | Record sends, reads, typing, and history submissions through the Session seam. | not-applicable | — | implemented | Test-only driver | Shipped |
-| `TEST-04` | durability | Construct every inbound message family and drive the friendly Client/operation lifecycle deterministically. | not-applicable | — | implemented | Extend the testing subpath in the same vertical issue as each capability | No separate verification harness; successor DX/capability issues |
+| `TEST-04` | durability | Construct every inbound message family and drive the friendly Client/operation lifecycle deterministically. | not-applicable | — | partial | Extend the testing subpath in the same vertical issue as each capability | No separate verification harness; successor DX/capability issues |
 
 ## Backend adapter matrix
 

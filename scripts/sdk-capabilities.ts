@@ -199,7 +199,15 @@ function descriptorForType(
     const name = unwrapped.typeName.text;
     const declaration = declarations.get(name);
     if (!declaration || !ts.isTypeAliasDeclaration(declaration) || resolving.has(name)) return null;
-    return descriptorForType(declaration.type, declarations, new Set([...resolving, name]));
+    const descriptor = descriptorForType(
+      declaration.type,
+      declarations,
+      new Set([...resolving, name]),
+    );
+    if (descriptor) return descriptor;
+    return ts.isConditionalTypeNode(declaration.type)
+      ? { selector: "unresolved", members: [] }
+      : null;
   }
   if (ts.isIntersectionTypeNode(unwrapped)) {
     for (const member of unwrapped.types) {
