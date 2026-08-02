@@ -1467,6 +1467,40 @@ test("a terminal session failure is reported by stop, not swallowed", async () =
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
 });
 
+test("an immediate session close failure releases the account exactly once", async () => {
+  const backend = memoryBackend();
+  const failure = { reason: "close failed" };
+  let closes = 0;
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => ({
+      subscribe: () => () => {},
+      stop: () => {
+        closes += 1;
+        throw failure;
+      },
+    }),
+  });
+  await runtime.start();
+  const seen = watching(createInProcessWhatsAppClient(runtime));
+  await tick();
+
+  const [first, duplicate] = await Promise.allSettled([runtime.stop(), runtime.stop()]);
+
+  assert.equal(first.status, "rejected");
+  assert.equal(first.reason, failure);
+  const replacement = await backend.leases.acquire("personal", "replacement", 1_000);
+  assert.ok(replacement.acquired);
+  expect(duplicate.status).toBe("fulfilled");
+  expect(closes).toBe(1);
+  await seen.close();
+  expect(seen.frames.filter((frame) => frame.type === "closed")).toEqual([
+    { type: "closed", error: failure },
+  ]);
+  await backend.leases.release(replacement.lease);
+});
+
 test("a falsy runtime teardown failure is reported after releasing the account", async () => {
   const backend = memoryBackend();
   const runtime = createWhatsAppRuntime({
