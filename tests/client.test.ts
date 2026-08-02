@@ -1902,6 +1902,50 @@ test("live-state deadlines re-arm until the wall clock reaches expiry", async ()
   }
 });
 
+test("each live-state listener revalidates expiry after an earlier listener returns", async () => {
+  const freshnessMs = 20;
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver, { freshnessMs });
+  const conversation = await client.chats.open(ALPHA);
+  const waitPast = (deadline: number): void => {
+    Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)),
+      0,
+      0,
+      Math.max(1, deadline - Date.now() + 2),
+    );
+  };
+
+  client.account.subscribe((state) => {
+    if (state.connection) waitPast(state.connection.expiresAt);
+  });
+  const deliveredAccount = new Promise<ReturnType<typeof client.account.get>>((resolve) => {
+    client.account.subscribe(resolve);
+  });
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+
+  conversation.subscribe((state) => {
+    if (state.presence.length > 0) waitPast(Date.now() + freshnessMs);
+  });
+  const deliveredConversation = new Promise<ReturnType<typeof conversation.get>>((resolve) => {
+    conversation.subscribe(resolve);
+  });
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "typing" } });
+
+  const [account, conversationState] = await Promise.all([deliveredAccount, deliveredConversation]);
+  assert.deepEqual(
+    {
+      connection: account.connection,
+      presence: conversationState.presence,
+    },
+    { connection: undefined, presence: [] },
+  );
+
+  conversation.close();
+  await client.close();
+});
+
 test("identity and live state are sampled, replaced, expired, and never hydrated after restart", async () => {
   const backend = memoryBackend();
   const identity = {

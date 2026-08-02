@@ -133,11 +133,15 @@ async function createClientState(
     if (closed) throw new WhatsAppClientClosedError("Client", closeCause);
   };
 
-  const notify = <Value>(listeners: Set<(value: Value) => void>, value: Value): void => {
+  const notify = <Value>(
+    listeners: Set<(value: Value) => void>,
+    value: Value,
+    current: () => Value = () => value,
+  ): void => {
     const deliver = (): void => {
       for (const listener of listeners) {
         try {
-          listener(value);
+          listener(current());
         } catch (error) {
           queueMicrotask(() => {
             throw error;
@@ -155,13 +159,22 @@ async function createClientState(
     for (const deliver of pending?.values() ?? []) deliver();
   };
 
+  const visibleAccountState = (): WhatsAppAccountState => {
+    if (!accountState.connection || accountState.connection.expiresAt > Date.now())
+      return accountState;
+    const { connection: _, ...visible } = accountState;
+    return visible;
+  };
+
+  const notifyAccount = (): void => notify(accountListeners, accountState, visibleAccountState);
+
   const closeClient = (failure?: { readonly error: unknown }): void => {
     if (closed) return;
     closed = true;
     closeCause = failure?.error;
     if (failure) {
       accountState = { record: account, closed: { error: failure.error } };
-      notify(accountListeners, accountState);
+      notifyAccount();
     }
     off();
     connectionTimer?.();
@@ -178,7 +191,7 @@ async function createClientState(
     }
     const identity = source.identity();
     accountState = { record: account, ...(identity && { identity }) };
-    if (notifyChange) notify(accountListeners, accountState);
+    if (notifyChange) notifyAccount();
     return true;
   };
 
@@ -211,7 +224,7 @@ async function createClientState(
     revision = snapshot.revision;
     generation += 1;
     return () => {
-      if (!isDeepStrictEqual(previousAccount, accountState)) notify(accountListeners, accountState);
+      if (!isDeepStrictEqual(previousAccount, accountState)) notifyAccount();
       if (!isDeepStrictEqual(previousChats, publishedChats)) notify(chatListeners, publishedChats);
       if (!isDeepStrictEqual(previousContacts, publishedContacts))
         notify(contactListeners, publishedContacts);
@@ -279,7 +292,7 @@ async function createClientState(
     for (const conversation of affectedConversations) conversation.flush();
     if (accountChanged) {
       expireConnection(accountState.connection, false);
-      notify(accountListeners, accountState);
+      notifyAccount();
     }
     if (chatsChanged) notify(chatListeners, publishedChats);
     if (contactsChanged) notify(contactListeners, publishedContacts);
@@ -310,7 +323,7 @@ async function createClientState(
         closed: "error" in frame ? { error: frame.error } : {},
       };
       for (const conversation of conversations) conversation.clearPresence();
-      notify(accountListeners, accountState);
+      notifyAccount();
       for (const conversation of conversations) conversation.flush();
       return;
     }
@@ -328,7 +341,7 @@ async function createClientState(
         const next = { record: account, ...(identity && { identity }) };
         if (!isDeepStrictEqual(accountState, next)) {
           accountState = next;
-          notify(accountListeners, accountState);
+          notifyAccount();
         }
         return;
       }
@@ -337,7 +350,7 @@ async function createClientState(
         connection: frame.state,
         ...(identity ? { identity } : {}),
       };
-      notify(accountListeners, accountState);
+      notifyAccount();
       const observed = frame.state;
       connectionTimer = wakeAt(observed.expiresAt, () => {
         if (!closed) expireConnection(observed);
@@ -492,21 +505,28 @@ async function createClientState(
       }
       return changed;
     };
+    const visiblePresences = (): readonly PresenceUpdate[] =>
+      [...presences.entries()]
+        .filter(([, presence]) => presence.expiresAt > Date.now())
+        .sort(([left], [right]) => compareId(left, right))
+        .map(([, presence]) => presence.value);
+    const visibleState = (): WhatsAppConversationState => {
+      const presence = visiblePresences();
+      return isDeepStrictEqual(state.presence, presence) ? state : { ...state, presence };
+    };
     const stage = (next: Partial<WhatsAppConversationState> = {}): void => {
       expirePresences();
       state = {
         ...state,
         ...next,
         messages: [...messages.values()].sort(messageOrder),
-        presence: [...presences.entries()]
-          .sort(([left], [right]) => compareId(left, right))
-          .map(([, entry]) => entry.value),
+        presence: visiblePresences(),
       };
     };
     const flush = (): void => {
       if (isDeepStrictEqual(publishedState, state)) return;
       publishedState = state;
-      notify(conversationListeners, state);
+      notify(conversationListeners, state, visibleState);
     };
     const publish = (next: Partial<WhatsAppConversationState> = {}): void => {
       stage(next);
@@ -520,8 +540,7 @@ async function createClientState(
         chatId,
         get: () => {
           requireConversation();
-          if (expirePresences()) publish();
-          return state;
+          return visibleState();
         },
         subscribe: (listener, subscriptionOptions) => {
           requireConversation();
@@ -731,8 +750,7 @@ async function createClientState(
     account: {
       get: () => {
         requireClient();
-        expireConnection();
-        return accountState;
+        return visibleAccountState();
       },
       subscribe: (listener, options) => {
         requireClient();
