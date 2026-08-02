@@ -375,7 +375,14 @@ test("checked-in receipts resolve to files and exact test assertions", async () 
   const evidence = JSON.parse(
     await readFile(new URL("../docs/sdk-capability-evidence.json", import.meta.url), "utf8"),
   ) as {
-    claims: { id: string; evidence: { path: string; assertion: string }[] }[];
+    claims: {
+      id: string;
+      capabilityId: string;
+      surface: string;
+      variant: string;
+      support: string;
+      evidence: { path: string; assertion: string }[];
+    }[];
   };
   const sources = new Map<string, string>();
 
@@ -389,6 +396,20 @@ test("checked-in receipts resolve to files and exact test assertions", async () 
       if (!receipt.path.startsWith("tests/")) continue;
       const assertion = receipt.assertion.replace(/^\[[^\]]+\] /, "");
       expect(source).toContain(assertion);
+      if (claim.surface === "runtime-client" && claim.support === "supported") {
+        const start = source.indexOf(assertion) + assertion.length;
+        const nextTest = source.indexOf("\ntest(", start);
+        const body = source.slice(start, nextTest < 0 ? source.length : nextTest);
+        expect(/\bclient\b|WhatsAppClient|\.client\b/.test(body)).toBe(true);
+      }
+      if (claim.capabilityId === "TEST-02" && claim.support === "supported") {
+        const start = source.indexOf(assertion) + assertion.length;
+        const nextTest = source.indexOf("\ntest(", start);
+        const body = source.slice(start, nextTest < 0 ? source.length : nextTest);
+        const eventType =
+          claim.variant === "conversation-sync" ? "conversation_sync" : claim.variant;
+        expect(body).toContain(`type: "${eventType}"`);
+      }
     }
   }
 });
@@ -411,6 +432,34 @@ test("broad capability rows cannot carry proof rungs", () => {
 
   expect(errors.join("\n")).toContain(
     "MEDIA-03: broad capability rows may reference atomic claims but must not state proof rungs",
+  );
+});
+
+test("backend summary rows cannot aggregate capability proof", () => {
+  const errors = validateCapabilityEvidence(
+    {
+      version: 1,
+      audit: {
+        whatsappdHead: "b27d3641a46935248ca414b4ec9bfd801ce88850",
+        baileysVersion: "7.0.0-rc14",
+      },
+      claims: [],
+    },
+    {
+      catalogueMarkdown: [
+        "## Backend capability matrix",
+        "",
+        "| Adapter | Status / owner |",
+        "| --- | --- |",
+        "| Memory | implemented-and-proven P1; shipped |",
+        "",
+        "## React and renderer mapping",
+      ].join("\n"),
+    },
+  );
+
+  expect(errors.join("\n")).toContain(
+    "backend capability matrix: summary rows must not aggregate proof status or rungs",
   );
 });
 
@@ -493,4 +542,39 @@ test("the evidence renderer gives every capability a stable human-readable ancho
   expect(markdown).toContain("`implemented-unproven`");
   expect(markdown).toContain("no replacement-process edit assertion");
   expect(markdown.endsWith("\n\n")).toBe(false);
+});
+
+test("reviewed current claims retain exact surfaces, variants, and receipts", async () => {
+  const evidence = JSON.parse(
+    await readFile(new URL("../docs/sdk-capability-evidence.json", import.meta.url), "utf8"),
+  ) as {
+    claims: {
+      id: string;
+      capabilityId: string;
+      variant: string;
+      evidence: { assertion: string }[];
+    }[];
+  };
+  const claims = new Map(evidence.claims.map((claim) => [claim.id, claim]));
+
+  expect(claims.get("CHAT-01.snapshot.runtime-client.deterministic")?.evidence[0]?.assertion).toBe(
+    "the Snapshot Window carries no message window for any chat",
+  );
+  expect(
+    evidence.claims
+      .filter((claim) => claim.capabilityId === "TEST-02")
+      .map((claim) => claim.variant)
+      .sort(),
+  ).toEqual([
+    "connection",
+    "contact",
+    "conversation-sync",
+    "group",
+    "message",
+    "presence",
+    "update",
+  ]);
+  expect(claims.get("DATA-08.text.data-store.real-database")?.evidence[0]?.assertion).toBe(
+    "[libSQL data] caller mutation cannot alter committed source or mirror values",
+  );
 });

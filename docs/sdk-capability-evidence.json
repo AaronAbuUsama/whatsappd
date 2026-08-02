@@ -386,7 +386,7 @@
       "evidence": [
         {
           "path": "tests/runtime.test.ts",
-          "assertion": "a live group rename reaches the chat summary, not just the group record",
+          "assertion": "the Snapshot Window carries no message window for any chat",
           "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
         }
       ]
@@ -714,9 +714,29 @@
       ]
     },
     {
-      "id": "CONTACT-01.current.runtime-client.deterministic",
+      "id": "CONTACT-01.current.data-store.deterministic",
       "capabilityId": "CONTACT-01",
-      "outcome": "observe a contact update in the Current Mirror",
+      "outcome": "apply a contact update to the Current Mirror",
+      "surface": "data-store",
+      "variant": "contact",
+      "adapter": "memory-data",
+      "lifecycle": "deterministic",
+      "implementation": "implemented",
+      "support": "supported",
+      "requiredRung": "P1",
+      "provenRung": "P1",
+      "evidence": [
+        {
+          "path": "tests/runtime.test.ts",
+          "assertion": "a contact reached by either native form stays one record",
+          "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
+        }
+      ]
+    },
+    {
+      "id": "CONTACT-01.snapshot.runtime-client.deterministic",
+      "capabilityId": "CONTACT-01",
+      "outcome": "observe current contacts in a Client snapshot",
       "surface": "runtime-client",
       "variant": "contact",
       "adapter": "memory-runtime",
@@ -728,7 +748,7 @@
       "evidence": [
         {
           "path": "tests/runtime.test.ts",
-          "assertion": "a contact reached by either native form stays one record",
+          "assertion": "the Snapshot Window carries no message window for any chat",
           "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
         }
       ]
@@ -754,12 +774,12 @@
       ]
     },
     {
-      "id": "CONTACT-02.alias.runtime-client.deterministic",
+      "id": "CONTACT-02.alias.data-store.deterministic",
       "capabilityId": "CONTACT-02",
       "outcome": "consolidate PN and LID forms and publish the removed duplicate",
-      "surface": "runtime-client",
+      "surface": "data-store",
       "variant": "address-alias",
-      "adapter": "memory-runtime",
+      "adapter": "memory-data",
       "lifecycle": "deterministic",
       "implementation": "implemented",
       "support": "supported",
@@ -1730,7 +1750,7 @@
       "evidence": [
         {
           "path": "tests/data-store-conformance.ts",
-          "assertion": "[libSQL data] every durable media kind and outcome crosses source and current codecs",
+          "assertion": "[libSQL data] caller mutation cannot alter committed source or mirror values",
           "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
         }
       ]
@@ -1776,12 +1796,12 @@
       ]
     },
     {
-      "id": "DATA-09.contact-delete.runtime-client.deterministic",
+      "id": "DATA-09.contact-delete.data-store.deterministic",
       "capabilityId": "DATA-09",
       "outcome": "remove a duplicate contact after PN and LID consolidation",
-      "surface": "runtime-client",
+      "surface": "data-store",
       "variant": "contact-delete",
-      "adapter": "memory-runtime",
+      "adapter": "memory-data",
       "lifecycle": "deterministic",
       "implementation": "implemented",
       "support": "supported",
@@ -1837,10 +1857,10 @@
     },
     {
       "implementation": "implemented",
-      "id": "GROUP-01.metadata.runtime-client.deterministic",
+      "id": "GROUP-01.metadata.runtime.deterministic",
       "capabilityId": "GROUP-01",
       "outcome": "apply a live group metadata rename to current group and chat state",
-      "surface": "runtime-client",
+      "surface": "runtime",
       "variant": "group-metadata",
       "adapter": "memory-runtime",
       "lifecycle": "deterministic",
@@ -2143,12 +2163,12 @@
       ]
     },
     {
-      "id": "LIVE-03.available.observed-instant.deterministic",
+      "id": "LIVE-03.available.data-store.deterministic",
       "capabilityId": "LIVE-03",
       "outcome": "advance the durable last-seen instant when availability is observed",
-      "surface": "runtime-client",
+      "surface": "data-store",
       "variant": "available",
-      "adapter": "memory-runtime",
+      "adapter": "memory-data",
       "lifecycle": "deterministic",
       "implementation": "implemented",
       "support": "supported",
@@ -2225,10 +2245,10 @@
       ]
     },
     {
-      "id": "LIVE-03.unavailable.observed-instant.deterministic",
+      "id": "LIVE-03.unavailable.runtime.deterministic",
       "capabilityId": "LIVE-03",
       "outcome": "leave the durable last-seen instant unchanged on unavailable",
-      "surface": "runtime-client",
+      "surface": "runtime",
       "variant": "unavailable",
       "adapter": "memory-runtime",
       "lifecycle": "deterministic",
@@ -5453,11 +5473,131 @@
       ]
     },
     {
-      "id": "TEST-02.emit.testing-export.deterministic",
+      "id": "TEST-02.emit-connection.testing-export.deterministic",
       "capabilityId": "TEST-02",
-      "outcome": "emit a normalized event through an awaited deterministic subscription",
+      "outcome": "emit a normalized connection event through an awaited deterministic subscription",
       "surface": "testing-export",
-      "variant": "normalized-event",
+      "variant": "connection",
+      "adapter": "testing",
+      "lifecycle": "deterministic",
+      "implementation": "implemented",
+      "support": "supported",
+      "requiredRung": "P1",
+      "provenRung": "P1",
+      "evidence": [
+        {
+          "path": "tests/runtime.test.ts",
+          "assertion": "connection and presence expire and never become stored truth",
+          "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
+        }
+      ]
+    },
+    {
+      "id": "TEST-02.emit-contact.testing-export.deterministic",
+      "capabilityId": "TEST-02",
+      "outcome": "emit a normalized contact event through an awaited deterministic subscription",
+      "surface": "testing-export",
+      "variant": "contact",
+      "adapter": "testing",
+      "lifecycle": "deterministic",
+      "implementation": "implemented",
+      "support": "supported",
+      "requiredRung": "P1",
+      "provenRung": "P1",
+      "evidence": [
+        {
+          "path": "tests/runtime.test.ts",
+          "assertion": "going unavailable never dates a contact's last-seen to now",
+          "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
+        }
+      ]
+    },
+    {
+      "id": "TEST-02.emit-conversation-sync.testing-export.deterministic",
+      "capabilityId": "TEST-02",
+      "outcome": "emit a normalized conversation-sync event through an awaited deterministic subscription",
+      "surface": "testing-export",
+      "variant": "conversation-sync",
+      "adapter": "testing",
+      "lifecycle": "deterministic",
+      "implementation": "implemented",
+      "support": "supported",
+      "requiredRung": "P1",
+      "provenRung": "P1",
+      "evidence": [
+        {
+          "path": "tests/runtime.test.ts",
+          "assertion": "conversation sync captures media in source order and accepts one durable batch",
+          "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
+        }
+      ]
+    },
+    {
+      "id": "TEST-02.emit-group.testing-export.deterministic",
+      "capabilityId": "TEST-02",
+      "outcome": "emit a normalized group event through an awaited deterministic subscription",
+      "surface": "testing-export",
+      "variant": "group",
+      "adapter": "testing",
+      "lifecycle": "deterministic",
+      "implementation": "implemented",
+      "support": "supported",
+      "requiredRung": "P1",
+      "provenRung": "P1",
+      "evidence": [
+        {
+          "path": "tests/runtime.test.ts",
+          "assertion": "a group's roster follows participant changes without deleting a record",
+          "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
+        }
+      ]
+    },
+    {
+      "id": "TEST-02.emit-message.testing-export.deterministic",
+      "capabilityId": "TEST-02",
+      "outcome": "emit a normalized message event through an awaited deterministic subscription",
+      "surface": "testing-export",
+      "variant": "message",
+      "adapter": "testing",
+      "lifecycle": "deterministic",
+      "implementation": "implemented",
+      "support": "supported",
+      "requiredRung": "P1",
+      "provenRung": "P1",
+      "evidence": [
+        {
+          "path": "tests/testing.test.ts",
+          "assertion": "a later update waits for the suspended message handler",
+          "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
+        }
+      ]
+    },
+    {
+      "id": "TEST-02.emit-presence.testing-export.deterministic",
+      "capabilityId": "TEST-02",
+      "outcome": "emit a normalized presence event through an awaited deterministic subscription",
+      "surface": "testing-export",
+      "variant": "presence",
+      "adapter": "testing",
+      "lifecycle": "deterministic",
+      "implementation": "implemented",
+      "support": "supported",
+      "requiredRung": "P1",
+      "provenRung": "P1",
+      "evidence": [
+        {
+          "path": "tests/runtime.test.ts",
+          "assertion": "connection and presence expire and never become stored truth",
+          "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
+        }
+      ]
+    },
+    {
+      "id": "TEST-02.emit-update.testing-export.deterministic",
+      "capabilityId": "TEST-02",
+      "outcome": "emit a normalized update event through an awaited deterministic subscription",
+      "surface": "testing-export",
+      "variant": "update",
       "adapter": "testing",
       "lifecycle": "deterministic",
       "implementation": "implemented",

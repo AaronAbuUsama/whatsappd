@@ -235,6 +235,14 @@ export function validateCapabilityEvidence(
   );
   if (context.catalogueMarkdown) {
     const linkedCapabilities = new Set<string>();
+    const backendMatrix = context.catalogueMarkdown
+      .split("## Backend capability matrix")[1]
+      ?.split("\n## ")[0];
+    if (backendMatrix && /implemented-(?:and-proven|unproven)|\bP[0-6]\b/.test(backendMatrix)) {
+      errors.push(
+        "backend capability matrix: summary rows must not aggregate proof status or rungs",
+      );
+    }
     for (const line of context.catalogueMarkdown.split("\n")) {
       const capability = /^\| `([A-Z][A-Z0-9-]+)`\s*\|/.exec(line)?.[1];
       if (capability && /\bP[0-6]\b/.test(line)) {
