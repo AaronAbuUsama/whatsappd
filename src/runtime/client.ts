@@ -669,23 +669,29 @@ export async function createWhatsAppClient(
 ): Promise<WhatsAppClient> {
   const backend = await options.openBackend();
   const runtime = createWhatsAppRuntime({ ...options, backend });
-  const state = await createClientState(runtime, () => runtime.start());
+  const dispose = async (state?: WhatsAppClient): Promise<void> => {
+    let failed = false;
+    let failure: unknown;
+    for (const close of [() => state?.close(), () => runtime.stop(), () => backend.close()]) {
+      try {
+        await close();
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          failure = error;
+        }
+      }
+    }
+    if (failed) throw failure;
+  };
+  let state: WhatsAppClient;
+  try {
+    state = await createClientState(runtime, () => runtime.start());
+  } catch (error) {
+    await dispose().catch(() => {});
+    throw error;
+  }
   let closing: Promise<void> | undefined;
 
-  return {
-    ...state,
-    close() {
-      return (closing ??= (async () => {
-        let failure: unknown;
-        for (const close of [() => state.close(), () => runtime.stop(), () => backend.close()]) {
-          try {
-            await close();
-          } catch (error) {
-            failure ??= error;
-          }
-        }
-        if (failure) throw failure;
-      })());
-    },
-  };
+  return { ...state, close: () => (closing ??= dispose(state)) };
 }

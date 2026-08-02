@@ -103,7 +103,9 @@ test("one awaited Client owns startup, hydration, live state, and shutdown", asy
   assert.deepEqual(published, [[ALPHA, BRAVO]]);
 
   unsubscribe();
-  await Promise.all([client.close(), client.close()]);
+  const closing = client.close();
+  assert.equal(client.close(), closing);
+  await closing;
   assert.equal(sessionStops, 1);
   assert.equal(backendCloses, 1);
   assert.throws(() => client.chats.list(), WhatsAppClientClosedError);
@@ -141,6 +143,48 @@ test("Runtime termination rejects Client creation while initial hydration is blo
   } finally {
     releaseSnapshot();
   }
+});
+
+test("Client creation failure attempts every owned cleanup and releases the account", async () => {
+  const base = memoryBackend();
+  const hydrationFailure = new Error("initial snapshot failed");
+  const sessionFailure = new Error("session stop failed");
+  const backendFailure = new Error("backend close failed");
+  let sessionStops = 0;
+  let backendCloses = 0;
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async snapshot(): Promise<never> {
+        throw hydrationFailure;
+      },
+    },
+    async close() {
+      backendCloses += 1;
+      throw backendFailure;
+    },
+  };
+  const driver = createTestWhatsAppSession();
+
+  await assert.rejects(
+    createWhatsAppClient({
+      accountId: ACCOUNT,
+      openBackend: () => backend,
+      openSession: () => ({
+        ...driver.session,
+        async stop() {
+          sessionStops += 1;
+          await driver.session.stop?.();
+          throw sessionFailure;
+        },
+      }),
+    }),
+    (error) => error === hydrationFailure,
+  );
+  assert.equal(sessionStops, 1);
+  assert.equal(backendCloses, 1);
+  assert.equal((await base.leases.acquire(ACCOUNT, "replacement", 30_000)).acquired, true);
 });
 
 test("an awaited Client hydrates account, contacts, aliases, and groups", async () => {
