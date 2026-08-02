@@ -598,9 +598,9 @@ async function createClientState(
     try {
       await internal.hydrate();
       for (;;) {
-        while (recovering) await recovering;
+        while (recovering) await Promise.race([recovering, closedConversation, runtimeTerminated]);
         requireConversation();
-        if (terminated || generation === openingGeneration) return internal.public;
+        if (generation === openingGeneration) return internal.public;
         const expectedGeneration = generation;
         const page = await internal.readWindow();
         requireConversation();

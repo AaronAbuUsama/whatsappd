@@ -950,6 +950,75 @@ test("Runtime termination rejects a blocked conversation open without changing d
   await client.close();
 });
 
+test("Runtime termination rejects a conversation waiting on blocked recovery", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let snapshotReads = 0;
+  let recoveryReady!: () => void;
+  const recoveryStarted = new Promise<void>((resolve) => {
+    recoveryReady = resolve;
+  });
+  let releaseRecovery!: () => void;
+  const recoveryGate = new Promise<void>((resolve) => {
+    releaseRecovery = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        const snapshot = await base.data.snapshot(...args);
+        snapshotReads += 1;
+        if (snapshotReads === 2) {
+          recoveryReady();
+          await recoveryGate;
+        }
+        return snapshot;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "coherent", chatId: ALPHA, text: "old", timestamp: 100 }),
+  });
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 200,
+        event: {
+          type: "message",
+          message: textMessage({ id: "missed", chatId: ALPHA, text: "missed", timestamp: 200 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "after-gap", chatId: BRAVO, text: "new", timestamp: 300 }),
+  });
+  await withDeadline(recoveryStarted);
+
+  const opening = client.chats.open(ALPHA);
+  await tick();
+  try {
+    await driver.session.stop?.();
+    await assert.rejects(withDeadline(opening), WhatsAppClientClosedError);
+  } finally {
+    releaseRecovery();
+  }
+  assert.deepEqual(client.account.get().closed, {});
+
+  await client.close();
+});
+
 test("a conversation opened during recovery resolves in the recovered Client generation", async () => {
   const base = memoryBackend();
   let fencingToken = 0;
