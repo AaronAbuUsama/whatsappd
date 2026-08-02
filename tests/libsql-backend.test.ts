@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createClient } from "@libsql/client";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -319,10 +319,65 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
 });
 
 test("a fresh owned Client reconstructs durable libSQL state only", async () => {
-  const replacementUrl = process.env.WHATSAPPD_ISSUE_71_PROCESS_URL;
-  const expectedJson = process.env.WHATSAPPD_ISSUE_71_PROCESS_EXPECTED;
   const lid = "100000000000001@lid";
-  if (replacementUrl && expectedJson) {
+  const replacementUrl = process.env.WHATSAPPD_ISSUE_71_PROCESS_URL;
+  const processMode = process.env.WHATSAPPD_ISSUE_71_PROCESS_MODE;
+  const expectedPath = process.env.WHATSAPPD_ISSUE_71_PROCESS_EXPECTED;
+  if (replacementUrl && processMode === "write" && expectedPath) {
+    const backend = libsqlBackend({
+      url: replacementUrl,
+      accountId: ACCOUNT,
+      media: memoryMediaStore(),
+    });
+    const session = createTestWhatsAppSession();
+    const client = await createWhatsAppClient({
+      accountId: ACCOUNT,
+      openBackend: () => backend,
+      freshnessMs: 10_000,
+      openSession: () => session.session,
+    });
+    try {
+      await session.emit({
+        type: "conversation_sync",
+        batch: {
+          context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+          chats: [
+            {
+              id: ROOM,
+              isGroup: true,
+              subject: "Room",
+              participants: [{ id: CHAT, role: "admin" }],
+            },
+          ],
+          contacts: [{ id: CHAT, nativeIds: [CHAT, lid], displayName: "Ada" }],
+          messages: [
+            textMessage({ id: "saved", chatId: CHAT, text: "Saved", timestamp: AT, live: false }),
+          ],
+        },
+      });
+      const conversation = await client.chats.open(CHAT);
+      await session.emit({ type: "connection", status: { phase: "online" } });
+      await session.emit({ type: "presence", presence: { chatId: CHAT, kind: "typing" } });
+      assert.ok(client.account.get().connection);
+      assert.deepEqual(conversation.get().presence, [{ chatId: CHAT, kind: "typing" }]);
+      await writeFile(
+        expectedPath,
+        JSON.stringify({
+          account: client.account.get().record,
+          chats: client.chats.list(),
+          contacts: client.contacts.list(),
+          resolved: client.contacts.resolve(lid),
+          groups: client.groups.list(),
+          messages: conversation.get().messages,
+        }),
+      );
+      conversation.close();
+    } finally {
+      await client.close().catch(() => {});
+    }
+    return;
+  }
+  if (replacementUrl && processMode === "read" && expectedPath) {
     const backend = libsqlBackend({
       url: replacementUrl,
       accountId: ACCOUNT,
@@ -345,7 +400,7 @@ test("a fresh owned Client reconstructs durable libSQL state only", async () => 
           groups: client.groups.list(),
           messages: conversation.get().messages,
         },
-        JSON.parse(expectedJson),
+        JSON.parse(await readFile(expectedPath, "utf8")),
       );
       assert.equal(client.account.get().connection, undefined);
       assert.deepEqual(conversation.get().presence, []);
@@ -358,70 +413,31 @@ test("a fresh owned Client reconstructs durable libSQL state only", async () => 
 
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-friendly-client-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
-  const firstBackend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
-  const firstSession = createTestWhatsAppSession();
-  const firstClient = await createWhatsAppClient({
-    accountId: ACCOUNT,
-    openBackend: () => firstBackend,
-    freshnessMs: 10_000,
-    openSession: () => firstSession.session,
-  });
+  const processExpected = path.join(directory, "expected.json");
 
   try {
-    await firstSession.emit({
-      type: "conversation_sync",
-      batch: {
-        context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
-        chats: [
-          {
-            id: ROOM,
-            isGroup: true,
-            subject: "Room",
-            participants: [{ id: CHAT, role: "admin" }],
+    for (const mode of ["write", "read"]) {
+      await execFile(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          "--test",
+          "--test-name-pattern",
+          processReplacementTest,
+          "tests/libsql-backend.test.ts",
+        ],
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            WHATSAPPD_ISSUE_71_PROCESS_URL: url,
+            WHATSAPPD_ISSUE_71_PROCESS_MODE: mode,
+            WHATSAPPD_ISSUE_71_PROCESS_EXPECTED: processExpected,
           },
-        ],
-        contacts: [{ id: CHAT, nativeIds: [CHAT, lid], displayName: "Ada" }],
-        messages: [
-          textMessage({ id: "saved", chatId: CHAT, text: "Saved", timestamp: AT, live: false }),
-        ],
-      },
-    });
-    const firstConversation = await firstClient.chats.open(CHAT);
-    await firstSession.emit({ type: "connection", status: { phase: "online" } });
-    await firstSession.emit({ type: "presence", presence: { chatId: CHAT, kind: "typing" } });
-    assert.ok(firstClient.account.get().connection);
-    assert.deepEqual(firstConversation.get().presence, [{ chatId: CHAT, kind: "typing" }]);
-
-    const expected = {
-      account: firstClient.account.get().record,
-      chats: firstClient.chats.list(),
-      contacts: firstClient.contacts.list(),
-      resolved: firstClient.contacts.resolve(lid),
-      groups: firstClient.groups.list(),
-      messages: firstConversation.get().messages,
-    };
-    firstConversation.close();
-    await firstClient.close();
-    await execFile(
-      process.execPath,
-      [
-        "--experimental-strip-types",
-        "--test",
-        "--test-name-pattern",
-        processReplacementTest,
-        "tests/libsql-backend.test.ts",
-      ],
-      {
-        cwd: root,
-        env: {
-          ...process.env,
-          WHATSAPPD_ISSUE_71_PROCESS_URL: url,
-          WHATSAPPD_ISSUE_71_PROCESS_EXPECTED: JSON.stringify(expected),
         },
-      },
-    );
+      );
+    }
   } finally {
-    await firstClient.close().catch(() => {});
     await rm(directory, { recursive: true, force: true });
   }
 });
