@@ -35,6 +35,15 @@ const byGroupId = (left: GroupRecord, right: GroupRecord): number =>
   compareId(left.groupId, right.groupId);
 const messageOrder = (left: MessageRecord, right: MessageRecord): number =>
   right.timestamp - left.timestamp || compareId(right.messageId, left.messageId);
+const ownValue = <Value>(value: Value): Value => structuredClone(value);
+const ownAccountState = (value: WhatsAppAccountState): WhatsAppAccountState => {
+  const { closed, ...state } = value;
+  return { ...structuredClone(state), ...(closed && { closed: { ...closed } }) };
+};
+const ownConversationState = (value: WhatsAppConversationState): WhatsAppConversationState => {
+  const { error, ...state } = value;
+  return { ...structuredClone(state), ...(error !== undefined && { error }) };
+};
 
 const wakeAt = (deadline: number, onDeadline: () => void): Unsubscribe => {
   let active = true;
@@ -137,11 +146,12 @@ async function createClientState(
     listeners: Set<(value: Value) => void>,
     value: Value,
     current: () => Value = () => value,
+    own: (value: Value) => Value = ownValue,
   ): void => {
     const deliver = (): void => {
       for (const listener of listeners) {
         try {
-          listener(current());
+          listener(own(current()));
         } catch (error) {
           queueMicrotask(() => {
             throw error;
@@ -166,7 +176,8 @@ async function createClientState(
     return visible;
   };
 
-  const notifyAccount = (): void => notify(accountListeners, accountState, visibleAccountState);
+  const notifyAccount = (): void =>
+    notify(accountListeners, accountState, visibleAccountState, ownAccountState);
 
   const closeClient = (failure?: { readonly error: unknown }): void => {
     if (closed) return;
@@ -528,7 +539,7 @@ async function createClientState(
     const flush = (): void => {
       if (isDeepStrictEqual(publishedState, state)) return;
       publishedState = state;
-      notify(conversationListeners, state, visibleState);
+      notify(conversationListeners, state, visibleState, ownConversationState);
     };
     const publish = (next: Partial<WhatsAppConversationState> = {}): void => {
       stage(next);
@@ -542,7 +553,7 @@ async function createClientState(
         chatId,
         get: () => {
           requireConversation();
-          return visibleState();
+          return ownConversationState(visibleState());
         },
         subscribe: (listener, subscriptionOptions) => {
           requireConversation();
@@ -754,7 +765,7 @@ async function createClientState(
     account: {
       get: () => {
         requireClient();
-        return visibleAccountState();
+        return ownAccountState(visibleAccountState());
       },
       subscribe: (listener, options) => {
         requireClient();
@@ -764,11 +775,11 @@ async function createClientState(
     chats: {
       list: () => {
         requireClient();
-        return publishedChats;
+        return ownValue(publishedChats);
       },
       get: (chatId) => {
         requireClient();
-        return chats.get(chatId);
+        return ownValue(chats.get(chatId));
       },
       subscribe: (listener, options) => {
         requireClient();
@@ -779,15 +790,15 @@ async function createClientState(
     contacts: {
       list: () => {
         requireClient();
-        return publishedContacts;
+        return ownValue(publishedContacts);
       },
       get: (contactId) => {
         requireClient();
-        return contacts.get(contactId);
+        return ownValue(contacts.get(contactId));
       },
       resolve: (nativeId) => {
         requireClient();
-        return contacts.get(aliases.get(nativeId) ?? nativeId);
+        return ownValue(contacts.get(aliases.get(nativeId) ?? nativeId));
       },
       subscribe: (listener, options) => {
         requireClient();
@@ -797,11 +808,11 @@ async function createClientState(
     groups: {
       list: () => {
         requireClient();
-        return publishedGroups;
+        return ownValue(publishedGroups);
       },
       get: (groupId) => {
         requireClient();
-        return groups.get(groupId);
+        return ownValue(groups.get(groupId));
       },
       subscribe: (listener, options) => {
         requireClient();

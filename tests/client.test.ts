@@ -112,6 +112,106 @@ test("one awaited Client owns startup, hydration, live state, and shutdown", asy
   assert.equal((await stored.leases.acquire(ACCOUNT, "replacement", 30_000)).acquired, true);
 });
 
+test("every public Client reader and listener owns its mutable state", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [
+        { id: ALPHA, isGroup: false, subject: "Alpha" },
+        {
+          id: ROOM,
+          isGroup: true,
+          subject: "Room",
+          participants: [{ id: ALPHA, role: "admin" }],
+        },
+      ],
+      contacts: [{ id: ALPHA, nativeIds: [ALPHA, LID], displayName: "Alpha" }],
+      messages: [
+        textMessage({ id: "m1", chatId: ALPHA, text: "one", timestamp: 100, live: false }),
+      ],
+    },
+  });
+  const conversation = await client.chats.open(ALPHA);
+
+  let laterAccountId: string | undefined;
+  client.account.subscribe((state) => {
+    (state.record as { accountId: string }).accountId = "mutated";
+  });
+  client.account.subscribe((state) => {
+    laterAccountId = state.record.accountId;
+  });
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+
+  let laterChats: readonly string[] | undefined;
+  client.chats.subscribe((chats) => {
+    (chats as { length: number }).length = 0;
+  });
+  client.chats.subscribe((chats) => {
+    laterChats = chats.map((chat) => chat.chatId);
+  });
+  let laterMessages: readonly string[] | undefined;
+  conversation.subscribe((state) => {
+    (state.messages as { length: number }).length = 0;
+  });
+  conversation.subscribe((state) => {
+    laterMessages = state.messages.map((message) => message.messageId);
+  });
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m2", chatId: ALPHA, text: "two", timestamp: 200 }),
+  });
+
+  assert.equal(laterAccountId, ACCOUNT);
+  assert(laterChats?.includes(ALPHA));
+  assert.deepEqual(laterMessages, ["m2", "m1"]);
+
+  const account = client.account.get();
+  (account.record as { accountId: string }).accountId = "mutated";
+  assert.equal(client.account.get().record.accountId, ACCOUNT);
+
+  const chats = client.chats.list();
+  (chats as { length: number }).length = 0;
+  const chat = client.chats.get(ALPHA);
+  assert(chat);
+  (chat as { subject?: string }).subject = "mutated";
+  assert(client.chats.list().some((value) => value.chatId === ALPHA));
+  assert.equal(client.chats.get(ALPHA)?.subject, "Alpha");
+
+  const contacts = client.contacts.list();
+  const listedContact = contacts[0];
+  assert(listedContact);
+  (listedContact.nativeIds as { length: number }).length = 0;
+  const contact = client.contacts.resolve(LID);
+  assert(contact);
+  (contact as { displayName?: string }).displayName = "mutated";
+  assert.deepEqual(client.contacts.get(ALPHA)?.nativeIds, [ALPHA, LID]);
+  assert.equal(client.contacts.resolve(LID)?.displayName, "Alpha");
+
+  const groups = client.groups.list();
+  const listedGroup = groups[0];
+  assert(listedGroup);
+  (listedGroup.participants as { length: number }).length = 0;
+  const group = client.groups.get(ROOM);
+  assert(group);
+  (group as { subject?: string }).subject = "mutated";
+  assert.deepEqual(client.groups.get(ROOM)?.participants, [{ id: ALPHA, role: "admin" }]);
+  assert.equal(client.groups.get(ROOM)?.subject, "Room");
+
+  const conversationState = conversation.get();
+  (conversationState.messages as { length: number }).length = 0;
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m2", "m1"],
+  );
+
+  conversation.close();
+  await client.close();
+});
+
 test("Runtime termination rejects Client creation while initial hydration is blocked", async () => {
   const base = memoryBackend();
   let snapshotReady!: () => void;
@@ -216,8 +316,8 @@ test("an awaited Client hydrates account, contacts, aliases, and groups", async 
     [ALPHA, BRAVO],
   );
   assert.equal(client.contacts.get(ALPHA)?.displayName, "Alpha");
-  assert.equal(client.contacts.resolve(ALPHA), client.contacts.get(ALPHA));
-  assert.equal(client.contacts.resolve(LID), client.contacts.get(ALPHA));
+  assert.deepEqual(client.contacts.resolve(ALPHA), client.contacts.get(ALPHA));
+  assert.deepEqual(client.contacts.resolve(LID), client.contacts.get(ALPHA));
   assert.deepEqual(client.groups.list(), [
     {
       accountId: ACCOUNT,

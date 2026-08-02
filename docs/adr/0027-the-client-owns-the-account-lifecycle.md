@@ -56,6 +56,13 @@ cancels owned deadlines, closes every Opened Conversation, and discards queued
 nonterminal notifications before publishing terminal account state. A terminal
 listener therefore cannot cross-read a still-live resource owned by that Client.
 
+Application callbacks are reentrant, mutable trust boundaries. The Client
+installs an operation or cancellation handle before a callback can observe its
+transition, then revalidates the resource before starting later work. Every
+getter call and listener delivery owns its modeled JavaScript value, so one
+consumer cannot mutate the committed state or another consumer's view. Opaque
+failure values retain their original identity.
+
 Runtime Closure bypasses hydration and recovery queues. A conversation opened
 during recovery validates the committed generation before `open()` resolves,
 so it cannot return state older than the Client it belongs to.
