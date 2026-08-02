@@ -258,7 +258,6 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 
 ## Current public exports
 
-- `AcceptedWhatsAppBatch`
 - `AccountAlreadyClaimedError`
 - `AccountLease`
 - `AccountLeaseStore`
@@ -311,14 +310,11 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `PresenceUpdate`
 - `ReceiptStatus`
 - `RecordedSessionCommands`
-- `RuntimeSession`
 - `SendOptions`
 - `SessionConfig`
 - `StaleAccountClaimError`
 - `Status`
-- `StoredMessageCursor`
-- `StoredMessagePage`
-- `StoredMessagePageOptions`
+- `SubscriptionOptions`
 - `SyncState`
 - `TestWhatsAppEvent`
 - `TestWhatsAppSessionDriver`
@@ -327,26 +323,24 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `UnsupportedDurableEventError`
 - `Update`
 - `WaIdentity`
+- `WhatsAppAccountState`
 - `WhatsAppAddress`
 - `WhatsAppBackend`
 - `WhatsAppClient`
+- `WhatsAppClientClosedError`
 - `WhatsAppClientConnectionState`
-- `WhatsAppClientFrame`
-- `WhatsAppDataEvent`
-- `WhatsAppDataStore`
-- `WhatsAppDurableEvent`
+- `WhatsAppConversation`
+- `WhatsAppConversationState`
 - `WhatsAppFault`
-- `WhatsAppPatch`
 - `WhatsAppRuntime`
 - `WhatsAppRuntimeConfig`
 - `WhatsAppSession`
 - `WhatsAppSessionHandlers`
-- `WhatsAppSnapshot`
 - `assertE164`
 - `classifyDisconnect`
-- `createInProcessWhatsAppClient`
 - `createSession`
 - `createTestWhatsAppSession`
+- `createWhatsAppClient`
 - `createWhatsAppRuntime`
 - `dispositionFor`
 - `fileMediaStore`

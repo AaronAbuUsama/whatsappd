@@ -81,40 +81,39 @@ clients only after that acceptance commits.
 
 ```ts
 import {
-  createInProcessWhatsAppClient,
   createSession,
+  createWhatsAppClient,
   createWhatsAppRuntime,
   memoryBackend,
   qrAuth,
 } from "whatsappd";
 
+const backend = memoryBackend();
 const runtime = createWhatsAppRuntime({
   accountId: "personal",
-  backend: memoryBackend(),
+  backend,
   openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
 });
 
 // Returns once the account is being consumed; the session keeps running.
 await runtime.start();
 
-const client = createInProcessWhatsAppClient(runtime);
+// Resolves only after durable account, chat, contact, and group state is hydrated.
+const client = await createWhatsAppClient(runtime);
+console.log(client.chats.list());
 
-for await (const frame of client.watch()) {
-  // The snapshot is account state, chat summaries, contacts, and groups - never
-  // a message window per chat.
-  if (frame.type === "snapshot") console.log(frame.snapshot.revision, frame.snapshot.chats);
-  if (frame.type === "patch") console.log(frame.patch.revision, frame.patch.upserts);
-}
+const conversation = await client.chats.open("15551234567@s.whatsapp.net");
+const unsubscribe = conversation.subscribe((state) => {
+  console.log(state.messages);
+});
 
-// Opening a conversation reads its stored messages, newest first, then scrolls
-// back through `nextBefore`. This reads the backend only - it never asks
-// WhatsApp for anything.
-const page = await client.messages("15551234567@s.whatsapp.net", { limit: 25 });
-const older = page.nextBefore
-  ? await client.messages("15551234567@s.whatsapp.net", { before: page.nextBefore })
-  : undefined;
+// Reads an older saved page from the backend and merges it into state. It never
+// asks WhatsApp for phone history.
+await conversation.loadOlder();
 
-// Releases the account lease, and reports a session that died on its own.
+unsubscribe();
+conversation.close();
+await client.close();
 await runtime.stop();
 ```
 
