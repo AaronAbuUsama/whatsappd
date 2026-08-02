@@ -1,12 +1,12 @@
 ---
-status: superseded
+status: accepted
 ---
 
 # Proof claims climb an explicit ladder
 
-> Superseded by ADR-0024. P0-P6 may still classify the acceptance work a ticket
-> requests, but the capability catalogue records independent observations and
-> never computes a scalar proof rung or global support verdict.
+> ADR-0024 clarifies the catalogue boundary: P0-P6 still govern implementation
+> acceptance claims, but the capability inventory uses plain environment
+> statuses rather than assigning every capability a proof rung.
 
 Every implementation ticket declares an agreed public seam, first failing
 behavior, minimum end-to-end green behavior, required proof rung, retained
@@ -25,11 +25,6 @@ The proof ladder is:
 A lower rung never establishes a higher claim. Screenshot-only acceptance is
 not P5: browser proof combines semantic and interaction assertions, console and
 network health, and privacy-safe screenshots.
-
-Catalogue evidence is atomic. One current claim names one exact outcome,
-surface, variant, Backend Adapter, lifecycle, required rung, proven rung, and
-git head. A broad product capability may group those claims for discovery, but
-it never inherits the strongest child rung or carries a proof rung of its own.
 
 A Database Oracle is supporting evidence, not the component or client test
 seam. Public behavior is asserted first, then independently cross-checked

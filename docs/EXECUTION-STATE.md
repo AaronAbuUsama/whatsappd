@@ -13,7 +13,7 @@ an owner release checkpoint.
 | Shared domain language           | `CONTEXT.md`                                               |
 | Accepted architecture decisions  | `docs/adr/0001` … `0024`                                   |
 | Published build specification    | GitHub issue #15                                           |
-| Capability source of truth       | `docs/sdk-capabilities.md` plus its atomic evidence ledger |
+| Capability source of truth       | `docs/sdk-capabilities.json`, rendered as Markdown         |
 | Execution-graph repair           | GitHub issue #68                                           |
 | Tracer-bullet ticket graph       | GitHub issues #16 … #41                                    |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |

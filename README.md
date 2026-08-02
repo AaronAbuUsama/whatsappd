@@ -1,11 +1,10 @@
 # whatsappd
 
-The [SDK capability catalogue](docs/sdk-capabilities.md) distinguishes callable
-surface from target, deferred, upstream-only, internal, and application-owned
-capabilities. The canonical [machine-readable catalogue](docs/sdk-capabilities.json)
-separately records current implementation slices, source anchors, and exact
-behavioral observations. A source anchor is not a behavioral observation, and
-no observation kind implies another. This README shows the current public API.
+The [SDK capability catalogue](docs/sdk-capabilities.md) lists what Baileys
+offers, what whatsappd exposes today, and the planned friendly Client API. Its
+[machine-readable source](docs/sdk-capabilities.json) generates the Markdown
+view. Verification status is deliberately plain: automated tests exist, while
+live WhatsApp, browser React, and OpenTUI runs have not been performed.
 
 A typed WhatsApp session engine for Node.js. It normalizes Baileys events,
 awaits application handlers in source order, and keeps credentials behind an
@@ -61,12 +60,8 @@ await session.markRead([messageRef]);
 await session.setTyping(chatId, true);
 ```
 
-`markRead` and `setTyping` are callable immediate Session methods, but their
-current deterministic command observation covers the testing Session, not
-successful delegation through the production Session. They are not yet the
-durable, reconciled Client operations targeted by the catalogue.
-
-Use `session.stop()` for intentional teardown.
+The session also exposes `groupMetadata()`, `profilePictureUrl()`, `identity()`,
+and `stop()`.
 
 ## Credentials
 

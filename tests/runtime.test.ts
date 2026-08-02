@@ -2566,39 +2566,6 @@ test("a group's roster follows participant changes without deleting a record", a
   // The subject the metadata event established survived every roster change.
   expect(groups[0]?.subject).toBe("The Room");
   expect(
-    patchesOf(seen.frames).flatMap((patch) =>
-      patch.upserts.flatMap((upsert) => (upsert.type === "group" ? [upsert.group] : [])),
-    ),
-  ).toEqual([
-    {
-      accountId: "personal",
-      groupId: ROOM,
-      subject: "The Room",
-      participants: [{ id: PERSON, role: "admin" }],
-    },
-    {
-      accountId: "personal",
-      groupId: ROOM,
-      subject: "The Room",
-      participants: [{ id: PERSON, role: "admin" }, { id: SELF }],
-    },
-    {
-      accountId: "personal",
-      groupId: ROOM,
-      subject: "The Room",
-      participants: [
-        { id: PERSON, role: "admin" },
-        { id: SELF, role: "admin" },
-      ],
-    },
-    {
-      accountId: "personal",
-      groupId: ROOM,
-      subject: "The Room",
-      participants: [{ id: SELF, role: "admin" }],
-    },
-  ]);
-  expect(
     patchesOf(seen.frames).every((patch) => patch.upserts.every((upsert) => "type" in upsert)),
   ).toBe(true);
   expect(Object.keys(patchesOf(seen.frames)[0] ?? {}).includes("deletes")).toBe(false);

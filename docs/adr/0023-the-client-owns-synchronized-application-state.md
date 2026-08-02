@@ -60,6 +60,6 @@ does not delete stored messages or leave the WhatsApp chat.
 - React and OpenTUI share WhatsApp behavior without sharing presentation.
 - Non-React applications receive the same friendly synchronized state rather
   than a lower-level protocol.
-- Browser and OpenTUI observations remain independent because they exercise
-  different renderers and platform behavior.
-- ADR-0016 is superseded. ADR-0024 governs capability observations.
+- Browser and OpenTUI verification statuses remain separate because they
+  exercise different renderers and platform behavior.
+- ADR-0016 is superseded. ADR-0024 governs verification claims.
