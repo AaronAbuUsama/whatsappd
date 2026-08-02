@@ -70,7 +70,7 @@ only the mapper, state machine, or testing Adapter named by that row.
 
 | Claim | Exact outcome | Surface | Variant | Adapter | Lifecycle | Status | Implementation | Support | Required | Proven | Evidence | Gap |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `CHAT-02.snapshot-lookup.runtime-client.deterministic` | read one current chat from a Client snapshot | `runtime-client` | `chat-summary` | `memory-runtime` | `deterministic` | `implemented-and-proven` | `implemented` | `supported` | `P1` | `P1` | [`tests/runtime.test.ts`](../tests/runtime.test.ts) — one text message records the change, updates current state, and takes one revision — `b27d3641a46935248ca414b4ec9bfd801ce88850` | — |
+| `CHAT-02.snapshot-lookup.runtime-client.deterministic` | read one current chat from a Client snapshot | `runtime-client` | `chat-summary` | `memory-runtime` | `deterministic` | `implemented-and-proven` | `implemented` | `supported` | `P1` | `P1` | [`tests/runtime.test.ts`](../tests/runtime.test.ts) — the Snapshot Window carries no message window for any chat — `b27d3641a46935248ca414b4ec9bfd801ce88850` | — |
 | `CHAT-02.snapshot-lookup.runtime-client.restart` | read one reconstructed current chat from a new Client | `runtime-client` | `chat-summary` | `libsql-runtime` | `restart` | `implemented-and-proven` | `implemented` | `supported` | `P2` | `P2` | [`tests/libsql-backend.test.ts`](../tests/libsql-backend.test.ts) — a new libSQL backend reconstructs one account through Runtime, DataStore, and Client — `b27d3641a46935248ca414b4ec9bfd801ce88850` | — |
 
 ## CHAT-04

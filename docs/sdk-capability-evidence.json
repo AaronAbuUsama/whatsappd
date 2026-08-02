@@ -426,7 +426,7 @@
       "evidence": [
         {
           "path": "tests/runtime.test.ts",
-          "assertion": "one text message records the change, updates current state, and takes one revision",
+          "assertion": "the Snapshot Window carries no message window for any chat",
           "head": "b27d3641a46935248ca414b4ec9bfd801ce88850"
         }
       ]

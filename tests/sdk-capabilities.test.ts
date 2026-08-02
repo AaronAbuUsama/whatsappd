@@ -561,6 +561,9 @@ test("reviewed current claims retain exact surfaces, variants, and receipts", as
     "the Snapshot Window carries no message window for any chat",
   );
   expect(
+    claims.get("CHAT-02.snapshot-lookup.runtime-client.deterministic")?.evidence[0]?.assertion,
+  ).toBe("the Snapshot Window carries no message window for any chat");
+  expect(
     evidence.claims
       .filter((claim) => claim.capabilityId === "TEST-02")
       .map((claim) => claim.variant)
