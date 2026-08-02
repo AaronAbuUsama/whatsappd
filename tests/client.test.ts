@@ -838,6 +838,139 @@ test("a revision gap publishes only after every fresh conversation window is rea
   await client.close();
 });
 
+test("queued revision gaps publish only the final recovered Client generation", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let snapshotReads = 0;
+  let recovering = false;
+  let firstWindowReady!: () => void;
+  const firstWindowStarted = new Promise<void>((resolve) => {
+    firstWindowReady = resolve;
+  });
+  let releaseFirstWindow!: () => void;
+  const firstWindowGate = new Promise<void>((resolve) => {
+    releaseFirstWindow = resolve;
+  });
+  let secondRecoveryReady!: () => void;
+  const secondRecoveryStarted = new Promise<void>((resolve) => {
+    secondRecoveryReady = resolve;
+  });
+  let releaseSecondRecovery!: () => void;
+  const secondRecoveryGate = new Promise<void>((resolve) => {
+    releaseSecondRecovery = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async snapshot(...args: Parameters<typeof base.data.snapshot>) {
+        const snapshot = await base.data.snapshot(...args);
+        snapshotReads += 1;
+        if (snapshotReads === 3) {
+          secondRecoveryReady();
+          await secondRecoveryGate;
+        }
+        return snapshot;
+      },
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        if (recovering) {
+          recovering = false;
+          firstWindowReady();
+          await firstWindowGate;
+        }
+        return base.data.messages(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const client = await openClient(backend, driver);
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m1", chatId: ALPHA, text: "m1", timestamp: 100 }),
+  });
+  const conversation = await client.chats.open(ALPHA);
+  let chatNotifications = 0;
+  client.chats.subscribe(() => {
+    chatNotifications += 1;
+  });
+  let conversationNotifications = 0;
+  let finalReady!: () => void;
+  const finalGeneration = new Promise<void>((resolve) => {
+    finalReady = resolve;
+  });
+  conversation.subscribe((state) => {
+    conversationNotifications += 1;
+    if (state.messages[0]?.messageId === "m5" && client.chats.get(ALPHA)?.lastMessageAt === 500)
+      finalReady();
+  });
+
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 200,
+        event: {
+          type: "message",
+          message: textMessage({ id: "m2", chatId: ALPHA, text: "m2", timestamp: 200 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  recovering = true;
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m3", chatId: ALPHA, text: "m3", timestamp: 300 }),
+  });
+  await withDeadline(firstWindowStarted);
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 400,
+        event: {
+          type: "message",
+          message: textMessage({ id: "m4", chatId: ALPHA, text: "m4", timestamp: 400 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m5", chatId: ALPHA, text: "m5", timestamp: 500 }),
+  });
+  releaseFirstWindow();
+  await withDeadline(secondRecoveryStarted);
+  try {
+    await tick();
+    assert.equal(chatNotifications, 0);
+    assert.equal(conversationNotifications, 0);
+    assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
+    assert.deepEqual(
+      conversation.get().messages.map((message) => message.messageId),
+      ["m1"],
+    );
+  } finally {
+    releaseSecondRecovery();
+  }
+  await withDeadline(finalGeneration);
+
+  assert.equal(chatNotifications, 1);
+  assert.equal(conversationNotifications, 1);
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m5", "m4", "m3", "m2", "m1"],
+  );
+
+  conversation.close();
+  await client.close();
+});
+
 test("Runtime termination preempts blocked recovery and preserves the last coherent state", async () => {
   const base = memoryBackend();
   let fencingToken = 0;

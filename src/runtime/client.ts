@@ -328,19 +328,38 @@ async function createClientState(
     let task!: Promise<void>;
     task = (async () => {
       try {
-        const snapshot = await source.snapshot();
-        const replacing = [...conversations];
-        const windows = await Promise.all(
-          replacing.map(
-            async (conversation) => [conversation, await conversation.readWindow()] as const,
-          ),
-        );
-        if (closed || terminated) return;
-        pendingNotifications = new Map();
-        const flushGlobal = replace(snapshot);
-        for (const [conversation, page] of windows) if (page) conversation.replaceWindow(page);
-        flushGlobal();
-        for (const conversation of replacing) conversation.flush();
+        for (;;) {
+          const snapshot = await source.snapshot();
+          const replacing = [...conversations];
+          const windows = await Promise.all(
+            replacing.map(
+              async (conversation) => [conversation, await conversation.readWindow()] as const,
+            ),
+          );
+          if (closed || terminated) return;
+          let queuedRevision = snapshot.revision;
+          let replayable = true;
+          for (const queuedFrame of queued) {
+            if (queuedFrame.type !== "patch" || queuedFrame.patch.revision <= queuedRevision)
+              continue;
+            if (queuedFrame.patch.fromRevision !== queuedRevision) {
+              replayable = false;
+              break;
+            }
+            queuedRevision = queuedFrame.patch.revision;
+          }
+          if (
+            !replayable ||
+            windows.some(([, page]) => page && page.revision !== snapshot.revision)
+          )
+            continue;
+          pendingNotifications = new Map();
+          const flushGlobal = replace(snapshot);
+          for (const [conversation, page] of windows) if (page) conversation.replaceWindow(page);
+          flushGlobal();
+          for (const conversation of replacing) conversation.flush();
+          break;
+        }
       } catch (error) {
         if (!terminated) closeClient({ error });
       } finally {
