@@ -296,6 +296,8 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `MessageContext`
 - `MessageFlags`
 - `MessageHandlerContext`
+- `MessageReaction`
+- `MessageReceipt`
 - `MessageRecord`
 - `MessageRef`
 - `MetricEvent`

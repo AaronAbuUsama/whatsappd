@@ -250,8 +250,11 @@ test("one text message records the change, updates current state, and takes one 
             chatId: PERSON,
             messageId: "m1",
             sender: { id: PERSON, mode: "pn" },
+            ref: { id: "m1", chatId: PERSON, fromMe: false },
             fromMe: false,
             timestamp: AT,
+            receipts: [],
+            reactions: [],
             kind: "text",
             text: "Hello",
           },
@@ -286,6 +289,493 @@ test("one text message records the change, updates current state, and takes one 
   });
 
   await seen.close();
+  await runtime.stop();
+});
+
+test("a location crosses the Session and Runtime into the Client current mirror", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+
+  await driver.emit({
+    type: "message",
+    message: {
+      id: "location-1",
+      chatId: PERSON,
+      sender: { id: PERSON, mode: "pn" },
+      fromMe: false,
+      timestamp: AT,
+      live: true,
+      isGroup: false,
+      kind: "location",
+      lat: 5.6037,
+      lng: -0.187,
+      name: "Accra",
+      address: "Greater Accra",
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages).toEqual([
+    {
+      accountId: "personal",
+      chatId: PERSON,
+      messageId: "location-1",
+      sender: { id: PERSON, mode: "pn" },
+      ref: { id: "location-1", chatId: PERSON, fromMe: false },
+      fromMe: false,
+      timestamp: AT,
+      receipts: [],
+      reactions: [],
+      kind: "location",
+      lat: 5.6037,
+      lng: -0.187,
+      name: "Accra",
+      address: "Greater Accra",
+    },
+  ]);
+
+  await runtime.stop();
+});
+
+test("contact cards cross the Session and Runtime into the Client current mirror", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+
+  await driver.emit({
+    type: "message",
+    message: {
+      id: "contacts-1",
+      chatId: PERSON,
+      sender: { id: PERSON, mode: "pn" },
+      fromMe: false,
+      timestamp: AT,
+      live: true,
+      isGroup: false,
+      kind: "contacts",
+      contacts: [
+        { name: "Ada", vcard: "BEGIN:VCARD\nFN:Ada\nEND:VCARD" },
+        { vcard: "BEGIN:VCARD\nTEL:+233000000000\nEND:VCARD" },
+      ],
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages[0]).toMatchObject({
+    messageId: "contacts-1",
+    kind: "contacts",
+    contacts: [
+      { name: "Ada", vcard: "BEGIN:VCARD\nFN:Ada\nEND:VCARD" },
+      { vcard: "BEGIN:VCARD\nTEL:+233000000000\nEND:VCARD" },
+    ],
+  });
+
+  await runtime.stop();
+});
+
+test("a poll crosses the Session and Runtime into the Client current mirror", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+
+  await driver.emit({
+    type: "message",
+    message: {
+      id: "poll-1",
+      chatId: PERSON,
+      sender: { id: PERSON, mode: "pn" },
+      fromMe: false,
+      timestamp: AT,
+      live: true,
+      isGroup: false,
+      kind: "poll",
+      name: "Lunch?",
+      options: ["Waakye", "Jollof"],
+      selectableCount: 1,
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages[0]).toMatchObject({
+    messageId: "poll-1",
+    kind: "poll",
+    name: "Lunch?",
+    options: ["Waakye", "Jollof"],
+    selectableCount: 1,
+  });
+
+  await runtime.stop();
+});
+
+test("unsupported content crosses the Session and Runtime into the Client current mirror", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+
+  await driver.emit({
+    type: "message",
+    message: {
+      id: "future-1",
+      chatId: PERSON,
+      sender: { id: PERSON, mode: "pn" },
+      fromMe: false,
+      timestamp: AT,
+      live: true,
+      isGroup: false,
+      kind: "unsupported",
+      rawType: "futureMessage",
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages[0]).toMatchObject({
+    messageId: "future-1",
+    kind: "unsupported",
+    rawType: "futureMessage",
+  });
+
+  await runtime.stop();
+});
+
+test("message metadata and the exact delivered group action ref reach the Client", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+
+  await driver.emit({
+    type: "message",
+    message: {
+      id: "group-1",
+      chatId: ROOM,
+      sender: { id: PERSON, mode: "pn", alt: "55555@lid" },
+      keyParticipant: "55555:7@lid",
+      pushName: "Ada",
+      fromMe: false,
+      timestamp: AT,
+      live: true,
+      isGroup: true,
+      context: {
+        quoted: { id: "quoted-1", from: "other@s.whatsapp.net" },
+        mentions: ["mentioned@s.whatsapp.net"],
+      },
+      flags: { viewOnce: true, ephemeral: true },
+      kind: "text",
+      text: "Private metadata",
+    },
+  });
+
+  expect((await client.messages(ROOM)).messages[0]).toMatchObject({
+    messageId: "group-1",
+    pushName: "Ada",
+    context: {
+      quoted: { id: "quoted-1", from: "other@s.whatsapp.net" },
+      mentions: ["mentioned@s.whatsapp.net"],
+    },
+    flags: { viewOnce: true, ephemeral: true },
+    ref: {
+      id: "group-1",
+      chatId: ROOM,
+      fromMe: false,
+      participant: "55555:7@lid",
+    },
+  });
+
+  await runtime.stop();
+});
+
+test("a receipt becomes the current aggregate receipt on its existing message", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({ type: "message", message: hello() });
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "receipt",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      status: "read",
+      at: AT + 1,
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages[0]?.receipts).toEqual([
+    { subject: "aggregate", status: "read", at: AT + 1 },
+  ]);
+
+  await runtime.stop();
+});
+
+test("participant receipts remain current per participant", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({ type: "message", message: hello() });
+
+  for (const update of [
+    { kind: "receipt", ref: { id: "m1", chatId: PERSON, fromMe: false }, status: "delivered" },
+    {
+      kind: "receipt",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      status: "delivered",
+      by: "alice@s.whatsapp.net",
+      at: AT + 1,
+    },
+    {
+      kind: "receipt",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      status: "read",
+      by: "bob@s.whatsapp.net",
+      at: AT + 2,
+    },
+    {
+      kind: "receipt",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      status: "read",
+      by: "alice@s.whatsapp.net",
+      at: AT + 3,
+    },
+  ] as const) {
+    await driver.emit({ type: "update", update });
+  }
+
+  expect((await client.messages(PERSON)).messages[0]?.receipts).toEqual([
+    { subject: "aggregate", status: "delivered" },
+    {
+      subject: "participant:alice@s.whatsapp.net",
+      status: "read",
+      by: "alice@s.whatsapp.net",
+      at: AT + 3,
+    },
+    {
+      subject: "participant:bob@s.whatsapp.net",
+      status: "read",
+      by: "bob@s.whatsapp.net",
+      at: AT + 2,
+    },
+  ]);
+
+  await runtime.stop();
+});
+
+test("reactions are current per actor and removal affects only that actor", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({ type: "message", message: hello() });
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "reaction",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      emoji: "👍",
+      by: "alice@s.whatsapp.net",
+      removed: false,
+      at: AT + 1,
+    },
+  });
+  expect((await client.messages(PERSON)).messages[0]?.reactions).toEqual([
+    {
+      subject: "alice@s.whatsapp.net",
+      emoji: "👍",
+      by: "alice@s.whatsapp.net",
+      at: AT + 1,
+    },
+  ]);
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "reaction",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      emoji: "🔥",
+      by: "alice@s.whatsapp.net",
+      removed: false,
+      at: AT + 2,
+    },
+  });
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "reaction",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      emoji: "❤️",
+      by: "bob@s.whatsapp.net",
+      removed: false,
+      at: AT + 3,
+    },
+  });
+  expect((await client.messages(PERSON)).messages[0]?.reactions).toEqual([
+    {
+      subject: "alice@s.whatsapp.net",
+      emoji: "🔥",
+      by: "alice@s.whatsapp.net",
+      at: AT + 2,
+    },
+    {
+      subject: "bob@s.whatsapp.net",
+      emoji: "❤️",
+      by: "bob@s.whatsapp.net",
+      at: AT + 3,
+    },
+  ]);
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "reaction",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      by: "alice@s.whatsapp.net",
+      removed: true,
+      at: AT + 4,
+    },
+  });
+  expect((await client.messages(PERSON)).messages[0]?.reactions).toEqual([
+    {
+      subject: "bob@s.whatsapp.net",
+      emoji: "❤️",
+      by: "bob@s.whatsapp.net",
+      at: AT + 3,
+    },
+  ]);
+
+  await runtime.stop();
+});
+
+test("a text edit replaces content while preserving identity, action targeting, and updates", async () => {
+  const { driver, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({
+    type: "message",
+    message: {
+      ...hello(),
+      pushName: "Before",
+      context: { mentions: ["before@s.whatsapp.net"] },
+      flags: { ephemeral: true },
+    },
+  });
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "receipt",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      status: "read",
+    },
+  });
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "reaction",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      emoji: "👍",
+      by: "alice@s.whatsapp.net",
+      removed: false,
+    },
+  });
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "edit",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      at: AT + 10,
+      message: {
+        id: "replacement-payload-id",
+        chatId: "replacement@g.us",
+        sender: { id: "replacement@s.whatsapp.net", mode: "pn" },
+        keyParticipant: "replacement:3@s.whatsapp.net",
+        pushName: "After",
+        fromMe: true,
+        timestamp: AT + 99,
+        live: true,
+        isGroup: true,
+        context: { mentions: ["after@s.whatsapp.net"] },
+        flags: { edited: true },
+        kind: "text",
+        text: "Edited",
+      },
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages[0]).toEqual({
+    accountId: "personal",
+    chatId: PERSON,
+    messageId: "m1",
+    sender: { id: PERSON, mode: "pn" },
+    ref: { id: "m1", chatId: PERSON, fromMe: false },
+    fromMe: false,
+    timestamp: AT,
+    pushName: "After",
+    context: { mentions: ["after@s.whatsapp.net"] },
+    flags: { edited: true },
+    receipts: [{ subject: "aggregate", status: "read" }],
+    reactions: [
+      {
+        subject: "alice@s.whatsapp.net",
+        emoji: "👍",
+        by: "alice@s.whatsapp.net",
+      },
+    ],
+    editedAt: AT + 10,
+    kind: "text",
+    text: "Edited",
+  });
+  expect((await runtime.snapshot()).chats[0]?.lastMessageAt).toBe(AT);
+
+  await runtime.stop();
+});
+
+test("revocation keeps a content-free tombstone and accepted source", async () => {
+  const { driver, backend, runtime, client } = lane("personal");
+  await runtime.start();
+  await driver.emit({ type: "message", message: { ...hello(), pushName: "Ada" } });
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "receipt",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      status: "read",
+    },
+  });
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "reaction",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      emoji: "👍",
+      by: "alice@s.whatsapp.net",
+      removed: false,
+    },
+  });
+
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "revoke",
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      by: "moderator@s.whatsapp.net",
+      at: AT + 10,
+    },
+  });
+
+  expect((await client.messages(PERSON)).messages).toEqual([
+    {
+      accountId: "personal",
+      chatId: PERSON,
+      messageId: "m1",
+      sender: { id: PERSON, mode: "pn" },
+      ref: { id: "m1", chatId: PERSON, fromMe: false },
+      fromMe: false,
+      timestamp: AT,
+      pushName: "Ada",
+      receipts: [{ subject: "aggregate", status: "read" }],
+      reactions: [
+        {
+          subject: "alice@s.whatsapp.net",
+          emoji: "👍",
+          by: "alice@s.whatsapp.net",
+        },
+      ],
+      kind: "revoked",
+      revokedAt: AT + 10,
+      revokedBy: "moderator@s.whatsapp.net",
+    },
+  ]);
+  expect((await runtime.snapshot()).chats[0]?.lastMessageAt).toBe(AT);
+  expect(
+    (await backend.data.accepted("personal", 0)).map(({ events }) => events[0]?.event.type),
+  ).toEqual(["message", "update", "update", "update"]);
+
   await runtime.stop();
 });
 
@@ -335,8 +825,11 @@ test("an image is stored before one accepted state reaches the Client, page, and
     chatId: PERSON,
     messageId: "image-1",
     sender: { id: PERSON, mode: "pn" },
+    ref: { id: "image-1", chatId: PERSON, fromMe: false },
     fromMe: false,
     timestamp: AT,
+    receipts: [],
+    reactions: [],
     kind: "image",
     media: {
       state: "stored",
@@ -776,7 +1269,9 @@ test("memory data values are owned by the store across every public seam", async
   assert.ok(sourceEvent?.type === "message" && sourceEvent.message.kind === "text");
   (sourceEvent.message as { text: string }).text = "mutated source";
 
-  expect((await data.messages("personal", PERSON)).messages[0]?.text).toBe("Hello");
+  const retainedMessage = (await data.messages("personal", PERSON)).messages[0];
+  assert.equal(retainedMessage?.kind, "text");
+  expect(retainedMessage.text).toBe("Hello");
   expect((await data.snapshot("personal")).chats[0]?.lastMessageAt).toBe(AT);
   const retainedEvent = (await data.accepted("personal", 0))[0]?.events[0]?.event;
   assert.ok(retainedEvent?.type === "message" && retainedEvent.message.kind === "text");
@@ -795,12 +1290,15 @@ test("mutating a delivered patch cannot mutate the committed mirror", async () =
   runtime.onFrame((frame) => {
     if (frame.type !== "patch") return;
     const message = frame.patch.upserts.find((record) => record.type === "message");
-    if (message?.type === "message") laterText = message.message.text;
+    if (message?.type === "message" && message.message.kind === "text")
+      laterText = message.message.text;
   });
 
   await driver.emit({ type: "message", message: hello() });
 
-  expect((await runtime.messages(PERSON)).messages[0]?.text).toBe("Hello");
+  const retained = (await runtime.messages(PERSON)).messages[0];
+  assert.equal(retained?.kind, "text");
+  expect(retained.text).toBe("Hello");
   expect(laterText).toBe("Hello");
   await runtime.stop();
 });

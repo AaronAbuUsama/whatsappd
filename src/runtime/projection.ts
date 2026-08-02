@@ -7,6 +7,7 @@ import {
   type ChatRecord,
   type ContactRecord,
   type DurableInboundMessage,
+  type DurableUpdate,
   type GroupRecord,
   type MessageRecord,
   type MirrorDelete,
@@ -228,21 +229,70 @@ async function projectObserved(
   state.upsert({ type: "account", account: merged });
 }
 
+type CurrentMessageBase = Pick<
+  MessageRecord,
+  | "accountId"
+  | "chatId"
+  | "messageId"
+  | "sender"
+  | "ref"
+  | "fromMe"
+  | "timestamp"
+  | "pushName"
+  | "context"
+  | "flags"
+  | "receipts"
+  | "reactions"
+  | "editedAt"
+>;
+
+function withCurrentContent(
+  base: CurrentMessageBase,
+  message: DurableInboundMessage,
+): MessageRecord {
+  switch (message.kind) {
+    case "text":
+      return { ...base, kind: "text", text: message.text };
+    case "image":
+    case "video":
+    case "audio":
+    case "document":
+    case "sticker":
+      return {
+        ...base,
+        kind: message.kind,
+        media: message.media,
+        ...(message.text !== undefined && { text: message.text }),
+      };
+    case "location":
+      return {
+        ...base,
+        kind: "location",
+        lat: message.lat,
+        lng: message.lng,
+        ...(message.name !== undefined && { name: message.name }),
+        ...(message.address !== undefined && { address: message.address }),
+      };
+    case "contacts":
+      return { ...base, kind: "contacts", contacts: message.contacts };
+    case "poll":
+      return {
+        ...base,
+        kind: "poll",
+        name: message.name,
+        options: message.options,
+        selectableCount: message.selectableCount,
+      };
+    case "unsupported":
+      return { ...base, kind: "unsupported", rawType: message.rawType };
+  }
+}
+
 async function projectMessage(
   state: ProjectionState,
   accountId: string,
   message: DurableInboundMessage,
 ): Promise<void> {
-  if (
-    message.kind !== "text" &&
-    message.kind !== "image" &&
-    message.kind !== "video" &&
-    message.kind !== "audio" &&
-    message.kind !== "document" &&
-    message.kind !== "sticker"
-  )
-    throw new UnsupportedDurableEventError(`a "${message.kind}" message`);
-
   if (message.sender.alt !== undefined)
     await projectContact(state, {
       accountId,
@@ -255,18 +305,24 @@ async function projectMessage(
     chatId: message.chatId,
     messageId: message.id,
     sender: message.sender,
+    ref: {
+      id: message.id,
+      chatId: message.chatId,
+      fromMe: message.fromMe,
+      ...(message.isGroup &&
+        message.keyParticipant !== undefined && {
+          participant: message.keyParticipant,
+        }),
+    },
     fromMe: message.fromMe,
     timestamp: message.timestamp,
+    ...(message.pushName !== undefined && { pushName: message.pushName }),
+    ...(message.context !== undefined && { context: message.context }),
+    ...(message.flags !== undefined && { flags: message.flags }),
+    receipts: [],
+    reactions: [],
   };
-  const record: MessageRecord =
-    message.kind === "text"
-      ? { ...base, kind: "text", text: message.text }
-      : {
-          ...base,
-          kind: message.kind,
-          media: message.media,
-          ...(message.text !== undefined && { text: message.text }),
-        };
+  const record = withCurrentContent(base, message);
   const existing = await state.message(record.chatId, record.messageId);
   if (!existing || !isDeepStrictEqual(existing, record))
     state.upsert({ type: "message", message: record });
@@ -278,6 +334,109 @@ async function projectMessage(
   });
 }
 
+async function projectMessageUpdate(state: ProjectionState, update: DurableUpdate): Promise<void> {
+  const existing = await state.message(update.ref.chatId, update.ref.id);
+  if (!existing) return;
+
+  if (update.kind === "receipt") {
+    const subject = update.by === undefined ? "aggregate" : `participant:${update.by}`;
+    const receipt = {
+      subject,
+      status: update.status,
+      ...(update.by !== undefined && { by: update.by }),
+      ...(update.at !== undefined && { at: update.at }),
+    };
+    const index = existing.receipts.findIndex((current) => current.subject === subject);
+    const receipts =
+      index === -1
+        ? [...existing.receipts, receipt]
+        : existing.receipts.map((current, currentIndex) =>
+            currentIndex === index ? receipt : current,
+          );
+    const message = { ...existing, receipts };
+    if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
+    return;
+  }
+
+  if (update.kind === "reaction") {
+    const subject = update.by ?? "aggregate";
+    const index = existing.reactions.findIndex((current) => current.subject === subject);
+    const reactions = update.removed
+      ? existing.reactions.filter((current) => current.subject !== subject)
+      : update.emoji === undefined
+        ? existing.reactions
+        : index === -1
+          ? [
+              ...existing.reactions,
+              {
+                subject,
+                emoji: update.emoji,
+                ...(update.by !== undefined && { by: update.by }),
+                ...(update.at !== undefined && { at: update.at }),
+              },
+            ]
+          : existing.reactions.map((current, currentIndex) =>
+              currentIndex === index
+                ? {
+                    subject,
+                    emoji: update.emoji!,
+                    ...(update.by !== undefined && { by: update.by }),
+                    ...(update.at !== undefined && { at: update.at }),
+                  }
+                : current,
+            );
+    const message = { ...existing, reactions };
+    if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
+    return;
+  }
+
+  if (update.kind === "edit") {
+    const editedAt = update.at ?? existing.editedAt;
+    const message = withCurrentContent(
+      {
+        accountId: existing.accountId,
+        chatId: existing.chatId,
+        messageId: existing.messageId,
+        sender: existing.sender,
+        ref: existing.ref,
+        fromMe: existing.fromMe,
+        timestamp: existing.timestamp,
+        ...(update.message.pushName !== undefined && { pushName: update.message.pushName }),
+        ...(update.message.context !== undefined && { context: update.message.context }),
+        ...(update.message.flags !== undefined && { flags: update.message.flags }),
+        receipts: existing.receipts,
+        reactions: existing.reactions,
+        ...(editedAt !== undefined && { editedAt }),
+      },
+      update.message,
+    );
+    if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
+    return;
+  }
+
+  if (update.kind === "revoke") {
+    const message: MessageRecord = {
+      accountId: existing.accountId,
+      chatId: existing.chatId,
+      messageId: existing.messageId,
+      sender: existing.sender,
+      ref: existing.ref,
+      fromMe: existing.fromMe,
+      timestamp: existing.timestamp,
+      ...(existing.pushName !== undefined && { pushName: existing.pushName }),
+      ...(existing.context !== undefined && { context: existing.context }),
+      ...(existing.flags !== undefined && { flags: existing.flags }),
+      receipts: existing.receipts,
+      reactions: existing.reactions,
+      ...(existing.editedAt !== undefined && { editedAt: existing.editedAt }),
+      kind: "revoked",
+      ...(update.at !== undefined && { revokedAt: update.at }),
+      ...(update.by !== undefined && { revokedBy: update.by }),
+    };
+    if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
+  }
+}
+
 async function projectEvent(
   state: ProjectionState,
   accountId: string,
@@ -286,19 +445,8 @@ async function projectEvent(
   switch (event.type) {
     case "message":
       return projectMessage(state, accountId, event.message);
-    case "update": {
-      if (event.update.kind !== "edit") return;
-      switch (event.update.message.kind) {
-        case "image":
-        case "video":
-        case "audio":
-        case "document":
-        case "sticker":
-          return projectMessage(state, accountId, event.update.message);
-        default:
-          return;
-      }
-    }
+    case "update":
+      return projectMessageUpdate(state, event.update);
     case "conversation_sync": {
       const { context, chats, contacts, messages } = event.batch;
       if (context.projection.mode !== "upsert")
