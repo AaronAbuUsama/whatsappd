@@ -135,8 +135,15 @@ test("the checked-in catalogue is complete and generated without drift", async (
   const messagePersistence = (input.capabilities as Record<string, unknown>[]).find(
     ({ id }) => id === "DATA-08",
   ) as { current: { status: string; summary: string } };
-  expect(messagePersistence.current.status).toBe("partial");
-  expect(messagePersistence.current.summary).toContain("location, contacts, poll, and unsupported");
+  expect(messagePersistence.current).toEqual({
+    status: "implemented",
+    summary: "Current whatsappd implements this capability.",
+  });
+  const domainTombstones = (input.capabilities as Record<string, unknown>[]).find(
+    ({ id }) => id === "DATA-09",
+  ) as { current: { status: string; summary: string } };
+  expect(domainTombstones.current.status).toBe("partial");
+  expect(domainTombstones.current.summary).toContain("message revocation tombstones");
   expect(Object.keys(input).sort()).toEqual([
     "audit",
     "backends",
