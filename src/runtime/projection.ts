@@ -300,32 +300,32 @@ async function projectMessage(
       nativeIds: [message.sender.id, message.sender.alt],
     });
 
-  const base = {
-    accountId,
-    chatId: message.chatId,
-    messageId: message.id,
-    sender: message.sender,
-    ref: {
-      id: message.id,
+  const existing = await state.message(message.chatId, message.id);
+  if (!existing) {
+    const base = {
+      accountId,
       chatId: message.chatId,
+      messageId: message.id,
+      sender: message.sender,
+      ref: {
+        id: message.id,
+        chatId: message.chatId,
+        fromMe: message.fromMe,
+        ...(message.isGroup &&
+          message.keyParticipant !== undefined && {
+            participant: message.keyParticipant,
+          }),
+      },
       fromMe: message.fromMe,
-      ...(message.isGroup &&
-        message.keyParticipant !== undefined && {
-          participant: message.keyParticipant,
-        }),
-    },
-    fromMe: message.fromMe,
-    timestamp: message.timestamp,
-    ...(message.pushName !== undefined && { pushName: message.pushName }),
-    ...(message.context !== undefined && { context: message.context }),
-    ...(message.flags !== undefined && { flags: message.flags }),
-    receipts: [],
-    reactions: [],
-  };
-  const record = withCurrentContent(base, message);
-  const existing = await state.message(record.chatId, record.messageId);
-  if (!existing || !isDeepStrictEqual(existing, record))
-    state.upsert({ type: "message", message: record });
+      timestamp: message.timestamp,
+      ...(message.pushName !== undefined && { pushName: message.pushName }),
+      ...(message.context !== undefined && { context: message.context }),
+      ...(message.flags !== undefined && { flags: message.flags }),
+      receipts: [],
+      reactions: [],
+    };
+    state.upsert({ type: "message", message: withCurrentContent(base, message) });
+  }
   await projectChat(state, {
     accountId,
     chatId: message.chatId,

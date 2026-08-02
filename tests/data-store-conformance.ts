@@ -377,10 +377,8 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         versions.push([batch.seq, batch.revision]);
       };
 
-      await record({
-        type: "message",
-        message: textMessage({ id: "current", chatId: PN, text: "Before", timestamp: AT }),
-      });
+      const original = textMessage({ id: "current", chatId: PN, text: "Before", timestamp: AT });
+      await record({ type: "message", message: original });
       const receipt = {
         type: "update" as const,
         update: {
@@ -453,6 +451,15 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         },
       });
       await record({
+        type: "conversation_sync",
+        batch: {
+          context: { source: "recent", projection: { mode: "upsert" } },
+          chats: [],
+          contacts: [],
+          messages: [original],
+        },
+      });
+      await record({
         type: "update",
         update: {
           kind: "receipt",
@@ -471,6 +478,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         [7, 5],
         [8, 6],
         [9, 6],
+        [10, 6],
       ]);
       expect((await resource.data.messages(ACCOUNT, PN)).messages).toEqual([
         {
@@ -498,7 +506,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       ]);
       expect((await resource.data.snapshot(ACCOUNT)).chats[0]?.lastMessageAt).toBe(AT);
       expect((await resource.data.accepted(ACCOUNT, 0)).map(({ seq }) => seq)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       ]);
     } finally {
       await resource.close();
