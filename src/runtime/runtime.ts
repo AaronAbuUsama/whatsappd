@@ -28,7 +28,6 @@ import {
   type StoredMessagePage,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
-  type WhatsAppClient,
   type WhatsAppClientFrame,
   type WhatsAppDurableEvent,
   type WhatsAppSnapshot,
@@ -118,13 +117,30 @@ const connectionInstant = (status: Status): "connected" | "disconnected" | undef
  * `start` and `stop` are optional so the deterministic test session — which has
  * no socket to open — is usable through the same runtime as the real one.
  */
-export interface RuntimeSession {
+interface RuntimeSession {
   subscribe(
     handlers: WhatsAppSessionHandlers,
     options?: { readonly signal?: AbortSignal },
   ): Unsubscribe;
   start?(): Promise<void>;
   stop?(): Promise<void>;
+  identity?(): import("../model/index.ts").WaIdentity | undefined;
+}
+
+interface WhatsAppClientSource {
+  snapshot(): Promise<WhatsAppSnapshot>;
+  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
+  identity(): import("../model/index.ts").WaIdentity | undefined;
+  onFrame(listener: (frame: WhatsAppClientFrame) => void): Unsubscribe;
+}
+
+const clientSources = new WeakMap<WhatsAppRuntime, WhatsAppClientSource>();
+
+/** Package-internal Runtime source for the friendly Client. */
+export function getWhatsAppClientSource(runtime: WhatsAppRuntime): WhatsAppClientSource {
+  const source = clientSources.get(runtime);
+  if (!source) throw new TypeError("runtime was not created by createWhatsAppRuntime");
+  return source;
 }
 
 /** Configuration for {@link createWhatsAppRuntime}. */
@@ -167,12 +183,6 @@ export interface WhatsAppRuntime {
   start(): Promise<void>;
   /** Stop consuming, close the session, and release the account lease. */
   stop(): Promise<void>;
-  /** The account's current Snapshot Window and revision. */
-  snapshot(): Promise<WhatsAppSnapshot>;
-  /** One chat's stored messages, newest first. Reads storage, never WhatsApp. */
-  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
-  /** Observe published frames. The client seam; applications use a client. */
-  onFrame(listener: (frame: WhatsAppClientFrame) => void): Unsubscribe;
 }
 
 /**
@@ -192,9 +202,8 @@ export interface WhatsAppRuntime {
  * });
  *
  * await runtime.start();
- * for await (const frame of createInProcessWhatsAppClient(runtime).watch()) {
- *   console.log(frame.type);
- * }
+ * const client = await createWhatsAppClient(runtime);
+ * console.log(client.chats.list());
  * ```
  */
 export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRuntime {
@@ -575,13 +584,12 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     return attempt;
   }
 
-  return {
-    accountId,
-    start,
-    stop,
+  const runtime: WhatsAppRuntime = { accountId, start, stop };
+  const source: WhatsAppClientSource = {
     snapshot: () => backend.data.snapshot(accountId),
     messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
-    onFrame(listener) {
+    identity: () => session?.identity?.(),
+    onFrame: (listener) => {
       if (terminal) {
         listener({ ...terminal });
         return () => {};
@@ -590,114 +598,6 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       return () => listeners.delete(listener);
     },
   };
-}
-
-/** Distinguishes "the watch was cancelled" from any snapshot a read returns. */
-const CANCELLED = Symbol("cancelled");
-
-/**
- * Create the client for a runtime living in this process.
- *
- * @param runtime - The runtime to read and follow.
- * @returns A {@link WhatsAppClient} over that runtime's mirror.
- */
-export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAppClient {
-  return {
-    // Straight to the mirror, deliberately independent of any watch: paging is
-    // a read, and nothing about it asks WhatsApp for anything (ADR-0010).
-    messages: (chatId, options) => runtime.messages(chatId, options),
-
-    async *watch(options) {
-      const signal = options?.signal;
-      const queued: WhatsAppClientFrame[] = [];
-      let wake: (() => void) | undefined;
-      let close!: (frame: Extract<WhatsAppClientFrame, { type: "closed" }>) => void;
-      const closed = new Promise<Extract<WhatsAppClientFrame, { type: "closed" }>>((resolve) => {
-        close = resolve;
-      });
-      const push = (frame: WhatsAppClientFrame): void => {
-        queued.push(frame);
-        if (frame.type === "closed") close(frame);
-        wake?.();
-      };
-      // Subscribed before the snapshot is read, so a change committed while it
-      // is being read is buffered rather than lost.
-      const off = runtime.onFrame(push);
-      let onAbort = (): void => {};
-      // Cancellation has to be awaitable, not just observable: a snapshot read
-      // that never settles would otherwise keep the generator suspended past
-      // the abort, holding its subscription with no way to reach cleanup.
-      const cancelled = new Promise<typeof CANCELLED>((resolve) => {
-        if (signal?.aborted) resolve(CANCELLED);
-        onAbort = (): void => {
-          wake?.();
-          resolve(CANCELLED);
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-      });
-
-      // The revision the consumer has been brought up to. Patches are applied
-      // only from exactly here (ADR-0011), so it moves with what is yielded
-      // rather than staying at the first snapshot's revision.
-      let applied = -1;
-      const resnapshot = async (): Promise<
-        WhatsAppSnapshot | typeof CANCELLED | Extract<WhatsAppClientFrame, { type: "closed" }>
-      > => {
-        const alreadyClosed = queued.find(
-          (frame): frame is Extract<WhatsAppClientFrame, { type: "closed" }> =>
-            frame.type === "closed",
-        );
-        if (alreadyClosed) return alreadyClosed;
-        const snapshot = await Promise.race([runtime.snapshot(), cancelled, closed]);
-        if (snapshot === CANCELLED || "type" in snapshot) return snapshot;
-        applied = snapshot.revision;
-        return snapshot;
-      };
-
-      try {
-        const snapshot = await resnapshot();
-        if (snapshot === CANCELLED || signal?.aborted) return;
-        if ("type" in snapshot) {
-          yield snapshot;
-          return;
-        }
-        yield { type: "snapshot", snapshot };
-        while (!signal?.aborted) {
-          for (const frame of queued.splice(0)) {
-            if (frame.type === "patch") {
-              // Already applied — a repeat, or a change the snapshot carried.
-              if (frame.patch.revision <= applied) continue;
-              // A missing intermediate change cannot be applied over, and
-              // nothing may be silently skipped: replace state with a snapshot.
-              if (frame.patch.fromRevision !== applied) {
-                const fresh = await resnapshot();
-                if (fresh === CANCELLED || signal?.aborted) return;
-                if ("type" in fresh) {
-                  yield fresh;
-                  return;
-                }
-                yield { type: "snapshot", snapshot: fresh };
-                continue;
-              }
-              applied = frame.patch.revision;
-            }
-            yield frame;
-            // The runtime has stopped consuming the account, so nothing can
-            // follow: end the stream rather than suspending on a wake that will
-            // never come.
-            if (frame.type === "closed") return;
-            if (signal?.aborted) return;
-          }
-          if (queued.length === 0 && !signal?.aborted)
-            await new Promise<void>((resolve) => {
-              wake = resolve;
-            });
-          wake = undefined;
-        }
-      } finally {
-        off();
-        signal?.removeEventListener("abort", onAbort);
-      }
-    },
-  };
+  clientSources.set(runtime, source);
+  return runtime;
 }

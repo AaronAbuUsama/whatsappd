@@ -1,5 +1,6 @@
 import { addressOf, type InboundMessage } from "./model/message.ts";
 import type { MessageRef, Outbound, SendOptions } from "./model/outbound.ts";
+import type { WaIdentity } from "./model/status.ts";
 import type { WhatsAppSession } from "./session.ts";
 import { createSubscriptionDispatcher, type WhatsAppEvent } from "./subscription.ts";
 
@@ -62,13 +63,22 @@ export interface RecordedSessionCommands {
 export interface TestWhatsAppSessionDriver {
   readonly session: Pick<
     WhatsAppSession,
-    "subscribe" | "send" | "markRead" | "setTyping" | "requestHistory" | "start" | "stop"
+    | "subscribe"
+    | "send"
+    | "markRead"
+    | "setTyping"
+    | "requestHistory"
+    | "identity"
+    | "start"
+    | "stop"
   >;
   readonly commands: RecordedSessionCommands;
   emit(event: TestWhatsAppEvent): Promise<void>;
 }
 
-export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
+export function createTestWhatsAppSession(options?: {
+  readonly identity?: WaIdentity;
+}): TestWhatsAppSessionDriver {
   const sent: Array<{
     readonly to: string;
     readonly content: Outbound;
@@ -132,6 +142,7 @@ export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
         historyRequests.push({ anchor, count, result });
         return result;
       },
+      identity: () => options?.identity,
     },
     commands: { sent, read, typing, historyRequests },
     emit(event) {

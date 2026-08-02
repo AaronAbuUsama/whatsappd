@@ -49,6 +49,8 @@ try {
     "ConversationSyncContact",
     "HistoryBatch",
     "libsqlStore",
+    "RuntimeClientFeed",
+    "WhatsAppClientFrame",
   ]) {
     assert.equal(new RegExp(`\\b${removed}\\b`).test(declarations), false);
   }
@@ -71,7 +73,8 @@ try {
       assert.equal(typeof createTestWhatsAppSession, "function");
       assert.equal(typeof root.memoryStore, "function");
       assert.equal(typeof root.createWhatsAppRuntime, "function");
-      assert.equal(typeof root.createInProcessWhatsAppClient, "function");
+      assert.equal(typeof root.createWhatsAppClient, "function");
+      assert.equal("createInProcessWhatsAppClient" in root, false);
       assert.equal(typeof root.memoryBackend, "function");
       assert.equal(typeof root.libsqlBackend, "function");
       assert.equal(typeof root.fileMediaStore, "function");

@@ -11,7 +11,6 @@ import {
   type StoredMessageCursor,
   type StoredMessagePage,
   type WhatsAppBackend,
-  type WhatsAppClient,
   type WhatsAppClientFrame,
   type WhatsAppDataEvent,
   type WhatsAppPatch,
@@ -24,8 +23,8 @@ import {
   memoryMediaStore,
 } from "../src/runtime/memory.ts";
 import {
-  createInProcessWhatsAppClient,
   createWhatsAppRuntime,
+  getWhatsAppClientSource,
   type WhatsAppRuntime,
 } from "../src/runtime/runtime.ts";
 import { memoryStore } from "../src/stores/memory.ts";
@@ -37,6 +36,8 @@ const PERSON = "person@s.whatsapp.net";
 const ROOM = "room@g.us";
 const SELF = "15551230000@s.whatsapp.net";
 const AT = 1_700_000_000_000;
+const sourceOf = getWhatsAppClientSource;
+type WhatsAppClient = ReturnType<typeof sourceOf>;
 
 /** Let queued microtasks and one macrotask turn drain — never a timed wait. */
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -84,7 +85,7 @@ function lane(
     driver,
     backend,
     runtime,
-    client: createInProcessWhatsAppClient(runtime),
+    client: sourceOf(runtime),
     opened: () => opened,
   };
 }
@@ -107,18 +108,43 @@ const fixedLeaseStore = (fencingToken: number): AccountLeaseStore => ({
 /** Drain a client watch in the background so frame arrival is observable. */
 function watching(client: WhatsAppClient): {
   frames: WhatsAppClientFrame[];
+  closed: Promise<void>;
   close(): Promise<void>;
 } {
   const frames: WhatsAppClientFrame[] = [];
-  const controller = new AbortController();
-  const pump = (async () => {
-    for await (const frame of client.watch({ signal: controller.signal })) frames.push(frame);
-  })();
+  const queued: WhatsAppClientFrame[] = [];
+  let hydrated = false;
+  let active = true;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const record = (frame: WhatsAppClientFrame): void => {
+    frames.push(frame);
+    if (frame.type === "closed") resolveClosed();
+  };
+  const off = client.onFrame((frame) => {
+    if (hydrated) record(frame);
+    else queued.push(frame);
+  });
+  const ready = client.snapshot().then((snapshot) => {
+    if (!active) return;
+    const terminal = queued.find((frame) => frame.type === "closed");
+    if (terminal) record(terminal);
+    else {
+      record({ type: "snapshot", snapshot });
+      for (const frame of queued) record(frame);
+    }
+    hydrated = true;
+    queued.length = 0;
+  });
   return {
     frames,
+    closed,
     async close() {
-      controller.abort();
-      await pump;
+      active = false;
+      off();
+      await ready;
     },
   };
 }
@@ -267,14 +293,14 @@ test("one text message records the change, updates current state, and takes one 
     },
   ]);
 
-  const snapshot = await runtime.snapshot();
+  const snapshot = await sourceOf(runtime).snapshot();
   expect(snapshot.revision).toBe(1);
   expect(snapshot.chats).toEqual([
     { accountId: "personal", chatId: PERSON, isGroup: false, lastMessageAt: AT },
   ]);
   // The message itself is read as a Stored Message Page, not carried by the
   // snapshot — see the paging tests below.
-  expect((await runtime.messages(PERSON)).messages.length).toBe(1);
+  expect((await sourceOf(runtime).messages(PERSON)).messages.length).toBe(1);
 
   // The received WhatsApp change is recorded by the same acceptance that moved
   // the mirror to that revision.
@@ -735,7 +761,7 @@ test("a text edit replaces content while preserving identity, action targeting, 
     kind: "text",
     text: "Edited",
   });
-  expect((await runtime.snapshot()).chats[0]?.lastMessageAt).toBe(AT);
+  expect((await sourceOf(runtime).snapshot()).chats[0]?.lastMessageAt).toBe(AT);
 
   await runtime.stop();
 });
@@ -820,7 +846,7 @@ test("revocation keeps a content-free tombstone and accepted source", async () =
       revokedBy: "moderator@s.whatsapp.net",
     },
   ]);
-  expect((await runtime.snapshot()).chats[0]?.lastMessageAt).toBe(AT);
+  expect((await sourceOf(runtime).snapshot()).chats[0]?.lastMessageAt).toBe(AT);
   expect(
     (await backend.data.accepted("personal", 0)).map(({ events }) => events[0]?.event.type),
   ).toEqual(["message", "update", "update", "update"]);
@@ -995,7 +1021,7 @@ test("the client receives no update until acceptance commits", async () => {
   const accepting = driver.emit({ type: "message", message: hello() });
   await tick();
   expect(patchesOf(seen.frames)).toEqual([]);
-  expect((await runtime.snapshot()).revision).toBe(0);
+  expect((await sourceOf(runtime).snapshot()).revision).toBe(0);
 
   commit();
   await accepting;
@@ -1010,7 +1036,7 @@ test("a fresh client reconstructs the same message state and revision", async ()
   const { driver, backend, runtime } = lane("personal");
   await runtime.start();
   await driver.emit({ type: "message", message: hello() });
-  const stored = await runtime.snapshot();
+  const stored = await sourceOf(runtime).snapshot();
   expect(stored.revision).toBe(1);
   await runtime.stop();
 
@@ -1024,8 +1050,8 @@ test("a fresh client reconstructs the same message state and revision", async ()
   const [restored] = snapshotsOf(seen.frames);
   assert.ok(restored);
   expect({ ...restored, account: stored.account, revision: stored.revision }).toEqual(stored);
-  expect((await replacement.runtime.messages(PERSON)).messages).toEqual(
-    (await runtime.messages(PERSON)).messages,
+  expect((await sourceOf(replacement.runtime).messages(PERSON)).messages).toEqual(
+    (await sourceOf(runtime).messages(PERSON)).messages,
   );
   // The only thing the stop moved: the account now knows when it last went
   // offline, which is history rather than a status (ADR-0020).
@@ -1057,8 +1083,8 @@ test("replaying the same WhatsApp message creates no duplicate and no second upd
   await tick();
 
   expect(patchesOf(seen.frames).length).toBe(1);
-  expect((await runtime.snapshot()).revision).toBe(1);
-  expect((await runtime.messages(PERSON)).messages.length).toBe(1);
+  expect((await sourceOf(runtime).snapshot()).revision).toBe(1);
+  expect((await sourceOf(runtime).messages(PERSON)).messages.length).toBe(1);
 
   // The replays still happened, so the source log keeps all three
   // observations; only the one that changed current state took a revision.
@@ -1088,8 +1114,8 @@ test("the stored sender is the actual author, never the chat", async () => {
   });
 
   const stored = [
-    ...(await runtime.messages(ROOM)).messages,
-    ...(await runtime.messages(PERSON)).messages,
+    ...(await sourceOf(runtime).messages(ROOM)).messages,
+    ...(await sourceOf(runtime).messages(PERSON)).messages,
   ];
   expect(stored.map((message) => [message.messageId, message.sender.id, message.fromMe])).toEqual([
     ["g1", PERSON, false],
@@ -1145,7 +1171,7 @@ test("a backend failure publishes nothing and stops processing with the original
       patch.upserts.filter((upsert) => upsert.type === "message"),
     ),
   ).toEqual([]);
-  expect((await runtime.messages(PERSON)).messages).toEqual([]);
+  expect((await sourceOf(runtime).messages(PERSON)).messages).toEqual([]);
   // A watcher learns the runtime died, and learns it from the original failure
   // rather than waiting for ever on an update that cannot come.
   const last = seen.frames.at(-1);
@@ -1172,23 +1198,23 @@ test("two accounts remain isolated in one backend", async () => {
   await bob.runtime.start();
 
   await alice.driver.emit({ type: "message", message: hello("m1", "For Alice") });
-  expect((await bob.runtime.snapshot()).revision).toBe(0);
+  expect((await sourceOf(bob.runtime).snapshot()).revision).toBe(0);
   // The same chat id in the same store: a page is scoped by the account it was
   // asked for, never by the chat alone.
-  expect((await bob.runtime.messages(PERSON)).messages).toEqual([]);
+  expect((await sourceOf(bob.runtime).messages(PERSON)).messages).toEqual([]);
 
   await bob.driver.emit({ type: "message", message: hello("m1", "For Bob") });
-  expect((await alice.runtime.messages(PERSON)).messages).toMatchObject([
+  expect((await sourceOf(alice.runtime).messages(PERSON)).messages).toMatchObject([
     { accountId: "alice", text: "For Alice" },
   ]);
-  expect((await bob.runtime.messages(PERSON)).messages).toMatchObject([
+  expect((await sourceOf(bob.runtime).messages(PERSON)).messages).toMatchObject([
     { accountId: "bob", text: "For Bob" },
   ]);
-  expect((await alice.runtime.snapshot()).revision).toBe(1);
-  expect((await bob.runtime.snapshot()).revision).toBe(1);
+  expect((await sourceOf(alice.runtime).snapshot()).revision).toBe(1);
+  expect((await sourceOf(bob.runtime).snapshot()).revision).toBe(1);
   // Chats are projected on their own path and are scoped by the same account.
-  expect((await alice.runtime.snapshot()).chats).toMatchObject([{ accountId: "alice" }]);
-  expect((await bob.runtime.snapshot()).chats).toMatchObject([{ accountId: "bob" }]);
+  expect((await sourceOf(alice.runtime).snapshot()).chats).toMatchObject([{ accountId: "alice" }]);
+  expect((await sourceOf(bob.runtime).snapshot()).chats).toMatchObject([{ accountId: "bob" }]);
 
   await alice.runtime.stop();
   await bob.runtime.stop();
@@ -1331,12 +1357,12 @@ test("mutating a delivered patch cannot mutate the committed mirror", async () =
   const { driver, runtime } = lane("personal");
   await runtime.start();
   let laterText: string | undefined;
-  runtime.onFrame((frame) => {
+  sourceOf(runtime).onFrame((frame) => {
     if (frame.type !== "patch") return;
     const message = frame.patch.upserts.find((record) => record.type === "message");
     if (message?.type === "message") (message.message as { text: string }).text = "observer edit";
   });
-  runtime.onFrame((frame) => {
+  sourceOf(runtime).onFrame((frame) => {
     if (frame.type !== "patch") return;
     const message = frame.patch.upserts.find((record) => record.type === "message");
     if (message?.type === "message" && message.message.kind === "text")
@@ -1345,7 +1371,7 @@ test("mutating a delivered patch cannot mutate the committed mirror", async () =
 
   await driver.emit({ type: "message", message: hello() });
 
-  const retained = (await runtime.messages(PERSON)).messages[0];
+  const retained = (await sourceOf(runtime).messages(PERSON)).messages[0];
   assert.equal(retained?.kind, "text");
   expect(retained.text).toBe("Hello");
   expect(laterText).toBe("Hello");
@@ -1358,7 +1384,7 @@ test("reconnecting with no new history preserves the existing current state", as
   const seen = watching(client);
   await tick();
   await driver.emit({ type: "message", message: hello() });
-  const before = await runtime.snapshot();
+  const before = await sourceOf(runtime).snapshot();
 
   await driver.emit({ type: "connection", status: { phase: "online" } });
   await driver.emit({
@@ -1374,10 +1400,10 @@ test("reconnecting with no new history preserves the existing current state", as
 
   // Reconnecting moved only when this account was last connected. Nothing it
   // already knew about the conversation changed.
-  const after = await runtime.snapshot();
+  const after = await sourceOf(runtime).snapshot();
   expect({ ...after, account: before.account, revision: before.revision }).toEqual(before);
   expect(typeof after.account.lastConnectedAt).toBe("number");
-  expect((await runtime.messages(PERSON)).messages.length).toBe(1);
+  expect((await sourceOf(runtime).messages(PERSON)).messages.length).toBe(1);
   // The empty sync is still a real observation and is recorded as one, and it
   // is the one that changed nothing.
   const accepted = await backend.data.accepted("personal", 1);
@@ -1662,7 +1688,7 @@ test("failed structured acceptance publishes nothing and leaves the canonical me
   await tick();
 
   expect(patchesOf(seen.frames)).toEqual([]);
-  expect(await runtime.snapshot()).toEqual(empty("personal"));
+  expect(await sourceOf(runtime).snapshot()).toEqual(empty("personal"));
   expect(await data.accepted("personal", 0)).toEqual([]);
   expect((await data.messages("personal", PERSON)).messages).toEqual([]);
   assert.ok(storedRef);
@@ -1824,8 +1850,10 @@ test("everything a live account delivers alongside a message keeps the runtime u
   await tick();
 
   // The message inside that sync was stored, and the account is still consumed.
-  expect((await runtime.messages(PERSON)).messages.map((m) => m.messageId)).toEqual(["m1"]);
-  const snapshot = await runtime.snapshot();
+  expect((await sourceOf(runtime).messages(PERSON)).messages.map((m) => m.messageId)).toEqual([
+    "m1",
+  ]);
+  const snapshot = await sourceOf(runtime).snapshot();
   // The sync's contact and the later contact event are one record: the update
   // adds what it knows without blanking the display name the sync established.
   expect(snapshot.contacts).toEqual([
@@ -1851,7 +1879,10 @@ test("everything a live account delivers alongside a message keeps the runtime u
 
   await driver.emit({ type: "message", message: hello("m2", "Still here") });
   await tick();
-  expect((await runtime.messages(PERSON)).messages.map((m) => m.messageId)).toEqual(["m2", "m1"]);
+  expect((await sourceOf(runtime).messages(PERSON)).messages.map((m) => m.messageId)).toEqual([
+    "m2",
+    "m1",
+  ]);
   expect(seen.frames.some((frame) => frame.type === "closed")).toBe(false);
 
   await seen.close();
@@ -1874,7 +1905,7 @@ test("start returns while the session runs, and the session's end frees the acco
 
   await runtime.start();
   await driver.emit({ type: "message", message: hello() });
-  expect((await runtime.snapshot()).revision).toBe(1);
+  expect((await sourceOf(runtime).snapshot()).revision).toBe(1);
   // Still consuming, so the account is still claimed.
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(false);
 
@@ -1909,7 +1940,7 @@ test("a stop while the session is opening leaves the account claimed by nobody",
   await assert.rejects(starting, /stopped while starting/);
   // Never subscribed, so WhatsApp is not being consumed without a claim.
   await driver.emit({ type: "message", message: hello() });
-  expect((await runtime.snapshot()).revision).toBe(0);
+  expect((await sourceOf(runtime).snapshot()).revision).toBe(0);
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
 });
 
@@ -1994,7 +2025,7 @@ test("a write is refused once its claim has expired", async () => {
     driver.emit({ type: "message", message: hello() }),
     (error: unknown) => error instanceof SubscriptionHandlerError && /expired/.test(error.message),
   );
-  expect((await runtime.snapshot()).revision).toBe(0);
+  expect((await sourceOf(runtime).snapshot()).revision).toBe(0);
 });
 
 test("a terminal session failure is reported by stop, not swallowed", async () => {
@@ -2030,7 +2061,7 @@ test("an immediate session close failure releases the account exactly once", asy
     }),
   });
   await runtime.start();
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(sourceOf(runtime));
   await tick();
 
   const [first, duplicate] = await Promise.allSettled([runtime.stop(), runtime.stop()]);
@@ -2089,7 +2120,7 @@ test("a session that dies on its own closes the watch with the failure", async (
   });
 
   await runtime.start();
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(sourceOf(runtime));
   await tick();
 
   die(died);
@@ -2114,65 +2145,34 @@ test("a deliberate stop closes the watch with no failure", async () => {
   expect(seen.frames.at(-1)).toEqual({ type: "closed" });
 });
 
-test("a Client watch started after stop receives the terminal frame and ends", async () => {
+test("the internal source observed after stop receives the terminal frame", async () => {
   const { runtime, client } = lane("personal");
   await runtime.start();
   await runtime.stop();
 
-  const frames = await withDeadline(
-    (async () => {
-      const seen: WhatsAppClientFrame[] = [];
-      for await (const frame of client.watch()) seen.push(frame);
-      return seen;
-    })(),
-  );
+  const seen = watching(client);
+  await withDeadline(seen.closed);
 
-  expect(frames.map((frame) => frame.type)).toEqual(["closed"]);
-});
-
-test("runtime closure interrupts a Client snapshot already in flight", async () => {
-  const data = memoryDataStore();
-  let startedSnapshot!: () => void;
-  const snapshotStarted = new Promise<void>((resolve) => {
-    startedSnapshot = resolve;
-  });
-  const never = new Promise<WhatsAppSnapshot>(() => {});
-  const backend: WhatsAppBackend = {
-    ...memoryBackend(),
-    data: {
-      ...data,
-      snapshot: () => {
-        startedSnapshot();
-        return never;
-      },
-    },
-  };
-  const { runtime, client } = lane("personal", { backend });
-  await runtime.start();
-  const first = client.watch()[Symbol.asyncIterator]().next();
-  await snapshotStarted;
-
-  await runtime.stop();
-
-  expect(await withDeadline(first)).toEqual({ value: { type: "closed" }, done: false });
+  expect(seen.frames.map((frame) => frame.type)).toEqual(["closed"]);
+  await seen.close();
 });
 
 test("a throwing frame observer cannot block a later observer after commit", async () => {
   const { driver, runtime } = lane("personal");
   await runtime.start();
   let later = 0;
-  runtime.onFrame(() => {
+  sourceOf(runtime).onFrame(() => {
     throw new Error("observer failed");
   });
-  runtime.onFrame((frame) => {
+  sourceOf(runtime).onFrame((frame) => {
     if (frame.type === "patch") later += 1;
   });
 
   await driver.emit({ type: "message", message: hello() });
 
-  expect((await runtime.messages(PERSON)).messages.map((message) => message.messageId)).toEqual([
-    "m1",
-  ]);
+  expect(
+    (await sourceOf(runtime).messages(PERSON)).messages.map((message) => message.messageId),
+  ).toEqual(["m1"]);
   expect(later).toBe(1);
   await runtime.stop();
 });
@@ -2190,14 +2190,14 @@ test("closed-frame wrappers are isolated while preserving the failure identity",
     openSession: () => ({ ...driver.session, start: () => dying }),
   });
   await runtime.start();
-  runtime.onFrame((frame) => {
+  sourceOf(runtime).onFrame((frame) => {
     if (frame.type !== "closed") return;
     const mutable = frame as { type: string; error?: unknown };
     mutable.type = "patch";
     delete mutable.error;
   });
   let current: WhatsAppClientFrame | undefined;
-  runtime.onFrame((frame) => {
+  sourceOf(runtime).onFrame((frame) => {
     current = frame;
   });
 
@@ -2206,7 +2206,7 @@ test("closed-frame wrappers are isolated while preserving the failure identity",
 
   expect(current).toEqual({ type: "closed", error: died });
   let late: WhatsAppClientFrame | undefined;
-  runtime.onFrame((frame) => {
+  sourceOf(runtime).onFrame((frame) => {
     late = frame;
   });
   expect(late).toEqual({ type: "closed", error: died });
@@ -2234,15 +2234,11 @@ test("losing the account lease stops the runtime without evicting its new holder
   // The watch ending is the signal the runtime stopped. The deadline is a
   // referenced test handle, so Node 22 does not abandon the pending iterator
   // while the runtime's deliberately-unreferenced heartbeat is still due.
-  const frames = await withDeadline(
-    (async () => {
-      const seen: WhatsAppClientFrame[] = [];
-      for await (const frame of client.watch()) seen.push(frame);
-      return seen;
-    })(),
-  );
+  const seen = watching(client);
+  await withDeadline(seen.closed);
 
-  expect(frames.at(-1)).toEqual({ type: "closed" });
+  expect(seen.frames.at(-1)).toEqual({ type: "closed" });
+  await seen.close();
   // A claim this runtime no longer holds belongs to whoever took the account
   // over, so releasing it would evict them.
   expect(released).toBe(0);
@@ -2295,15 +2291,11 @@ test("a lease backend outage closes the Client and is reported by stop", async (
   });
 
   await runtime.start();
-  const terminal = await withDeadline(
-    (async () => {
-      let last: WhatsAppClientFrame | undefined;
-      for await (const frame of client.watch()) last = frame;
-      return last;
-    })(),
-  );
+  const seen = watching(client);
+  await withDeadline(seen.closed);
 
-  expect(terminal).toEqual({ type: "closed", error: outage });
+  expect(seen.frames.at(-1)).toEqual({ type: "closed", error: outage });
+  await seen.close();
   await assert.rejects(runtime.stop(), (error: unknown) => error === outage);
 });
 
@@ -2339,78 +2331,6 @@ test("a stop during an automatic teardown joins it instead of racing it", async 
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
 });
 
-test("aborting a watch during a hung snapshot read releases its subscription", async () => {
-  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
-  const runtime: WhatsAppRuntime = {
-    accountId: "personal",
-    start: async () => {},
-    stop: async () => {},
-    snapshot: () => new Promise<WhatsAppSnapshot>(() => {}), // never settles
-    messages: () => Promise.reject(new Error("not read by this test")),
-    onFrame(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-  const controller = new AbortController();
-  const pump = (async () => {
-    for await (const _frame of createInProcessWhatsAppClient(runtime).watch({
-      signal: controller.signal,
-    }));
-  })();
-
-  await tick();
-  expect(listeners.size).toBe(1);
-  controller.abort();
-
-  const finished = await Promise.race([
-    pump.then(() => true),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
-  ]);
-  expect(finished).toBe(true);
-  expect(listeners.size).toBe(0);
-});
-
-test("a client applies only contiguous patches and re-snapshots after a gap", async () => {
-  let current: WhatsAppSnapshot = empty("personal");
-  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
-  const runtime: WhatsAppRuntime = {
-    accountId: "personal",
-    start: async () => {},
-    stop: async () => {},
-    snapshot: async () => current,
-    messages: () => Promise.reject(new Error("not read by this test")),
-    onFrame(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-  const publish = (fromRevision: number, revision: number): void => {
-    for (const listener of listeners)
-      listener({
-        type: "patch",
-        patch: { accountId: "personal", fromRevision, revision, upserts: [] },
-      });
-  };
-
-  const seen = watching(createInProcessWhatsAppClient(runtime));
-  await tick();
-  publish(0, 1);
-  await tick();
-  publish(0, 1); // the same change repeated
-  await tick();
-
-  // Revision 2 never arrives, so revision 3 cannot be applied over the gap.
-  current = { ...empty("personal"), revision: 3 };
-  publish(2, 3);
-  await tick();
-
-  expect(seen.frames.map((frame) => frame.type)).toEqual(["snapshot", "patch", "snapshot"]);
-  expect(snapshotsOf(seen.frames).map((snapshot) => snapshot.revision)).toEqual([0, 3]);
-
-  await seen.close();
-});
-
 test("connection and presence expire and never become stored truth", async () => {
   const { backend, driver, runtime, client } = lane("personal", { freshnessMs: 5_000 });
   await runtime.start();
@@ -2436,7 +2356,7 @@ test("connection and presence expire and never become stored truth", async () =>
 
   // Neither status is anywhere in the mirror: the account record has no phase
   // to restore and the contact record has no presence kind (ADR-0020).
-  const snapshot = await runtime.snapshot();
+  const snapshot = await sourceOf(runtime).snapshot();
   expect(Object.keys(snapshot).sort()).toEqual([
     "account",
     "accountId",
@@ -2651,7 +2571,7 @@ test("a group's presence records the participant, not the chat it arrived on", a
     presence: { chatId: ROOM, participant: PERSON, kind: "typing", at: AT },
   });
 
-  expect((await runtime.snapshot()).contacts).toEqual([
+  expect((await sourceOf(runtime).snapshot()).contacts).toEqual([
     { accountId: "personal", contactId: PERSON, nativeIds: [PERSON], lastSeenAt: AT },
   ]);
 
@@ -2669,7 +2589,7 @@ test("a transitional connection status stamps neither timestamp", async () => {
     status: { phase: "authenticated", sync: { step: "draining" } },
   });
 
-  expect(await runtime.snapshot()).toEqual(empty("personal"));
+  expect(await sourceOf(runtime).snapshot()).toEqual(empty("personal"));
 
   // A dropped socket goes straight to backing_off without passing through
   // `disconnected`, so that phase has to count as gone or the commonest
@@ -2683,15 +2603,15 @@ test("a transitional connection status stamps neither timestamp", async () => {
       nextRetryAt: AT,
     },
   });
-  expect(typeof (await runtime.snapshot()).account.lastDisconnectedAt).toBe("number");
+  expect(typeof (await sourceOf(runtime).snapshot()).account.lastDisconnectedAt).toBe("number");
 
   // A terminal status is a disconnection, and being online is a connection.
   await driver.emit({
     type: "connection",
     status: { phase: "logged_out", reason: "logged_out_remote" },
   });
-  expect(typeof (await runtime.snapshot()).account.lastDisconnectedAt).toBe("number");
-  expect((await runtime.snapshot()).account.lastConnectedAt).toBe(undefined);
+  expect(typeof (await sourceOf(runtime).snapshot()).account.lastDisconnectedAt).toBe("number");
+  expect((await sourceOf(runtime).snapshot()).account.lastConnectedAt).toBe(undefined);
 
   await runtime.stop();
 });
@@ -2769,7 +2689,7 @@ test("opening a chat reads its first saved page, and older pages follow a stable
   expect(first.accountId).toBe("personal");
   expect(first.chatId).toBe(PERSON);
   // The revision this page reflects, so it can be ordered against patches.
-  expect(first.revision).toBe((await runtime.snapshot()).revision);
+  expect(first.revision).toBe((await sourceOf(runtime).snapshot()).revision);
   expect(first.messages.map((message) => message.messageId)).toEqual(["m7", "m6", "m5"]);
   // The cursor is the page's oldest position, by timestamp *and* identity.
   expect(first.nextBefore).toEqual({ timestamp: AT + 4_000, messageId: "m5" });
@@ -2949,135 +2869,11 @@ test("a backdated message below an open cursor reconciles by identity on both su
   await runtime.stop();
 });
 
-test("a stale update is ignored, a future base re-snapshots, and pages read through both", async () => {
-  const data = memoryDataStore();
-  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
-  const runtime: WhatsAppRuntime = {
-    accountId: "personal",
-    start: async () => {},
-    stop: async () => {},
-    snapshot: () => data.snapshot("personal"),
-    messages: (chatId, options) => data.messages("personal", chatId, options),
-    onFrame(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-  // Published on the same seam the runtime publishes on, so the client cannot
-  // tell these apart from a live runtime's own updates.
-  const publish = (fromRevision: number, revision: number): void => {
-    for (const listener of listeners)
-      listener({
-        type: "patch",
-        patch: { accountId: "personal", fromRevision, revision, upserts: [] },
-      });
-  };
-  const store = (id: string, index: number): Promise<unknown> =>
-    data.accept(
-      "personal",
-      [
-        {
-          observedAt: AT,
-          event: {
-            type: "message",
-            message: textMessage({ id, chatId: PERSON, text: id, timestamp: AT + index * 1_000 }),
-          },
-        },
-      ],
-      1,
-    );
-
-  for (const [index, id] of ["m1", "m2", "m3", "m4"].entries()) await store(id, index);
-
-  const client = createInProcessWhatsAppClient(runtime);
-  const seen = watching(client);
-  await tick();
-
-  // A conversation is opened and scrolled one page back.
-  const opened = await client.messages(PERSON, { limit: 2 });
-  expect(opened.messages.map((message) => message.messageId)).toEqual(["m4", "m3"]);
-
-  // A stale update: revision 2 is a change the snapshot already carried.
-  publish(1, 2);
-  await tick();
-
-  // A future base: revision 5 never arrived, so 6 cannot be applied over the
-  // gap and the client replaces its state instead of silently skipping it.
-  await store("m5", 4);
-  await store("m6", 5);
-  publish(5, 6);
-  await tick();
-
-  expect(seen.frames.map((frame) => frame.type)).toEqual(["snapshot", "snapshot"]);
-  expect(snapshotsOf(seen.frames).map((snapshot) => snapshot.revision)).toEqual([4, 6]);
-
-  // The cursor opened before the gap still pages correctly afterwards, and a
-  // reader that reopens the chat sees every stored message exactly once.
-  expect(await pagedIds(client, PERSON, 2, opened.nextBefore)).toEqual(["m2", "m1"]);
-  expect(await pagedIds(client, PERSON, 4)).toEqual(["m6", "m5", "m4", "m3", "m2", "m1"]);
-
-  await seen.close();
-});
-
 test("a page size must be a positive integer", async () => {
   const data = memoryDataStore();
   for (const limit of [0, -1, 1.5, Number.NaN]) {
     await assert.rejects(data.messages("personal", PERSON, { limit }), RangeError);
   }
-});
-
-test("a real runtime's missed update is detected and replaced with a fresh snapshot", async () => {
-  const { driver, runtime } = lane("personal");
-  await runtime.start();
-
-  // A real client watch over the real runtime and the real backend, with one
-  // live update dropped on the way to this watcher — the wire loss the
-  // contiguity rule exists to survive. Nothing about the mirror is faked: the
-  // snapshots and pages below are the backend's own.
-  let drop = 0;
-  const lossy: WhatsAppClient = createInProcessWhatsAppClient({
-    ...runtime,
-    onFrame: (listener) =>
-      runtime.onFrame((frame) => {
-        if (frame.type === "patch" && drop > 0) {
-          drop -= 1;
-          return;
-        }
-        listener(frame);
-      }),
-  });
-
-  const seen = watching(lossy);
-  await tick();
-  expect(snapshotsOf(seen.frames).map((snapshot) => snapshot.revision)).toEqual([0]);
-
-  await driver.emit({ type: "message", message: hello("m1") });
-  await tick();
-  const opened = await lossy.messages(PERSON, { limit: 1 });
-  expect(opened.messages.map((message) => message.messageId)).toEqual(["m1"]);
-
-  // The next change never reaches this watcher.
-  drop = 1;
-  await driver.emit({ type: "message", message: hello("m2") });
-  await tick();
-  expect(patchesOf(seen.frames).length).toBe(1);
-
-  // The one after it therefore arrives on a base the watcher does not hold, and
-  // a fresh snapshot replaces state rather than applying over the hole.
-  await driver.emit({ type: "message", message: hello("m3") });
-  await tick();
-
-  expect(seen.frames.map((frame) => frame.type)).toEqual(["snapshot", "patch", "snapshot"]);
-  const recovered = snapshotsOf(seen.frames).at(-1);
-  assert.ok(recovered);
-  expect(recovered.revision).toBe((await runtime.snapshot()).revision);
-  // Recovery loses nothing: the chat still pages to every stored message, and
-  // the missed one is back.
-  expect(await pagedIds(lossy, PERSON, 2)).toEqual(["m3", "m2", "m1"]);
-  expect(driver.commands.historyRequests).toEqual([]);
-
-  await seen.close();
-  await runtime.stop();
 });
 
 test("a group's roster follows participant changes without deleting a record", async () => {
@@ -3107,7 +2903,7 @@ test("a group's roster follows participant changes without deleting a record", a
     },
   });
   await tick();
-  expect((await runtime.snapshot()).groups).toEqual([
+  expect((await sourceOf(runtime).snapshot()).groups).toEqual([
     {
       accountId: "personal",
       groupId: ROOM,
@@ -3141,7 +2937,7 @@ test("a group's roster follows participant changes without deleting a record", a
   });
   await tick();
 
-  const groups = (await runtime.snapshot()).groups;
+  const groups = (await sourceOf(runtime).snapshot()).groups;
   expect(groups.length).toBe(1);
   expect(groups[0]?.participants).toEqual([{ id: SELF, role: "admin" }]);
   // The subject the metadata event established survived every roster change.
@@ -3166,7 +2962,7 @@ test("going unavailable never dates a contact's last-seen to now", async () => {
     type: "presence",
     presence: { chatId: PERSON, kind: "available", at: weekAgo },
   });
-  const before = (await runtime.snapshot()).contacts[0]?.lastSeenAt;
+  const before = (await sourceOf(runtime).snapshot()).contacts[0]?.lastSeenAt;
   expect(before).toBe(weekAgo);
 
   // WhatsApp reports a long-offline peer as `unavailable`, and the mapping
@@ -3177,7 +2973,7 @@ test("going unavailable never dates a contact's last-seen to now", async () => {
     presence: { chatId: PERSON, kind: "unavailable", at: Date.now() },
   });
 
-  expect((await runtime.snapshot()).contacts[0]?.lastSeenAt).toBe(weekAgo);
+  expect((await sourceOf(runtime).snapshot()).contacts[0]?.lastSeenAt).toBe(weekAgo);
   await runtime.stop();
 });
 
@@ -3189,7 +2985,7 @@ test("a presence frame arriving without a claim is let go, not fatal", async () 
   await runtime.stop();
 
   await driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing", at: AT } });
-  expect((await runtime.snapshot()).contacts).toEqual([]);
+  expect((await sourceOf(runtime).snapshot()).contacts).toEqual([]);
 });
 
 test("a live group rename reaches the chat summary, not just the group record", async () => {
@@ -3212,7 +3008,7 @@ test("a live group rename reaches the chat summary, not just the group record", 
     group: { kind: "metadata", id: ROOM, subject: "New", at: AT },
   });
 
-  const snapshot = await runtime.snapshot();
+  const snapshot = await sourceOf(runtime).snapshot();
   expect(snapshot.groups.map((group) => group.subject)).toEqual(["New"]);
   expect(snapshot.chats.map((chat) => [chat.chatId, chat.subject])).toEqual([[ROOM, "New"]]);
 

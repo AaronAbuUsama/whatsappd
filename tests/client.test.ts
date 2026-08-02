@@ -1,0 +1,787 @@
+import assert from "node:assert/strict";
+import { test } from "./_expect.ts";
+
+import {
+  createWhatsAppClient,
+  createWhatsAppRuntime,
+  memoryBackend,
+  WhatsAppClientClosedError,
+} from "../src/index.ts";
+import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+
+const ACCOUNT = "personal";
+const ALPHA = "alpha@s.whatsapp.net";
+const BRAVO = "bravo@s.whatsapp.net";
+const LID = "100000000000001@lid";
+const ROOM = "room@g.us";
+const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+async function withDeadline<T>(promise: Promise<T>, ms = 1_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`operation did not settle within ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+test("an awaited Client exposes hydrated chats and publishes later chat changes", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [
+        { id: ALPHA, isGroup: false, subject: "Alpha", lastMessageAt: 100 },
+        { id: BRAVO, isGroup: false, subject: "Bravo", lastMessageAt: 200 },
+      ],
+      contacts: [],
+      messages: [],
+    },
+  });
+
+  const client = await createWhatsAppClient(runtime);
+  assert.deepEqual(
+    client.chats.list().map((chat) => [chat.chatId, chat.subject]),
+    [
+      [BRAVO, "Bravo"],
+      [ALPHA, "Alpha"],
+    ],
+  );
+  assert.equal(client.chats.get(ALPHA)?.subject, "Alpha");
+
+  const published: string[][] = [];
+  const unsubscribe = client.chats.subscribe((chats) => {
+    published.push(chats.map((chat) => chat.chatId));
+  });
+  assert.deepEqual(published, []);
+
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "new", chatId: ALPHA, text: "new", timestamp: 300 }),
+  });
+  assert.deepEqual(published, [[ALPHA, BRAVO]]);
+
+  unsubscribe();
+  await client.close();
+  await runtime.stop();
+});
+
+test("an awaited Client hydrates account, contacts, aliases, and groups", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [
+        {
+          id: ROOM,
+          isGroup: true,
+          subject: "Room",
+          participants: [{ id: ALPHA, role: "admin" }],
+        },
+      ],
+      contacts: [
+        { id: BRAVO, nativeIds: [BRAVO], displayName: "Bravo" },
+        { id: ALPHA, nativeIds: [ALPHA, LID], displayName: "Alpha" },
+      ],
+      messages: [],
+    },
+  });
+
+  const client = await createWhatsAppClient(runtime);
+  assert.deepEqual(client.account.get().record, { accountId: ACCOUNT });
+  assert.deepEqual(
+    client.contacts.list().map((contact) => contact.contactId),
+    [ALPHA, BRAVO],
+  );
+  assert.equal(client.contacts.get(ALPHA)?.displayName, "Alpha");
+  assert.equal(client.contacts.resolve(ALPHA), client.contacts.get(ALPHA));
+  assert.equal(client.contacts.resolve(LID), client.contacts.get(ALPHA));
+  assert.deepEqual(client.groups.list(), [
+    {
+      accountId: ACCOUNT,
+      groupId: ROOM,
+      subject: "Room",
+      participants: [{ id: ALPHA, role: "admin" }],
+    },
+  ]);
+  assert.equal(client.groups.get(ROOM)?.subject, "Room");
+
+  await client.close();
+  await runtime.stop();
+});
+
+test("opening a chat merges its newest saved page with matching live upserts", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [
+        textMessage({ id: "saved-old", chatId: ALPHA, text: "old", timestamp: 100, live: false }),
+        textMessage({ id: "saved-new", chatId: ALPHA, text: "new", timestamp: 200, live: false }),
+      ],
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+  const conversation = await client.chats.open(ALPHA, { pageSize: 2 });
+
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "live", chatId: ALPHA, text: "live", timestamp: 300 }),
+  });
+
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["live", "saved-new", "saved-old"],
+  );
+  assert.equal(conversation.get().loadingOlder, false);
+  assert.equal(conversation.get().hasOlderSaved, false);
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("opening reconciles a page/live collision and keeps a backdated live insertion ordered", async () => {
+  const base = memoryBackend();
+  let pageReady!: () => void;
+  const pageStarted = new Promise<void>((resolve) => {
+    pageReady = resolve;
+  });
+  let releasePage!: () => void;
+  const pageGate = new Promise<void>((resolve) => {
+    releasePage = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        const page = await base.data.messages(...args);
+        pageReady();
+        await pageGate;
+        return page;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [
+        textMessage({ id: "older", chatId: ALPHA, text: "older", timestamp: 200, live: false }),
+        textMessage({ id: "collision", chatId: ALPHA, text: "saved", timestamp: 300, live: false }),
+      ],
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+
+  const opening = client.chats.open(ALPHA, { pageSize: 2 });
+  await pageStarted;
+  await driver.emit({
+    type: "update",
+    update: {
+      kind: "edit",
+      ref: { id: "collision", chatId: ALPHA, fromMe: false },
+      message: textMessage({ id: "ignored", chatId: ALPHA, text: "live edit", timestamp: 999 }),
+    },
+  });
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "late", chatId: ALPHA, text: "late", timestamp: 250 }),
+  });
+  releasePage();
+  const conversation = await opening;
+
+  assert.deepEqual(
+    conversation
+      .get()
+      .messages.map((message) => [message.messageId, message.kind === "text" && message.text]),
+    [
+      ["collision", "live edit"],
+      ["late", "late"],
+      ["older", "older"],
+    ],
+  );
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("loadOlder joins concurrent reads, preserves state on failure, retries, and exhausts the cursor", async () => {
+  const base = memoryBackend();
+  const failure = new Error("page failed");
+  let reads = 0;
+  let failOlder = true;
+  let releaseFailure!: () => void;
+  const failureGate = new Promise<void>((resolve) => {
+    releaseFailure = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        reads += 1;
+        if (reads === 2 && failOlder) {
+          await failureGate;
+          throw failure;
+        }
+        return base.data.messages(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2, 3, 4, 5].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+  const conversation = await client.chats.open(ALPHA, { pageSize: 2 });
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m5", "m4"],
+  );
+
+  const first = conversation.loadOlder();
+  const joined = conversation.loadOlder();
+  assert.equal(first, joined);
+  releaseFailure();
+  await assert.rejects(first, failure);
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m5", "m4"],
+  );
+  assert.equal(conversation.get().error, failure);
+  assert.equal(conversation.get().hasOlderSaved, true);
+
+  failOlder = false;
+  await conversation.loadOlder();
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m5", "m4", "m3", "m2"],
+  );
+  assert.equal(conversation.get().error, undefined);
+  assert.equal(conversation.get().hasOlderSaved, true);
+
+  await conversation.loadOlder();
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m5", "m4", "m3", "m2", "m1"],
+  );
+  assert.equal(conversation.get().hasOlderSaved, false);
+  const exhaustedAt = reads;
+  await conversation.loadOlder();
+  assert.equal(reads, exhaustedAt);
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("a revision gap replaces all global Client state from one fresh Runtime snapshot", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [{ id: ALPHA, isGroup: false, subject: "Alpha", lastMessageAt: 100 }],
+      contacts: [],
+      messages: [],
+    },
+  });
+
+  // This accepted change reaches the real store but deliberately misses this
+  // Client's Runtime feed. The next real Runtime patch therefore exposes a gap.
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 200,
+        event: {
+          type: "conversation_sync",
+          batch: {
+            context: { source: "recent", projection: { mode: "upsert" } },
+            chats: [
+              {
+                id: ROOM,
+                isGroup: true,
+                subject: "Room",
+                participants: [{ id: BRAVO }],
+                lastMessageAt: 200,
+              },
+            ],
+            contacts: [{ id: BRAVO, nativeIds: [BRAVO, LID], displayName: "Bravo" }],
+            messages: [],
+          },
+        },
+      },
+    ],
+    fencingToken,
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "after-gap", chatId: ALPHA, text: "after", timestamp: 300 }),
+  });
+  await tick();
+
+  assert.deepEqual(
+    client.chats.list().map((chat) => chat.chatId),
+    [ALPHA, ROOM],
+  );
+  assert.equal(client.contacts.resolve(LID)?.contactId, BRAVO);
+  assert.equal(client.groups.get(ROOM)?.subject, "Room");
+
+  await client.close();
+  await runtime.stop();
+});
+
+test("a revision gap re-reads and replaces every opened conversation window", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2, 3, 4].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+  const conversation = await client.chats.open(ALPHA, { pageSize: 4 });
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m4", "m3", "m2", "m1"],
+  );
+
+  await base.data.accept(
+    ACCOUNT,
+    [5, 6].map((number) => ({
+      observedAt: number * 100,
+      event: {
+        type: "message" as const,
+        message: textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+        }),
+      },
+    })),
+    fencingToken,
+  );
+  const replaced = new Promise<void>((resolve) => {
+    conversation.subscribe((state) => {
+      if (state.messages.map((message) => message.messageId).join(",") === "m7,m6,m5,m4") resolve();
+    });
+  });
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m7", chatId: ALPHA, text: "m7", timestamp: 700 }),
+  });
+  await withDeadline(replaced);
+
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m7", "m6", "m5", "m4"],
+  );
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("a revision gap racing the first page read leaves only the fresh replacement window", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let firstPageReady!: () => void;
+  const firstPageStarted = new Promise<void>((resolve) => {
+    firstPageReady = resolve;
+  });
+  let releaseFirstPage!: () => void;
+  const firstPageGate = new Promise<void>((resolve) => {
+    releaseFirstPage = resolve;
+  });
+  let pageReads = 0;
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        const page = await base.data.messages(...args);
+        pageReads += 1;
+        if (pageReads === 1) {
+          firstPageReady();
+          await firstPageGate;
+        }
+        return page;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+  const opening = client.chats.open(ALPHA, { pageSize: 2 });
+  await firstPageStarted;
+
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 300,
+        event: {
+          type: "message",
+          message: textMessage({ id: "m3", chatId: ALPHA, text: "m3", timestamp: 300 }),
+        },
+      },
+    ],
+    fencingToken,
+  );
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m4", chatId: ALPHA, text: "m4", timestamp: 400 }),
+  });
+  await tick();
+  releaseFirstPage();
+
+  const conversation = await withDeadline(opening);
+  assert.deepEqual(
+    conversation.get().messages.map((message) => message.messageId),
+    ["m4", "m3"],
+  );
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("identity and live state are sampled, replaced, expired, and never hydrated after restart", async () => {
+  const backend = memoryBackend();
+  const identity = {
+    jid: "233200000000:1@s.whatsapp.net",
+    pushName: "Personal",
+    phoneE164: "+233200000000",
+  };
+  const driver = createTestWhatsAppSession({ identity });
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    freshnessMs: 25,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const conversation = await client.chats.open(ALPHA);
+  assert.deepEqual(client.account.get().identity, identity);
+
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "typing" } });
+  assert.deepEqual(client.account.get().connection?.status, { phase: "online" });
+  assert.deepEqual(conversation.get().presence, [{ chatId: ALPHA, kind: "typing" }]);
+
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "recording" } });
+  assert.deepEqual(conversation.get().presence, [{ chatId: ALPHA, kind: "recording" }]);
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "unavailable" } });
+  assert.deepEqual(conversation.get().presence, []);
+
+  const presenceExpired = new Promise<void>((resolve) => {
+    conversation.subscribe((state) => {
+      if (state.presence.length === 0) resolve();
+    });
+  });
+  const connectionExpired = new Promise<void>((resolve) => {
+    client.account.subscribe((state) => {
+      if (!state.connection) resolve();
+    });
+  });
+  await driver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "typing" } });
+  await withDeadline(Promise.all([presenceExpired, connectionExpired]));
+  assert.equal(client.account.get().connection, undefined);
+  assert.deepEqual(conversation.get().presence, []);
+
+  conversation.close();
+  await client.close();
+  await runtime.stop();
+
+  const replacementDriver = createTestWhatsAppSession();
+  const replacementRuntime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => replacementDriver.session,
+  });
+  await replacementRuntime.start();
+  const replacement = await createWhatsAppClient(replacementRuntime);
+  const reopened = await replacement.chats.open(ALPHA);
+  assert.equal(replacement.account.get().connection, undefined);
+  assert.equal(replacement.account.get().identity, undefined);
+  assert.deepEqual(reopened.get().presence, []);
+
+  reopened.close();
+  await replacement.close();
+  await replacementRuntime.stop();
+});
+
+test("close and AbortSignal cancel Client resources without stopping the Runtime", async () => {
+  const base = memoryBackend();
+  let pageReads = 0;
+  let olderStarted!: () => void;
+  const olderReadStarted = new Promise<void>((resolve) => {
+    olderStarted = resolve;
+  });
+  const never = new Promise<never>(() => {});
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        pageReads += 1;
+        if (pageReads === 2) {
+          olderStarted();
+          return never;
+        }
+        return base.data.messages(...args);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [1, 2].map((number) =>
+        textMessage({
+          id: `m${number}`,
+          chatId: ALPHA,
+          text: `m${number}`,
+          timestamp: number * 100,
+          live: false,
+        }),
+      ),
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+  const conversation = await client.chats.open(ALPHA, { pageSize: 1 });
+
+  const controller = new AbortController();
+  let notified = 0;
+  client.chats.subscribe(
+    () => {
+      notified += 1;
+    },
+    { signal: controller.signal },
+  );
+  controller.abort();
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "after-abort", chatId: BRAVO, text: "ignored", timestamp: 300 }),
+  });
+  assert.equal(notified, 0);
+
+  const loading = conversation.loadOlder();
+  await olderReadStarted;
+  conversation.close();
+  await assert.rejects(loading, WhatsAppClientClosedError);
+  assert.throws(() => conversation.get(), WhatsAppClientClosedError);
+  assert.throws(() => conversation.subscribe(() => {}), WhatsAppClientClosedError);
+  await assert.rejects(conversation.loadOlder(), WhatsAppClientClosedError);
+
+  await client.close();
+  assert.throws(() => client.chats.list(), WhatsAppClientClosedError);
+  assert.throws(() => client.contacts.get(ALPHA), WhatsAppClientClosedError);
+  await assert.rejects(client.chats.open(ALPHA), WhatsAppClientClosedError);
+
+  // Client ownership is independent: the Runtime is still live and a new
+  // Client can hydrate the change accepted after the first Client closed.
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "still-running", chatId: ALPHA, text: "live", timestamp: 400 }),
+  });
+  const replacement = await createWhatsAppClient(runtime);
+  assert.equal(replacement.chats.get(ALPHA)?.lastMessageAt, 400);
+
+  await replacement.close();
+  await runtime.stop();
+});
+
+test("listener failures are isolated and Runtime closure becomes account state", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession({
+    identity: { jid: "233200000000:1@s.whatsapp.net" },
+  });
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const listenerFailure = new Error("application listener failed");
+  let laterListener = 0;
+  let deferredThrow: (() => void) | undefined;
+  const originalQueueMicrotask = globalThis.queueMicrotask;
+  globalThis.queueMicrotask = (callback): void => {
+    deferredThrow = callback;
+  };
+  try {
+    client.chats.subscribe(() => {
+      throw listenerFailure;
+    });
+    client.chats.subscribe(() => {
+      laterListener += 1;
+    });
+    await driver.emit({
+      type: "message",
+      message: textMessage({ id: "visible", chatId: ALPHA, text: "visible", timestamp: 100 }),
+    });
+  } finally {
+    globalThis.queueMicrotask = originalQueueMicrotask;
+  }
+  assert.equal(laterListener, 1);
+  assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
+  assert.ok(deferredThrow);
+  assert.throws(deferredThrow, (error) => error === listenerFailure);
+
+  await runtime.stop();
+  assert.deepEqual(client.account.get().closed, {});
+  assert.equal(client.account.get().connection, undefined);
+  assert.equal(client.account.get().identity, undefined);
+
+  await client.close();
+});

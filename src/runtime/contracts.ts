@@ -23,6 +23,7 @@ import type {
   ReceiptStatus,
   Status,
   Update,
+  WaIdentity,
   WhatsAppAddress,
 } from "../model/index.ts";
 import type { MessageRef } from "../model/outbound.ts";
@@ -212,9 +213,8 @@ export interface ContactRecord {
    *
    * @remarks
    * A historical instant, never a live state (ADR-0020). It says an address was
-   * there at a time, and says nothing about now — the live
-   * {@link WhatsAppClientFrame} presence frame is the only thing that does, and
-   * it expires.
+   * there at a time, and says nothing about now — only the friendly Client's
+   * expiring presence state does.
    */
   readonly lastSeenAt?: number;
 }
@@ -605,6 +605,14 @@ export class UnsupportedDurableEventError extends Error {
   }
 }
 
+/** A friendly Client resource was used after its owner closed it. */
+export class WhatsAppClientClosedError extends Error {
+  constructor(resource: "Client" | "conversation") {
+    super(`${resource} is closed`);
+    this.name = "WhatsAppClientClosedError";
+  }
+}
+
 /**
  * A live connection observation and how long it stays current.
  *
@@ -622,7 +630,7 @@ export interface WhatsAppClientConnectionState {
   readonly fencingToken: number;
 }
 
-/** One frame of a {@link WhatsAppClient.watch} stream. */
+/** One frame of the module-private Runtime-to-Client feed. */
 export type WhatsAppClientFrame =
   | { readonly type: "snapshot"; readonly snapshot: WhatsAppSnapshot }
   | { readonly type: "patch"; readonly patch: WhatsAppPatch }
@@ -647,41 +655,76 @@ export type WhatsAppClientFrame =
       readonly error?: unknown;
     };
 
-/** The backend-independent contract applications and React bindings consume. */
-export interface WhatsAppClient {
-  /**
-   * Watch one account: a current Snapshot Window first, then the changes that
-   * follow it, each stamped with the revision it moves the mirror to.
-   */
-  watch(options?: { readonly signal?: AbortSignal }): AsyncIterable<WhatsAppClientFrame>;
+/** Options shared by friendly Client subscriptions. */
+export interface SubscriptionOptions {
+  readonly signal?: AbortSignal;
+}
 
-  /**
-   * Read one opened chat's stored messages, newest first, then older pages
-   * from the returned cursor.
-   *
-   * @remarks
-   * A snapshot carries no message window, so this is how a conversation is
-   * filled (ADR-0010). It reads storage only — see
-   * {@link WhatsAppDataStore.messages}.
-   *
-   * **Consumers apply both surfaces by record identity.** This method and the
-   * message upserts on {@link WhatsAppClient.watch} are independent reads; the
-   * client does not own or reconcile an application collection. Merge them on
-   * `(chatId, messageId)` — the identity of {@link MessageRecord} — rather than
-   * appending:
-   *
-   * - A message newer than an open cursor can only arrive as a patch. Paging
-   *   older can never reach it, so it cannot be delivered twice.
-   * - A message that sorts *below* an open cursor — a backdated send, a clock
-   *   skew, the backfill of #25 — arrives as a patch and is also returned by
-   *   the older page that now contains it. Both describe one record at one
-   *   identity, so an upsert leaves one message; an append would leave two.
-   * - Stored pages neither skip nor duplicate records because the cursor is a
-   *   position in the ordering rather than an offset: a record inserted below
-   *   it still falls inside the next page.
-   *
-   * {@link StoredMessagePage.revision} says which patches a page already
-   * reflects, so the two surfaces can be ordered as well as merged.
-   */
-  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
+/** Current durable and live state for one WhatsApp Account. */
+export interface WhatsAppAccountState {
+  readonly record: AccountRecord;
+  readonly connection?: WhatsAppClientConnectionState;
+  readonly identity?: WaIdentity;
+  readonly closed?: { readonly error?: unknown };
+}
+
+/** Current state owned by one opened conversation. */
+export interface WhatsAppConversationState {
+  readonly chatId: string;
+  readonly chat?: ChatRecord;
+  readonly messages: readonly MessageRecord[];
+  readonly presence: readonly PresenceUpdate[];
+  readonly loadingOlder: boolean;
+  readonly hasOlderSaved: boolean;
+  readonly error?: unknown;
+}
+
+/** One opened chat and its saved/live state. */
+export interface WhatsAppConversation {
+  readonly chatId: string;
+  get(): WhatsAppConversationState;
+  subscribe(
+    listener: (state: WhatsAppConversationState) => void,
+    options?: SubscriptionOptions,
+  ): import("../subscription.ts").Unsubscribe;
+  loadOlder(): Promise<void>;
+  close(): void;
+}
+
+/** The backend-independent application view of one WhatsApp Account. */
+export interface WhatsAppClient {
+  readonly account: {
+    get(): WhatsAppAccountState;
+    subscribe(
+      listener: (state: WhatsAppAccountState) => void,
+      options?: SubscriptionOptions,
+    ): import("../subscription.ts").Unsubscribe;
+  };
+  readonly chats: {
+    list(): readonly ChatRecord[];
+    get(chatId: string): ChatRecord | undefined;
+    subscribe(
+      listener: (chats: readonly ChatRecord[]) => void,
+      options?: SubscriptionOptions,
+    ): import("../subscription.ts").Unsubscribe;
+    open(chatId: string, options?: { readonly pageSize?: number }): Promise<WhatsAppConversation>;
+  };
+  readonly contacts: {
+    list(): readonly ContactRecord[];
+    get(contactId: string): ContactRecord | undefined;
+    resolve(nativeId: string): ContactRecord | undefined;
+    subscribe(
+      listener: (contacts: readonly ContactRecord[]) => void,
+      options?: SubscriptionOptions,
+    ): import("../subscription.ts").Unsubscribe;
+  };
+  readonly groups: {
+    list(): readonly GroupRecord[];
+    get(groupId: string): GroupRecord | undefined;
+    subscribe(
+      listener: (groups: readonly GroupRecord[]) => void,
+      options?: SubscriptionOptions,
+    ): import("../subscription.ts").Unsubscribe;
+  };
+  close(): Promise<void>;
 }

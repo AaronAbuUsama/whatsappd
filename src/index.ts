@@ -52,8 +52,9 @@ export type {
 export { isTerminal, isOnline, refOf } from "./model/index.ts";
 
 // ── Runtime, backends, and client ──
-export { createWhatsAppRuntime, createInProcessWhatsAppClient } from "./runtime/runtime.ts";
-export type { RuntimeSession, WhatsAppRuntime, WhatsAppRuntimeConfig } from "./runtime/runtime.ts";
+export { createWhatsAppRuntime } from "./runtime/runtime.ts";
+export type { WhatsAppRuntime, WhatsAppRuntimeConfig } from "./runtime/runtime.ts";
+export { createWhatsAppClient } from "./runtime/client.ts";
 export {
   memoryBackend,
   memoryDataStore,
@@ -69,9 +70,9 @@ export {
   AccountNotHeldError,
   StaleAccountClaimError,
   UnsupportedDurableEventError,
+  WhatsAppClientClosedError,
 } from "./runtime/contracts.ts";
 export type {
-  AcceptedWhatsAppBatch,
   AccountLease,
   AccountLeaseStore,
   AccountRecord,
@@ -87,18 +88,13 @@ export type {
   MessageRecord,
   MirrorRecord,
   ObservedInstant,
-  StoredMessageCursor,
-  StoredMessagePage,
-  StoredMessagePageOptions,
+  SubscriptionOptions,
+  WhatsAppAccountState,
+  WhatsAppConversation,
+  WhatsAppConversationState,
   WhatsAppBackend,
   WhatsAppClient,
   WhatsAppClientConnectionState,
-  WhatsAppClientFrame,
-  WhatsAppDataEvent,
-  WhatsAppDataStore,
-  WhatsAppDurableEvent,
-  WhatsAppPatch,
-  WhatsAppSnapshot,
 } from "./runtime/contracts.ts";
 
 // ── Error model ──
