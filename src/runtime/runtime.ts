@@ -321,7 +321,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         state: {
           status,
           observedAt,
-          expiresAt: observedAt + freshnessMs,
+          expiresAt: Math.min(observedAt + freshnessMs, claim.expiresAt),
           fencingToken: claim.fencingToken,
         },
       });
@@ -330,12 +330,17 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     },
     presence: async (presence) => {
       const observedAt = Date.now();
-      publish({ type: "presence", presence, expiresAt: observedAt + freshnessMs });
+      const claim = lease;
+      publish({
+        type: "presence",
+        presence,
+        expiresAt: Math.min(observedAt + freshnessMs, claim?.expiresAt ?? observedAt),
+      });
       // An ephemeral signal must not be able to take the account down. Unlike a
       // message, a dropped last-seen loses nothing that cannot be observed
       // again, so a frame arriving without a claim is let go exactly as the
       // connection handler lets one go.
-      if (!lease) return;
+      if (!claim) return;
       // `unavailable` is the one kind that is not evidence of presence: it says
       // the address is gone, and `src/baileys/presence.ts` stamps `at` with
       // *receipt* time rather than WhatsApp's own last-seen. Recording it would

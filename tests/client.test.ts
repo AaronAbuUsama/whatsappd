@@ -852,6 +852,10 @@ test("a lease-expired Client recovers page reads from its replacement mirror rev
       },
     });
     alpha = await oldClient.chats.open(ALPHA, { pageSize: 1 });
+    await oldDriver.emit({ type: "connection", status: { phase: "online" } });
+    await oldDriver.emit({ type: "presence", presence: { chatId: ALPHA, kind: "typing" } });
+    assert.deepEqual(oldClient.account.get().connection?.status, { phase: "online" });
+    assert.deepEqual(alpha.get().presence, [{ chatId: ALPHA, kind: "typing" }]);
     await withDeadline(renewalStarted);
     await new Promise((resolve) =>
       setTimeout(resolve, Math.max(1, oldLeaseExpiresAt - Date.now() + 2)),
@@ -897,6 +901,8 @@ test("a lease-expired Client recovers page reads from its replacement mirror rev
       bravo.get().messages.map((message) => message.messageId),
       ["bravo-new", "bravo-old"],
     );
+    assert.equal(oldClient.account.get().connection, undefined);
+    assert.deepEqual(alpha.get().presence, []);
 
     const closed = new Promise<void>((resolve) => {
       oldClient.account.subscribe((state) => {

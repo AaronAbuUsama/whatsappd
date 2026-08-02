@@ -34,6 +34,12 @@ last coherent durable state remains readable until explicit Client close. A
 Runtime that terminates before initial hydration makes Client creation fail; it
 cannot leave the factory waiting behind a blocked read.
 
+A live connection or presence observation cannot outlive the Account Lease
+that made it trustworthy. The Runtime caps each live frame's freshness at that
+lease's expiry, so a stalled renewal or replacement holder makes the old
+Client's live state unavailable without adding a second lease query to Client
+reads or recovery.
+
 ## One transition authority
 
 The Client prepares all state affected by one contiguous patch or recovery,
