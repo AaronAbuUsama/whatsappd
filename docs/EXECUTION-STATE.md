@@ -3,8 +3,8 @@
 Last updated: 2026-08-02. The capability catalogue merged at
 `d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the executable
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. The owner subsequently removed
-redundant #63/#39 storage-composition work. #64 is merged; #70 is the current
-implementation frontier.
+redundant #63/#39 storage-composition work. #64 and #70 are merged; #71 is the
+current implementation frontier.
 
 ## Where everything lives
 
@@ -12,17 +12,18 @@ implementation frontier.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0025`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0026`                                   |
 | Published build specification    | GitHub issue #15                                           |
-| Capability source of truth       | `docs/sdk-capabilities.json`, rendered as Markdown         |
+| Capability planning guide        | `docs/sdk-capabilities.md`                                 |
 | Execution-graph repair           | GitHub issue #68                                           |
 | Tracer-bullet ticket graph       | GitHub issues linked from #15 and #68                      |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
 | Shipped product path             | `src/session.ts`, `src/runtime/`, and root exports         |
 
 The architecture document preserves the original target and proof boundaries.
-Accepted ADRs, the capability catalogue, and the current #15 execution receipt
-supersede it where implementation and owner decisions moved on.
+Accepted ADRs and the current #15 execution receipt supersede it where
+implementation and owner decisions moved on. The capability guide summarizes
+the planned and current product surface without governing it.
 
 ## Accepted decision ledger
 
@@ -58,6 +59,7 @@ supersede it where implementation and owner decisions moved on.
 | Framework-independent Client owns WhatsApp state; React binds it; renderers own presentation | 0023           |
 | Every ticket declares TDD seam, acceptance, proof rung, and database-oracle boundary         | 0017           |
 | Pre-acceptance process-death replay is unknown and carries no lossless-delivery claim        | 0025           |
+| Capability inventory is a human-maintained planning guide, not a product authority           | 0026           |
 | Connection and presence remain ephemeral; remote connection truth expires with its lease     | PR #12 review  |
 | Conversation-sync deletion requires explicit, scope-bounded replacement metadata             | PR #12 review  |
 | Executing command claims expire to terminal `outcome_unknown`, never automatic retry         | PR #12 review  |
@@ -141,8 +143,9 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 - #64 closed the remaining synchronous custom-session teardown boundary in
   PR #86.
-- Accepted updates are retained and page by source `seq`; #70 owns complete
-  normalized message/update projection before the friendly Client.
+- #70 completed normalized message/update projection in PR #88; accepted
+  updates remain retained and page by source `seq`. #71 owns the friendly
+  Client.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - `fileStore()` remains the credential-only option for the independently usable
@@ -161,13 +164,13 @@ libSQL and filesystem-media composition needs no additional mechanism:
 ```text
 ✓ #64 Runtime teardown ───────────────────┐
                                          ↓
-#70 projection → #71 Client → #22 operations → #23 pairing/unlink
+✓ #70 projection → #71 Client → #22 operations → #23 pairing/unlink
                                                   ↓
                               #30 React/OpenTUI → #40 → #41
 ```
 
-#23 has two direct blockers (#22 and the now-merged #64). The executable
-frontier is **#70**.
+#23 has two direct blockers (#22 and the now-merged #64); #22 remains blocked
+by #71. With #70 merged, the executable frontier is **#71**.
 
 Post-0.3 and research lanes do not block that spine:
 

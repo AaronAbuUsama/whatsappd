@@ -4,7 +4,7 @@ status: accepted
 
 # Proof claims climb an explicit ladder
 
-> ADR-0024 clarifies the catalogue boundary: P0-P6 still govern implementation
+> ADR-0026 clarifies the catalogue boundary: P0-P6 still govern implementation
 > acceptance claims, but the capability inventory uses plain environment
 > statuses rather than assigning every capability a proof rung.
 

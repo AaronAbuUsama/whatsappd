@@ -1,10 +1,10 @@
 # whatsappd
 
 The [SDK capability catalogue](docs/sdk-capabilities.md) lists what Baileys
-offers, what whatsappd exposes today, and the planned friendly Client API. Its
-[machine-readable source](docs/sdk-capabilities.json) generates the Markdown
-view. Verification status is deliberately plain: automated tests exist, while
-live WhatsApp, browser React, and OpenTUI runs have not been performed.
+offers, what whatsappd exposes today, and the planned friendly Client API. It is
+a human-maintained planning guide, not a product authority or merge gate.
+Verification status is deliberately plain: automated tests exist, while live
+WhatsApp, browser React, and OpenTUI runs have not been performed.
 
 A typed WhatsApp session engine for Node.js. It normalizes Baileys events,
 awaits application handlers in source order, and keeps credentials behind an

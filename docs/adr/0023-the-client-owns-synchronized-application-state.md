@@ -62,4 +62,4 @@ does not delete stored messages or leave the WhatsApp chat.
   than a lower-level protocol.
 - Browser and OpenTUI verification statuses remain separate because they
   exercise different renderers and platform behavior.
-- ADR-0016 is superseded. ADR-0024 governs verification claims.
+- ADR-0016 is superseded. ADR-0026 governs verification claims.

@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # Capability status and verification status are separate
+
+> Superseded in part by ADR-0026. Capability and verification status remain
+> separate; the machine-readable catalogue decision does not.
 
 The SDK capability catalogue records two different things:
 

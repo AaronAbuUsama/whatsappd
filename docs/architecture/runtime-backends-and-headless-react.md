@@ -7,12 +7,12 @@ Date: 2026-07-29
 This document preserves the broader design that produced the accepted ADRs and
 issue graph. It is not the current execution source of truth. The
 [SDK capability catalogue](../sdk-capabilities.md) records the target product
-surface. Its canonical [machine-readable source](../sdk-capabilities.json)
-records Baileys availability, current whatsappd status, the target Client, and
-plain verification status; accepted ADRs govern conflicts. In particular,
-ADR-0023 moves synchronized application state from React into the
-framework-independent Client. The package has already completed the hard cut
-away from the Eve-era adapter, sidecar, and agent tools.
+surface as a human-maintained planning guide, including Baileys availability,
+current whatsappd status, the target Client, and plain verification status;
+accepted ADRs govern decisions. In particular, ADR-0023 moves synchronized
+application state from React into the framework-independent Client. The package
+has already completed the hard cut away from the Eve-era adapter, sidecar, and
+agent tools.
 
 ## Decision
 
