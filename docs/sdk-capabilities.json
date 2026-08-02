@@ -209,7 +209,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`account.state`, `account.subscribe`; `useAccount`, `useConnection`",
-      "requirements": "Volatile live state plus durable observed instants; no public terminal-state observation recorded"
+      "requirements": "Volatile live state plus durable observed instants; no public terminal-state observation recorded; execution: #71; release: required for 0.3"
     },
     {
       "id": "ACC-02",
@@ -224,7 +224,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`account.pair({ method: \"qr\" })`; `usePairing`",
-      "requirements": "Commands + protected challenge + trusted worker; #23, 0.3 target"
+      "requirements": "Commands + protected challenge + trusted worker; #23, 0.3 target; release: required for 0.3"
     },
     {
       "id": "ACC-03",
@@ -239,7 +239,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`account.pair({ method: \"code\", phoneNumber })`; `usePairing`",
-      "requirements": "Commands + protected challenge; #23, 0.3 target"
+      "requirements": "Commands + protected challenge; #23, 0.3 target; release: required for 0.3"
     },
     {
       "id": "ACC-04",
@@ -269,7 +269,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`runtime.start/stop`; `client.close` releases Client resources",
-      "requirements": "Credentials + lease + data + media; shipped lower-level"
+      "requirements": "Credentials + lease + data + media; shipped lower-level; execution: #64; release: required for 0.3 release safety"
     },
     {
       "id": "ACC-06",
@@ -284,7 +284,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`account.identity()` / `useAccount`",
-      "requirements": "Live trusted worker; shipped lower-level"
+      "requirements": "Live trusted worker; shipped lower-level; execution: #71; release: required for 0.3"
     },
     {
       "id": "ACC-07",
@@ -314,7 +314,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`account.profile.setPicture/removePicture`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #73; release: post-0.3"
     },
     {
       "id": "ACC-09",
@@ -329,7 +329,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`account.profile.about/setAbout/setName`",
-      "requirements": "Durable command for writes; deferred"
+      "requirements": "Durable command for writes; deferred; execution: #73; release: post-0.3"
     },
     {
       "id": "ACC-10",
@@ -344,7 +344,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`account.privacy.get()`",
-      "requirements": "Live trusted worker; deferred"
+      "requirements": "Live trusted worker; deferred; execution: #73; release: post-0.3"
     },
     {
       "id": "ACC-11",
@@ -359,7 +359,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`account.privacy.update(patch)`",
-      "requirements": "Durable command; defer atomically until native semantics are proven"
+      "requirements": "Durable command; defer atomically until native semantics are proven; execution: #73; release: post-0.3"
     },
     {
       "id": "ACC-12",
@@ -374,7 +374,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`account.blocklist.list/subscribe`",
-      "requirements": "Current mirror + command; deferred"
+      "requirements": "Current mirror + command; deferred; execution: #73; release: post-0.3"
     },
     {
       "id": "ACC-13",
@@ -389,7 +389,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`account.blocklist.block/unblock`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #73; release: post-0.3"
     },
     {
       "id": "ACC-14",
@@ -524,7 +524,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Internal Client ingestion, not a UI event",
-      "requirements": "Accepted data; no on-demand integration observation recorded"
+      "requirements": "Accepted data; no on-demand integration observation recorded; execution: #71; release: required for 0.3"
     },
     {
       "id": "CHAT-08",
@@ -554,7 +554,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`chats.archive/unarchive`",
-      "requirements": "Durable command + mirror; deferred"
+      "requirements": "Durable command + mirror; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "CHAT-10",
@@ -569,7 +569,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`chats.mute/unmute`",
-      "requirements": "Durable command + mirror; deferred"
+      "requirements": "Durable command + mirror; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "CHAT-11",
@@ -584,7 +584,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`chats.pin/unpin`",
-      "requirements": "Durable command + mirror; deferred"
+      "requirements": "Durable command + mirror; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "CHAT-12",
@@ -599,7 +599,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`chats.clear`",
-      "requirements": "Durable command + scoped mirror deletion; deferred"
+      "requirements": "Durable command + scoped mirror deletion; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "CHAT-13",
@@ -614,7 +614,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`chats.delete`",
-      "requirements": "Durable command + scoped mirror deletion; deferred"
+      "requirements": "Durable command + scoped mirror deletion; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "CHAT-14",
@@ -629,7 +629,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.disappearing.set`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "CHAT-15",
@@ -659,7 +659,7 @@
         "summary": "`available-in-baileys`; current `markRead` only marks real references read"
       },
       "target": "`chats.markUnread(chatId)`",
-      "requirements": "Durable command + mirror; deferred"
+      "requirements": "Durable command + mirror; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "CHAT-17",
@@ -674,7 +674,7 @@
         "summary": "`available-in-baileys`; the current adapter derives chats from messages/history/groups"
       },
       "target": "Transparent `chats` state",
-      "requirements": "Data projection with scoped deletion; deferred"
+      "requirements": "Data projection with scoped deletion; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-IN-01",
@@ -854,7 +854,7 @@
         "summary": "The generic unsupported fallback preserves the raw live-location type, but no normalized live-location contract exists."
       },
       "target": "`conversation.state.messages`",
-      "requirements": "Modeling and data projection; deferred"
+      "requirements": "Modeling and data projection; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-IN-13",
@@ -869,7 +869,7 @@
         "summary": "The generic unsupported fallback preserves these raw message types, but no normalized interactive reply/message contracts exist."
       },
       "target": "Message union after upstream-contract proof",
-      "requirements": "Modeling/data; deferred"
+      "requirements": "Modeling/data; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-IN-14",
@@ -884,7 +884,7 @@
         "summary": "The generic unsupported fallback preserves these raw message types, but no normalized commerce message contracts exist."
       },
       "target": "`business` plus conversation message model",
-      "requirements": "Business/data; deferred"
+      "requirements": "Business/data; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-IN-15",
@@ -899,7 +899,7 @@
         "summary": "The generic unsupported fallback preserves these raw invite types, but no normalized invite contracts or actions exist."
       },
       "target": "Conversation message plus target domain action",
-      "requirements": "Data; deferred"
+      "requirements": "Data; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-IN-16",
@@ -914,7 +914,7 @@
         "summary": "The generic unsupported fallback preserves these raw message types, but no normalized user-visible family contracts exist."
       },
       "target": "Model each user-visible family; protocol-only notices stay internal",
-      "requirements": "Data; deferred"
+      "requirements": "Data; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-IN-17",
@@ -929,7 +929,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Internal compatibility behavior",
-      "requirements": "Data modeling required before durable acceptance"
+      "requirements": "Data modeling required before durable acceptance; execution: #70; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-01",
@@ -944,7 +944,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.text(text, options)`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-02",
@@ -959,7 +959,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.image(input, options)`",
-      "requirements": "Durable commands #22; media input is caller-owned"
+      "requirements": "Durable commands #22; media input is caller-owned; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-03",
@@ -974,7 +974,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.video(input, options)`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-04",
@@ -989,7 +989,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.audio(input, options)`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-05",
@@ -1004,7 +1004,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.document(input, options)`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-06",
@@ -1019,7 +1019,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.sticker(input)`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-07",
@@ -1034,7 +1034,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.location(location)`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-08",
@@ -1049,7 +1049,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.send.contacts(cards)`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-09",
@@ -1064,7 +1064,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Every send accepts `{ replyTo }`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-10",
@@ -1079,7 +1079,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Text/media send option `{ mentions }`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-11",
@@ -1094,7 +1094,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.messages.react/unreact`",
-      "requirements": "Durable commands #22"
+      "requirements": "Durable commands #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-12",
@@ -1109,7 +1109,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.messages.edit`",
-      "requirements": "Durable commands + mirror reconciliation #22"
+      "requirements": "Durable commands + mirror reconciliation #22; release: required for 0.3"
     },
     {
       "id": "MSG-OUT-13",
@@ -1139,7 +1139,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.messages.forward(targets)`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-OUT-15",
@@ -1154,7 +1154,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.send.poll`",
-      "requirements": "Durable command/data; deferred"
+      "requirements": "Durable command/data; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-OUT-16",
@@ -1169,7 +1169,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.send.album`",
-      "requirements": "Durable command/media; deferred"
+      "requirements": "Durable command/media; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-OUT-17",
@@ -1184,7 +1184,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "Separate typed send operations only when each product outcome is selected",
-      "requirements": "Deferred; business/group domains where applicable"
+      "requirements": "Deferred; business/group domains where applicable; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-OUT-18",
@@ -1199,7 +1199,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "Typed send options after semantics proof",
-      "requirements": "Deferred"
+      "requirements": "Deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-OUT-19",
@@ -1214,7 +1214,7 @@
         "summary": "`available-in-baileys`; current text outbound has no preview option"
       },
       "target": "`conversation.send.text(text, { linkPreview })`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-ACT-01",
@@ -1289,7 +1289,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.messages.deleteLocal`",
-      "requirements": "Durable command + scoped mirror deletion; deferred"
+      "requirements": "Durable command + scoped mirror deletion; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-ACT-06",
@@ -1304,7 +1304,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.messages.star/unstar`",
-      "requirements": "Durable command + mirror; deferred"
+      "requirements": "Durable command + mirror; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-ACT-07",
@@ -1319,7 +1319,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.messages.pin/unpin`",
-      "requirements": "Durable command + mirror; deferred"
+      "requirements": "Durable command + mirror; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "MSG-ACT-08",
@@ -1334,7 +1334,7 @@
         "summary": "`deferred`"
       },
       "target": "Built into `conversation.send.*` state",
-      "requirements": "Commands + data transaction identities; #22"
+      "requirements": "Commands + data transaction identities; #22; release: required for 0.3"
     },
     {
       "id": "MSG-ACT-09",
@@ -1349,7 +1349,7 @@
         "summary": "`available-in-baileys`; current socket does not subscribe and no deletion projection exists"
       },
       "target": "Transparent conversation state",
-      "requirements": "Explicit deletion/tombstone scope; deferred"
+      "requirements": "Explicit deletion/tombstone scope; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "STATUS-01",
@@ -1364,7 +1364,7 @@
         "summary": "`available-in-baileys`; current Session send has no status audience/options"
       },
       "target": "`account.statuses.publish`",
-      "requirements": "Durable command/media; deferred"
+      "requirements": "Durable command/media; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "STATUS-02",
@@ -1379,7 +1379,7 @@
         "summary": "`available-in-baileys`; the current catch-all is not a distinct status-message implementation"
       },
       "target": "`account.statuses.list/subscribe`; hook TBD",
-      "requirements": "Data/expiry semantics; deferred"
+      "requirements": "Data/expiry semantics; deferred; execution: #74; release: post-0.3"
     },
     {
       "id": "LIVE-01",
@@ -1394,7 +1394,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.state.presence`; `usePresence`",
-      "requirements": "Volatile Client state; shipped low-level"
+      "requirements": "Volatile Client state; shipped low-level; execution: #71; release: required for 0.3"
     },
     {
       "id": "LIVE-02",
@@ -1409,7 +1409,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Same",
-      "requirements": "Volatile Client state"
+      "requirements": "Volatile Client state; execution: #71; release: required for 0.3"
     },
     {
       "id": "LIVE-03",
@@ -1424,7 +1424,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Same",
-      "requirements": "Volatile state; only delivered last-seen instants are durable"
+      "requirements": "Volatile state; only delivered last-seen instants are durable; execution: #71; release: required for 0.3"
     },
     {
       "id": "LIVE-04",
@@ -1439,7 +1439,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`conversation.typing.start/stop`",
-      "requirements": "Durable command only if product needs result; #22 owns typing"
+      "requirements": "Durable command only if product needs result; #22 owns typing; release: required for 0.3"
     },
     {
       "id": "LIVE-05",
@@ -1454,7 +1454,7 @@
         "summary": "`available-in-baileys`; current boolean method exposes typing only"
       },
       "target": "`conversation.recording.start/stop`",
-      "requirements": "Command/live worker; deferred"
+      "requirements": "Command/live worker; deferred; execution: #79; release: post-0.3"
     },
     {
       "id": "LIVE-06",
@@ -1469,7 +1469,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "Internal demand management behind opened conversations",
-      "requirements": "Live worker; deferred"
+      "requirements": "Live worker; deferred; execution: #79; release: post-0.3"
     },
     {
       "id": "CALL-01",
@@ -1484,7 +1484,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`calls.subscribe`; `useCalls`",
-      "requirements": "Volatile event, optional accepted source; deferred"
+      "requirements": "Volatile event, optional accepted source; deferred; execution: #79; release: post-0.3"
     },
     {
       "id": "CALL-02",
@@ -1499,7 +1499,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`calls.reject(callId)`",
-      "requirements": "Durable command with ambiguity semantics; deferred"
+      "requirements": "Durable command with ambiguity semantics; deferred; execution: #79; release: post-0.3"
     },
     {
       "id": "CALL-03",
@@ -1514,7 +1514,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`calls.createLink`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #79; release: post-0.3"
     },
     {
       "id": "CALL-04",
@@ -1544,7 +1544,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`contacts.list/get/subscribe`; `useContacts`",
-      "requirements": "Data mirror; shipped low-level"
+      "requirements": "Data mirror; shipped low-level; execution: #71; release: required for 0.3"
     },
     {
       "id": "CONTACT-02",
@@ -1559,7 +1559,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Transparent in `contacts` and message sender lookup",
-      "requirements": "Data mirror; shipped"
+      "requirements": "Data mirror; shipped; execution: #71; release: required for 0.3"
     },
     {
       "id": "CONTACT-03",
@@ -1574,7 +1574,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`contacts.lookupRegistration(numbers)`",
-      "requirements": "Live trusted worker; deferred"
+      "requirements": "Live trusted worker; deferred; execution: #75; release: post-0.3"
     },
     {
       "id": "CONTACT-04",
@@ -1589,7 +1589,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`contacts.save({ address, name })`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #75; release: post-0.3"
     },
     {
       "id": "CONTACT-05",
@@ -1604,7 +1604,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`contacts.remove(address)`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #75; release: post-0.3"
     },
     {
       "id": "CONTACT-06",
@@ -1619,7 +1619,7 @@
         "summary": "The Session reads a profile-picture URL only; about/status and disappearing duration are absent."
       },
       "target": "`contacts.profile(address)`",
-      "requirements": "Live worker; deferred"
+      "requirements": "Live worker; deferred; execution: #75; release: post-0.3"
     },
     {
       "id": "CONTACT-07",
@@ -1664,7 +1664,7 @@
         "summary": "`available-in-baileys`; current aliases arise only from contact/message evidence"
       },
       "target": "Transparent contact alias resolution",
-      "requirements": "Data projection; deferred"
+      "requirements": "Data projection; deferred; execution: #75; release: post-0.3"
     },
     {
       "id": "GROUP-01",
@@ -1679,7 +1679,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "`groups.get/subscribe`; `useGroup`",
-      "requirements": "Data mirror; exact adapter coverage lives in the atomic claims"
+      "requirements": "Data mirror; exact adapter coverage lives in the atomic claims; execution: #71; release: required for 0.3"
     },
     {
       "id": "GROUP-02",
@@ -1694,7 +1694,7 @@
         "summary": "`available-in-baileys`; snapshots list groups already observed"
       },
       "target": "`groups.list()`",
-      "requirements": "Data mirror/live refresh; deferred"
+      "requirements": "Data mirror/live refresh; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-03",
@@ -1709,7 +1709,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.create`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-04",
@@ -1724,7 +1724,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.leave`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-05",
@@ -1739,7 +1739,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.update({ subject, description })`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-06",
@@ -1754,7 +1754,7 @@
         "summary": "`available-in-baileys` for actions; observe-only normalization exists"
       },
       "target": "`groups.participants.add/remove/promote/demote`",
-      "requirements": "Durable commands; deferred"
+      "requirements": "Durable commands; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-07",
@@ -1769,7 +1769,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.joinRequests.list/approve/reject`",
-      "requirements": "Durable command/data; deferred"
+      "requirements": "Durable command/data; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-08",
@@ -1784,7 +1784,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.invites.*`",
-      "requirements": "Durable commands; protected invite handling where needed; deferred"
+      "requirements": "Durable commands; protected invite handling where needed; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-09",
@@ -1799,7 +1799,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.settings.update`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-10",
@@ -1814,7 +1814,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.disappearing.set`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-11",
@@ -1829,7 +1829,7 @@
         "summary": "Current normalized metadata contains group id, subject, participants, and participant roles only; richer upstream fields remain deferred."
       },
       "target": "Extend `groups.get` only per consumer need",
-      "requirements": "Data model; deferred"
+      "requirements": "Data model; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-12",
@@ -1844,7 +1844,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.joinRequests.subscribe`, `groups.memberTags.subscribe` if selected",
-      "requirements": "Data/events; deferred"
+      "requirements": "Data/events; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-13",
@@ -1859,7 +1859,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`groups.memberTags.update`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #76; release: post-0.3"
     },
     {
       "id": "GROUP-14",
@@ -1889,7 +1889,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`communities.get`; `useCommunity`",
-      "requirements": "Data model; deferred"
+      "requirements": "Data model; deferred; execution: #77; release: post-0.3"
     },
     {
       "id": "COMM-02",
@@ -1904,7 +1904,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`communities.create/leave`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #77; release: post-0.3"
     },
     {
       "id": "COMM-03",
@@ -1919,7 +1919,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`communities.update`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #77; release: post-0.3"
     },
     {
       "id": "COMM-04",
@@ -1934,7 +1934,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`communities.groups.link/unlink`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #77; release: post-0.3"
     },
     {
       "id": "COMM-05",
@@ -1949,7 +1949,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`communities.groups.list`",
-      "requirements": "Data/live worker; deferred"
+      "requirements": "Data/live worker; deferred; execution: #77; release: post-0.3"
     },
     {
       "id": "COMM-06",
@@ -1979,7 +1979,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`communities.groups.create`, `communities.list`",
-      "requirements": "Durable command/data; deferred"
+      "requirements": "Durable command/data; deferred; execution: #77; release: post-0.3"
     },
     {
       "id": "CHAN-01",
@@ -1994,7 +1994,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.get/stats`; `useChannel`",
-      "requirements": "Data/live worker; deferred"
+      "requirements": "Data/live worker; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-02",
@@ -2009,7 +2009,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.create/update/delete`",
-      "requirements": "Durable commands; deferred"
+      "requirements": "Durable commands; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-03",
@@ -2024,7 +2024,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.follow/unfollow`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-04",
@@ -2039,7 +2039,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.mute/unmute`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-05",
@@ -2054,7 +2054,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.profile.*`",
-      "requirements": "Durable command/media input; deferred"
+      "requirements": "Durable command/media input; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-06",
@@ -2069,7 +2069,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.messages.page`",
-      "requirements": "Separate channel data model/paging; deferred"
+      "requirements": "Separate channel data model/paging; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-07",
@@ -2084,7 +2084,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.messages.react`",
-      "requirements": "Durable command; deferred"
+      "requirements": "Durable command; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-08",
@@ -2099,7 +2099,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.subscribe`; `useChannels`",
-      "requirements": "Live events/data; deferred"
+      "requirements": "Live events/data; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-09",
@@ -2114,7 +2114,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.admin.changeOwner/demote`",
-      "requirements": "High-risk durable command; deferred"
+      "requirements": "High-risk durable command; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "CHAN-10",
@@ -2129,7 +2129,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`channels.subscribe` and message state",
-      "requirements": "Data/events; deferred"
+      "requirements": "Data/events; deferred; execution: #78; release: post-0.3"
     },
     {
       "id": "BIZ-01",
@@ -2144,7 +2144,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.profile.get`",
-      "requirements": "Live worker/data cache; deferred"
+      "requirements": "Live worker/data cache; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-02",
@@ -2159,7 +2159,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.profile.update/setCover/removeCover`",
-      "requirements": "Durable command/media input; deferred"
+      "requirements": "Durable command/media input; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-03",
@@ -2174,7 +2174,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.catalog.page/collections`",
-      "requirements": "Data/live worker; deferred"
+      "requirements": "Data/live worker; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-04",
@@ -2189,7 +2189,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.products.create/update/delete`",
-      "requirements": "Durable command/media; deferred"
+      "requirements": "Durable command/media; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-05",
@@ -2204,7 +2204,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.orders.get`",
-      "requirements": "Live worker/data; deferred"
+      "requirements": "Live worker/data; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-06",
@@ -2219,7 +2219,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.labels.*`, `chats.labels.*`",
-      "requirements": "Durable commands/data; deferred"
+      "requirements": "Durable commands/data; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-07",
@@ -2234,7 +2234,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`conversation.messages.labels.*`",
-      "requirements": "Durable command/data; deferred"
+      "requirements": "Durable command/data; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-08",
@@ -2249,7 +2249,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.quickReplies.*`",
-      "requirements": "Durable command/data; deferred"
+      "requirements": "Durable command/data; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "BIZ-09",
@@ -2264,7 +2264,7 @@
         "summary": "`available-in-baileys`"
       },
       "target": "`business.labels.subscribe`",
-      "requirements": "Data/events; deferred"
+      "requirements": "Data/events; deferred; execution: #80; release: post-0.3"
     },
     {
       "id": "DATA-01",
@@ -2279,7 +2279,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Internal Runtime composition",
-      "requirements": "Credentials capability; shipped"
+      "requirements": "Credentials capability; shipped; execution: #63; release: required for 0.3 release safety"
     },
     {
       "id": "DATA-02",
@@ -2369,7 +2369,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Internal Runtime ownership",
-      "requirements": "Lease capability; shipped"
+      "requirements": "Lease capability; shipped; execution: #64; release: required for 0.3 release safety"
     },
     {
       "id": "DATA-08",
@@ -2399,7 +2399,7 @@
         "summary": "Current projection deletes only a duplicate contact during PN/LID consolidation; chat, message, and group tombstones are absent."
       },
       "target": "Transparent domain state",
-      "requirements": "Message scope #70; remaining chat/contact/group scope #74/#75/#76"
+      "requirements": "Message scope #70, required for 0.3; remaining chat/contact/group scopes #74/#75/#76, post-0.3"
     },
     {
       "id": "DATA-10",
@@ -2519,7 +2519,7 @@
         "summary": "`application-owned`"
       },
       "target": "React receives application-safe media access, not filesystem refs",
-      "requirements": "Browser delivery adapter/host policy"
+      "requirements": "Browser delivery adapter/host policy; execution: #83; release: post-0.3 SDK boundary; host policy remains application-owned"
     },
     {
       "id": "MEDIA-08",
@@ -2654,7 +2654,7 @@
         "summary": "The testing subpath constructs text and drives the low-level Session; other message constructors and the friendly Client/operation lifecycle are absent."
       },
       "target": "Extend the testing subpath in the same vertical issue as each capability",
-      "requirements": "No separate verification harness; extend vertically in #70/#71/#22/#23/#39"
+      "requirements": "No separate verification harness; extend vertically in #70/#71/#22/#23/#39; release: required for 0.3"
     },
     {
       "id": "OBS-01",
