@@ -201,7 +201,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `BIZ-07` | business | Add/remove message labels. | available: `available-in-baileys` | not-implemented | `available-in-baileys` | `conversation.messages.labels.*` | Durable command/data; deferred; execution: #80; release: post-0.3 |
 | `BIZ-08` | business | Add/edit/remove quick replies. | available: `available-in-baileys` | not-implemented | `available-in-baileys` | `business.quickReplies.*` | Durable command/data; deferred; execution: #80; release: post-0.3 |
 | `BIZ-09` | business | Observe label definitions and chat/message label associations. | available: `available-in-baileys` (`B:events labels.edit/association`) | not-implemented | `available-in-baileys` | `business.labels.subscribe` | Data/events; deferred; execution: #80; release: post-0.3 |
-| `DATA-01` | durability | Persist credentials and signal keys and clear only that account's credentials. | not-applicable: Baileys requires auth state; not an application API | implemented | Current whatsappd implements this capability. | Internal Runtime composition | Credentials capability; shipped; execution: #63; release: required for 0.3 release safety |
+| `DATA-01` | durability | Persist credentials and signal keys and clear only that account's credentials. | not-applicable: Baileys requires auth state; not an application API | implemented | Current whatsappd implements this capability. | Internal Runtime composition | Credentials capability ships through memory/libSQL; #63 removes the legacy file credential adapter for 0.3 |
 | `DATA-02` | durability | Atomically append accepted normalized source and update the current mirror. | not-applicable: n/a product architecture | implemented | Current whatsappd implements this capability. | Internal Runtime ingestion | Data capability; shipped; durability begins at the Backend transaction, with the pre-acceptance replay boundary explicitly unknown under ADR-0025 |
 | `DATA-03` | durability | Follow accepted source independently from mirror revisions. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Not friendly Client state; advanced backend consumer only | Data capability; shipped low-level |
 | `DATA-04` | durability | Read a consistent account snapshot and revision. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Internal Client hydration | Data capability; shipped low-level |
@@ -236,7 +236,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | adapter | credentials | data | leases | commands | media | trustedWorker | browser | status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Memory | yes | yes | yes | no | yes | yes | no durability claim | shipped |
-| File credential store | yes | no | no | no | no | yes | no | shipped; legacy migration residual #63 |
+| File credential store | yes | no | no | no | no | yes | no | shipped in 0.2; hard-cut removal #63 |
 | libSQL backend | yes | yes | yes | no | injected only | Node/application worker | no: credentials, leases, and writer access are trusted | shipped |
 | Filesystem media | no | no | no | no | yes | Node/application worker | no direct path exposure | shipped |
 | Postgres structured adapter | target | target | target using database time | target | injected only | server/worker | no direct credential/writer access | `deferred`; post-0.3 #81 |

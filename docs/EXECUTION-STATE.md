@@ -144,6 +144,8 @@ WhatsApp messages”, or report a delivered count tied to the request.
   normalized message/update projection before the friendly Client.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
+- `fileStore()` is a pre-0.3 credential adapter. #63 removes it from the hard-cut
+  package without an importer, migration layer, deprecation wrapper, or alias.
 - The Ambient Agent v3 PocketBase spike remains fixture evidence on the old
   package. Production integration still waits for a published release with
   durable media and a persistent runtime backend.
@@ -154,7 +156,7 @@ The owner locked Postgres, S3-compatible media, and dependent browser delivery
 to post-0.3 and authorized #68 to establish the following local-first graph:
 
 ```text
-#68 ─┬→ #63 file migration ────────────────────────┐
+#68 ─┬→ #63 remove file credentials ───────────────┐
      ├→ #64 Runtime teardown ───────────┐          │
      └→ #70 projection → #71 Client → #22 ─→ #23 ─┴→ #39 composition
                                                     ↓

@@ -2279,7 +2279,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Internal Runtime composition",
-      "requirements": "Credentials capability; shipped; execution: #63; release: required for 0.3 release safety"
+      "requirements": "Credentials capability ships through memory/libSQL; #63 removes the legacy file credential adapter for 0.3"
     },
     {
       "id": "DATA-02",
@@ -2723,7 +2723,7 @@
       "media": "no",
       "trustedWorker": "yes",
       "browser": "no",
-      "status": "shipped; legacy migration residual #63"
+      "status": "shipped in 0.2; hard-cut removal #63"
     },
     {
       "adapter": "libSQL backend",
