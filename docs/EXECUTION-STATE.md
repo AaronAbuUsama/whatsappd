@@ -11,7 +11,7 @@ held until #68 merges; the resulting frontier is #63, #64, and #70.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0024`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0025`                                   |
 | Published build specification    | GitHub issue #15                                           |
 | Capability source of truth       | `docs/sdk-capabilities.json`, rendered as Markdown         |
 | Execution-graph repair           | GitHub issue #68                                           |
@@ -56,6 +56,7 @@ supersede it where implementation and owner decisions moved on.
 | Changesets releases the package family as a fixed lockstep group                             | Spec           |
 | Framework-independent Client owns WhatsApp state; React binds it; renderers own presentation | 0023           |
 | Every ticket declares TDD seam, acceptance, proof rung, and database-oracle boundary         | 0017           |
+| Pre-acceptance process-death replay is unknown and carries no lossless-delivery claim        | 0025           |
 | Connection and presence remain ephemeral; remote connection truth expires with its lease     | PR #12 review  |
 | Conversation-sync deletion requires explicit, scope-bounded replacement metadata             | PR #12 review  |
 | Executing command claims expire to terminal `outcome_unknown`, never automatic retry         | PR #12 review  |
@@ -126,6 +127,10 @@ The build graph must block dependent claims on runnable proof of:
 4. Restartable background media capture and blob-orphan cleanup when #72 is
    implemented. Immediate capture, restart-safe file bytes, and failed-capture
    visibility already ship and remain the 0.3 contract.
+
+The pre-acceptance process-death boundary is deliberately not a proof gate.
+ADR-0025 records the unknown replay/loss window and the absence of any lossless,
+at-least-once, or exactly-once claim; #19 remains closed `wontfix`.
 
 Until the first prototype proves otherwise, UI language may say “no older saved
 messages” and “request sent”; it may not say “all history loaded”, “no more

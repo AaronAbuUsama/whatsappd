@@ -2294,7 +2294,7 @@
         "summary": "Current whatsappd implements this capability."
       },
       "target": "Internal Runtime ingestion",
-      "requirements": "Data capability; shipped"
+      "requirements": "Data capability; shipped; durability begins at the Backend transaction, with the pre-acceptance replay boundary explicitly unknown under ADR-0025"
     },
     {
       "id": "DATA-03",

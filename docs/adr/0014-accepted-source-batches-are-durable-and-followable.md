@@ -7,7 +7,9 @@ status: accepted
 > Amended by ADR-0018: a batch's cursor and the mirror revision are separate
 > numbers, and acceptance takes the writer's fencing token. Amended by ADR-0020:
 > the _instant_ an ephemeral signal was observed at is durable, while the status
-> it carried is still not. Everything below still holds.
+> it carried is still not. ADR-0025 supersedes the former mandatory live
+> pre-acceptance crash proof: that replay boundary remains an explicit unknown
+> and no lossless-delivery claim is made. Everything else below still holds.
 
 The data store durably appends each normalized, non-ephemeral source batch,
 projects that batch into the current mirror, and stamps its next account
@@ -39,8 +41,9 @@ when it takes no mirror revision, so catch-up never depends on patch production.
 - The accepted-source log and current mirror are two projections with different
   retention and read semantics; they are committed at one acceptance boundary.
 - Durable acceptance begins at the backend transaction. A process can still die
-  after the protocol delivers an event but before any local transaction begins;
-  live fault-injection must define the remaining protocol replay boundary.
+  after the protocol delivers an event but before any local transaction begins.
+  ADR-0025 records that replay behavior as an accepted, disclosed unknown rather
+  than a 0.3 proof gate.
 - Presence and connection state are not appended because replaying stale
   typing, availability, `online`, or pairing status would manufacture current
   state. Connection state is live and expiry-aware; durable account lifecycle
