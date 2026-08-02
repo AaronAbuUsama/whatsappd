@@ -1,6 +1,6 @@
 # SDK capability catalogue
 
-This generated inventory answers what Baileys exposes, what whatsappd exposes today, and what friendly interface is planned. It is a roadmap and documentation source, not a claim that every row has been exercised against a live account.
+This human-maintained guide answers what Baileys exposes, what whatsappd exposes today, and what friendly interface is planned. It is a roadmap, not a product authority, merge gate, or claim that every row has been exercised against a live account.
 
 Audit versions: whatsappd `0.2.2`; Baileys `7.0.0-rc14`.
 

@@ -3,8 +3,8 @@
 Last updated: 2026-08-02. The capability catalogue merged at
 `d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the executable
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. The owner subsequently removed
-redundant #63/#39 storage-composition work. #64 is merged; #70 is the current
-implementation frontier.
+redundant #63/#39 storage-composition work. #64 and #70 are merged; #91 removes
+the duplicate machine-readable capability catalogue.
 
 ## Where everything lives
 
@@ -14,15 +14,16 @@ implementation frontier.
 | Shared domain language           | `CONTEXT.md`                                               |
 | Accepted architecture decisions  | `docs/adr/0001` … `0025`                                   |
 | Published build specification    | GitHub issue #15                                           |
-| Capability source of truth       | `docs/sdk-capabilities.json`, rendered as Markdown         |
+| Capability planning guide        | `docs/sdk-capabilities.md`                                 |
 | Execution-graph repair           | GitHub issue #68                                           |
 | Tracer-bullet ticket graph       | GitHub issues linked from #15 and #68                      |
 | Ambient v3 downstream dependency | Release-gated handoff supplied separately                  |
 | Shipped product path             | `src/session.ts`, `src/runtime/`, and root exports         |
 
 The architecture document preserves the original target and proof boundaries.
-Accepted ADRs, the capability catalogue, and the current #15 execution receipt
-supersede it where implementation and owner decisions moved on.
+Accepted ADRs and the current #15 execution receipt supersede it where
+implementation and owner decisions moved on. The capability guide summarizes
+the planned and current product surface without governing it.
 
 ## Accepted decision ledger
 
