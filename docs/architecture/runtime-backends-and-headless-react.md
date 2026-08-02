@@ -777,61 +777,32 @@ result, then replaces or marks the optimistic record.
 
 ## Backend-independent client
 
-React and application code consume one contract:
+React and application code consume friendly state rather than transport or
+storage mechanics:
 
 ```ts
-export interface WhatsAppClient {
-  watch(options?: {
-    accountId?: string;
-    signal?: AbortSignal;
-  }): AsyncIterable<
-    | { type: "snapshot"; snapshot: WhatsAppSnapshot }
-    | { type: "patch"; patch: WhatsAppPatch }
-    | { type: "presence"; presence: PresenceUpdate }
-    | { type: "connection"; state: WhatsAppClientConnectionState }
-  >;
+const client = await createWhatsAppClient(runtime);
 
-  messages(
-    chatId: string,
-    page: { before?: StoredMessageCursor; limit: number },
-  ): Promise<StoredMessagePage>;
+client.account.get();
+client.account.subscribe(renderAccount, { signal });
+client.chats.list();
+client.contacts.list();
+client.groups.list();
 
-  requestHistory(
-    input: {
-      chatId: string;
-      before: MessageRef & { timestamp: number };
-      count?: number;
-    },
-    options?: { signal?: AbortSignal },
-  ): Promise<WhatsAppCommandReceipt>;
-
-  execute(
-    command: WhatsAppCommand,
-    options?: { signal?: AbortSignal },
-  ): Promise<WhatsAppCommandReceipt>;
-}
+const conversation = await client.chats.open(chatId, { pageSize: 25 });
+conversation.get();
+conversation.subscribe(renderConversation, { signal });
+await conversation.loadOlder();
+conversation.close();
+await client.close();
 ```
 
-The snapshot contains the account, chat summaries (including last-message
-preview), contacts, and groups. It contains no message window for every chat.
-Opening an active conversation calls `messages()` for its first stored page;
-further stored pages remain deterministic backend reads.
-
-An exhausted stored cursor means only that no older messages are currently in
-the mirror. `requestHistory()` separately asks WhatsApp for older messages and
-may expose “requesting”, “request sent”, “new messages stored”, or “failed”. It
-does not expose “all history loaded” or “no more WhatsApp messages” without the
-blocked live protocol proof.
-
-```ts
-export type OlderHistoryState =
-  | { state: "showing_saved_messages" }
-  | { state: "no_older_saved_messages"; canRequest: boolean }
-  | { state: "requesting_from_linked_phone" }
-  | { state: "request_sent"; requestId: string }
-  | { state: "new_messages_saved"; count: number }
-  | { state: "request_failed"; message: string };
-```
+Client creation hydrates account, chat summaries, contacts, and groups. It does
+not eagerly load a message window for every chat. Opening a conversation reads
+its first saved page; `loadOlder()` joins retryable backend reads, hides the
+cursor, and merges by message identity. An exhausted saved page never claims
+that WhatsApp has no older messages. Phone-history requests and commands are
+separate capabilities, not part of this state seam.
 
 `await createWhatsAppClient(runtime)` resolves only after the store-backed
 snapshot is applied. Runtime frames, patches, revisions, and stored-page cursors

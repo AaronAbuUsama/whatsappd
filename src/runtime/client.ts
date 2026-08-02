@@ -54,6 +54,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   const contactListeners = new Set<(value: readonly ContactRecord[]) => void>();
   const groupListeners = new Set<(value: readonly GroupRecord[]) => void>();
   const conversations = new Set<OpenConversation>();
+  const clientSubscriptions = new Set<Unsubscribe>();
   const queued: WhatsAppClientFrame[] = [];
   let revision = -1;
   let account: AccountRecord;
@@ -95,10 +96,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     off();
     if (connectionTimer) clearTimeout(connectionTimer);
     for (const conversation of conversations) conversation.close();
-    accountListeners.clear();
-    chatListeners.clear();
-    contactListeners.clear();
-    groupListeners.clear();
+    for (const unsubscribe of clientSubscriptions) unsubscribe();
   };
 
   const replace = (snapshot: WhatsAppSnapshot, publishChanges = false): void => {
@@ -188,21 +186,17 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       contactsChanged = true;
     }
     revision = patch.revision;
-    if (accountChanged) notify(accountListeners, accountState);
-    if (chatsChanged) {
-      publishedChats = [...chats.values()].sort(chatOrder);
-      notify(chatListeners, publishedChats);
-    }
+    if (chatsChanged) publishedChats = [...chats.values()].sort(chatOrder);
     if (contactsChanged) {
       rebuildAliases();
       publishedContacts = [...contacts.values()].sort(byContactId);
-      notify(contactListeners, publishedContacts);
     }
-    if (groupsChanged) {
-      publishedGroups = [...groups.values()].sort(byGroupId);
-      notify(groupListeners, publishedGroups);
-    }
+    if (groupsChanged) publishedGroups = [...groups.values()].sort(byGroupId);
     for (const conversation of affectedConversations) conversation.commit();
+    if (accountChanged) notify(accountListeners, accountState);
+    if (chatsChanged) notify(chatListeners, publishedChats);
+    if (contactsChanged) notify(contactListeners, publishedContacts);
+    if (groupsChanged) notify(groupListeners, publishedGroups);
   };
 
   const consume = (frame: WhatsAppClientFrame): void => {
@@ -297,6 +291,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   const subscribe = <Value>(
     listeners: Set<(value: Value) => void>,
     listener: (value: Value) => void,
+    subscriptions: Set<Unsubscribe>,
     options?: SubscriptionOptions,
   ): Unsubscribe => {
     listeners.add(listener);
@@ -306,7 +301,9 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       active = false;
       listeners.delete(listener);
       options?.signal?.removeEventListener("abort", unsubscribe);
+      subscriptions.delete(unsubscribe);
     };
+    subscriptions.add(unsubscribe);
     if (options?.signal?.aborted) unsubscribe();
     else options?.signal?.addEventListener("abort", unsubscribe, { once: true });
     return unsubscribe;
@@ -327,6 +324,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       { readonly value: PresenceUpdate; readonly timer: ReturnType<typeof setTimeout> }
     >();
     const conversationListeners = new Set<(value: WhatsAppConversationState) => void>();
+    const conversationSubscriptions = new Set<Unsubscribe>();
     let cursor: StoredMessageCursor | undefined;
     let pageRead: Promise<void> | undefined;
     let replacementRead: Promise<void> | undefined;
@@ -368,7 +366,12 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         },
         subscribe: (listener, subscriptionOptions) => {
           requireConversation();
-          return subscribe(conversationListeners, listener, subscriptionOptions);
+          return subscribe(
+            conversationListeners,
+            listener,
+            conversationSubscriptions,
+            subscriptionOptions,
+          );
         },
         loadOlder: () => internal.loadOlder(),
         close: () => internal.close(),
@@ -497,7 +500,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         rejectClosed(new WhatsAppClientClosedError("conversation"));
         for (const presence of presences.values()) clearTimeout(presence.timer);
         presences.clear();
-        conversationListeners.clear();
+        for (const unsubscribe of conversationSubscriptions) unsubscribe();
         conversations.delete(internal);
       },
     };
@@ -523,7 +526,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       },
       subscribe: (listener, options) => {
         requireClient();
-        return subscribe(accountListeners, listener, options);
+        return subscribe(accountListeners, listener, clientSubscriptions, options);
       },
     },
     chats: {
@@ -537,7 +540,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       },
       subscribe: (listener, options) => {
         requireClient();
-        return subscribe(chatListeners, listener, options);
+        return subscribe(chatListeners, listener, clientSubscriptions, options);
       },
       open,
     },
@@ -556,7 +559,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       },
       subscribe: (listener, options) => {
         requireClient();
-        return subscribe(contactListeners, listener, options);
+        return subscribe(contactListeners, listener, clientSubscriptions, options);
       },
     },
     groups: {
@@ -570,7 +573,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       },
       subscribe: (listener, options) => {
         requireClient();
-        return subscribe(groupListeners, listener, options);
+        return subscribe(groupListeners, listener, clientSubscriptions, options);
       },
     },
     async close() {
