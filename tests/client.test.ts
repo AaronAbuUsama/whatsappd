@@ -215,6 +215,57 @@ test("one committed message patch publishes one coherent conversation state", as
   await runtime.stop();
 });
 
+test("one committed patch stages every conversation before notifying any", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const alpha = await client.chats.open(ALPHA);
+  const bravo = await client.chats.open(BRAVO);
+  const crossRead: string[][] = [];
+  alpha.subscribe((state) => {
+    if (state.messages.some((message) => message.messageId === "alpha-new"))
+      crossRead.push(bravo.get().messages.map((message) => message.messageId));
+  });
+
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "recent", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [
+        textMessage({
+          id: "alpha-new",
+          chatId: ALPHA,
+          text: "alpha",
+          timestamp: 100,
+          live: false,
+        }),
+        textMessage({
+          id: "bravo-new",
+          chatId: BRAVO,
+          text: "bravo",
+          timestamp: 100,
+          live: false,
+        }),
+      ],
+    },
+  });
+
+  assert.deepEqual(crossRead, [["bravo-new"]]);
+
+  alpha.close();
+  bravo.close();
+  await client.close();
+  await runtime.stop();
+});
+
 test("opening reconciles a page/live collision and keeps a backdated live insertion ordered", async () => {
   const base = memoryBackend();
   let pageReady!: () => void;
@@ -590,6 +641,146 @@ test("a revision gap re-reads and replaces every opened conversation window", as
   );
 
   conversation.close();
+  await client.close();
+  await runtime.stop();
+});
+
+test("a revision gap publishes only after every fresh conversation window is ready", async () => {
+  const base = memoryBackend();
+  let fencingToken = 0;
+  let recovering = false;
+  let bravoRecoveryReady!: () => void;
+  const bravoRecoveryStarted = new Promise<void>((resolve) => {
+    bravoRecoveryReady = resolve;
+  });
+  let releaseBravoRecovery!: () => void;
+  const bravoRecoveryGate = new Promise<void>((resolve) => {
+    releaseBravoRecovery = resolve;
+  });
+  const backend = {
+    ...base,
+    data: {
+      ...base.data,
+      async accept(...args: Parameters<typeof base.data.accept>) {
+        fencingToken = args[2];
+        return base.data.accept(...args);
+      },
+      async messages(...args: Parameters<typeof base.data.messages>) {
+        const page = await base.data.messages(...args);
+        if (recovering && args[1] === BRAVO) {
+          bravoRecoveryReady();
+          await bravoRecoveryGate;
+        }
+        return page;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [
+        textMessage({
+          id: "alpha-old",
+          chatId: ALPHA,
+          text: "alpha old",
+          timestamp: 100,
+          live: false,
+        }),
+        textMessage({
+          id: "bravo-old",
+          chatId: BRAVO,
+          text: "bravo old",
+          timestamp: 100,
+          live: false,
+        }),
+      ],
+    },
+  });
+  const client = await createWhatsAppClient(runtime);
+  const alpha = await client.chats.open(ALPHA, { pageSize: 2 });
+  const bravo = await client.chats.open(BRAVO, { pageSize: 2 });
+  let chatNotifications = 0;
+  client.chats.subscribe(() => {
+    chatNotifications += 1;
+  });
+  let alphaNotifications = 0;
+  const crossRead: string[][] = [];
+  let replacementReady!: () => void;
+  const replacement = new Promise<void>((resolve) => {
+    replacementReady = resolve;
+  });
+  alpha.subscribe((state) => {
+    if (state.messages[0]?.messageId !== "alpha-after") return;
+    alphaNotifications += 1;
+    const bravoMessages = bravo.get().messages.map((message) => message.messageId);
+    crossRead.push(bravoMessages);
+    if (bravoMessages[0] === "bravo-missed") replacementReady();
+  });
+
+  await base.data.accept(
+    ACCOUNT,
+    [
+      {
+        observedAt: 200,
+        event: {
+          type: "conversation_sync",
+          batch: {
+            context: { source: "recent", projection: { mode: "upsert" } },
+            chats: [],
+            contacts: [],
+            messages: [
+              textMessage({
+                id: "alpha-missed",
+                chatId: ALPHA,
+                text: "alpha missed",
+                timestamp: 200,
+                live: false,
+              }),
+              textMessage({
+                id: "bravo-missed",
+                chatId: BRAVO,
+                text: "bravo missed",
+                timestamp: 200,
+                live: false,
+              }),
+            ],
+          },
+        },
+      },
+    ],
+    fencingToken,
+  );
+  recovering = true;
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "alpha-after", chatId: ALPHA, text: "after", timestamp: 300 }),
+  });
+  await withDeadline(bravoRecoveryStarted);
+  await tick();
+
+  assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
+  assert.equal(chatNotifications, 0);
+  assert.equal(alphaNotifications, 0);
+
+  releaseBravoRecovery();
+  await withDeadline(replacement);
+  assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 300);
+  assert.equal(chatNotifications, 1);
+  assert.equal(alphaNotifications, 1);
+  assert.deepEqual(crossRead, [["bravo-missed", "bravo-old"]]);
+
+  alpha.close();
+  bravo.close();
   await client.close();
   await runtime.stop();
 });
