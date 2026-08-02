@@ -708,12 +708,11 @@ test("a revision gap publishes only after every fresh conversation window is rea
         return base.data.accept(...args);
       },
       async messages(...args: Parameters<typeof base.data.messages>) {
-        const page = await base.data.messages(...args);
         if (recovering && args[1] === BRAVO) {
           bravoRecoveryReady();
           await bravoRecoveryGate;
         }
-        return page;
+        return base.data.messages(...args);
       },
     },
   };
@@ -750,17 +749,25 @@ test("a revision gap publishes only after every fresh conversation window is rea
     chatNotifications += 1;
   });
   let alphaNotifications = 0;
-  const crossRead: string[][] = [];
+  let bravoNotifications = 0;
+  const crossRead: Array<{
+    readonly messages: string[];
+    readonly lastMessageAt: number | undefined;
+  }> = [];
   let replacementReady!: () => void;
   const replacement = new Promise<void>((resolve) => {
     replacementReady = resolve;
+  });
+  bravo.subscribe((state) => {
+    if (state.messages[0]?.messageId === "bravo-during") bravoNotifications += 1;
   });
   alpha.subscribe((state) => {
     if (state.messages[0]?.messageId !== "alpha-after") return;
     alphaNotifications += 1;
     const bravoMessages = bravo.get().messages.map((message) => message.messageId);
-    crossRead.push(bravoMessages);
-    if (bravoMessages[0] === "bravo-missed") replacementReady();
+    const bravoLastMessageAt = client.chats.get(BRAVO)?.lastMessageAt;
+    crossRead.push({ messages: bravoMessages, lastMessageAt: bravoLastMessageAt });
+    if (bravoMessages[0] === "bravo-during" && bravoLastMessageAt === 400) replacementReady();
   });
 
   await base.data.accept(
@@ -802,6 +809,10 @@ test("a revision gap publishes only after every fresh conversation window is rea
     message: textMessage({ id: "alpha-after", chatId: ALPHA, text: "after", timestamp: 300 }),
   });
   await withDeadline(bravoRecoveryStarted);
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "bravo-during", chatId: BRAVO, text: "during", timestamp: 400 }),
+  });
   await tick();
 
   assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 100);
@@ -811,9 +822,16 @@ test("a revision gap publishes only after every fresh conversation window is rea
   releaseBravoRecovery();
   await withDeadline(replacement);
   assert.equal(client.chats.get(ALPHA)?.lastMessageAt, 300);
+  assert.equal(client.chats.get(BRAVO)?.lastMessageAt, 400);
   assert.equal(chatNotifications, 1);
   assert.equal(alphaNotifications, 1);
-  assert.deepEqual(crossRead, [["bravo-missed", "bravo-old"]]);
+  assert.equal(bravoNotifications, 1);
+  assert.deepEqual(crossRead, [
+    {
+      messages: ["bravo-during", "bravo-missed"],
+      lastMessageAt: 400,
+    },
+  ]);
 
   alpha.close();
   bravo.close();

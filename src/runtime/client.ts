@@ -97,6 +97,7 @@ async function createClientState(
   let recovering: Promise<void> | undefined;
   let connectionTimer: ReturnType<typeof setTimeout> | undefined;
   let off: Unsubscribe = () => {};
+  let pendingNotifications: Map<object, () => void> | undefined;
   let terminationError: WhatsAppClientClosedError | undefined;
   let rejectTermination!: (reason: WhatsAppClientClosedError) => void;
   const runtimeTerminated = new Promise<never>((_, reject) => {
@@ -108,15 +109,25 @@ async function createClientState(
   };
 
   const notify = <Value>(listeners: Set<(value: Value) => void>, value: Value): void => {
-    for (const listener of listeners) {
-      try {
-        listener(value);
-      } catch (error) {
-        queueMicrotask(() => {
-          throw error;
-        });
+    const deliver = (): void => {
+      for (const listener of listeners) {
+        try {
+          listener(value);
+        } catch (error) {
+          queueMicrotask(() => {
+            throw error;
+          });
+        }
       }
-    }
+    };
+    if (pendingNotifications) pendingNotifications.set(listeners, deliver);
+    else deliver();
+  };
+
+  const flushNotifications = (): void => {
+    const pending = pendingNotifications;
+    pendingNotifications = undefined;
+    for (const deliver of pending?.values() ?? []) deliver();
   };
 
   const closeClient = (failure?: { readonly error: unknown }): void => {
@@ -325,6 +336,7 @@ async function createClientState(
           ),
         );
         if (closed || terminated) return;
+        pendingNotifications = new Map();
         const flushGlobal = replace(snapshot);
         for (const [conversation, page] of windows) if (page) conversation.replaceWindow(page);
         flushGlobal();
@@ -335,6 +347,7 @@ async function createClientState(
         if (recovering === task) recovering = undefined;
         if (!closed && !terminated)
           for (const queuedFrame of queued.splice(0)) consume(queuedFrame);
+        flushNotifications();
       }
     })();
     recovering = task;
