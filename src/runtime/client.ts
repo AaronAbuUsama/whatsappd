@@ -141,10 +141,19 @@ function current<T>(observation: Observation<T> | undefined, from: Derivation): 
   return at < observation.expiresAt && at < claim.expiresAt ? observation.value : undefined;
 }
 
-/** The Client's domain namespaces — and the unit a transition marks affected. */
-type Namespace = "account" | "chats" | "contacts" | "groups";
+/**
+ * The Client's domain namespaces — and the unit a transition marks affected.
+ *
+ * @remarks
+ * The list defines the type, not the other way round. Annotating the array as
+ * `readonly Namespace[]` would let a wider union type-check against a shorter
+ * array, and the shorter array is what `replace()` iterates to mark everything
+ * a fresh snapshot affected — so a namespace added to the union alone would
+ * silently stop recovering after a dropped revision. Derived, it cannot happen.
+ */
+const NAMESPACES = ["account", "chats", "contacts", "groups"] as const;
 
-const NAMESPACES: readonly Namespace[] = ["account", "chats", "contacts", "groups"];
+type Namespace = (typeof NAMESPACES)[number];
 
 /**
  * One subscription — a record, never the callback itself.
@@ -337,13 +346,6 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   const aliases = new Map<string, string>();
   const groups = new Map<string, GroupRecord>();
   let connection: Observation<Status> | undefined;
-  // ponytail: an expired presence is filtered at read but never evicted, and
-  // only an explicit `unavailable` removes one — expiry is not a transition
-  // (ADR-0028), so there is no moment that would do it. Growth is one small
-  // entry per address ever seen active, which is bounded by the contacts and
-  // group participants this Client already holds in full. Evict on a
-  // `touch("contacts")` sweep if a long-lived account ever makes it matter.
-  const presence = new Map<string, Observation<PresenceKind>>();
   let closure: { readonly error?: unknown } | undefined;
 
   const listeners = new Set<Registration>();
@@ -358,9 +360,11 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
    * on every notification — React's external store is the one this exists for —
    * needs a list that is referentially equal until something actually changed.
    */
-  let orderedChats: readonly ChatRecord[] | undefined;
-  let orderedContacts: readonly ContactRecord[] | undefined;
-  let orderedGroups: readonly GroupRecord[] | undefined;
+  const ordered: {
+    chats?: readonly ChatRecord[];
+    contacts?: readonly ContactRecord[];
+    groups?: readonly GroupRecord[];
+  } = {};
 
   /** This Client's copy of whatever identity the session currently reports. */
   let identityCopy: WaIdentity | undefined;
@@ -422,6 +426,50 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   };
 
   /**
+   * Live presence, keyed by the address WhatsApp used and answered by contact.
+   *
+   * @remarks
+   * The map is unreachable from outside these three operations, which is the
+   * point: reading and forgetting go through {@link formsOf} because there is
+   * no way to reach the entries without it. Written as two call sites once,
+   * they diverged — the read spanned a contact's native forms and the removal
+   * keyed only the delivered address, so a `gone` naming one form left the
+   * other reporting `typing` with nothing able to end it. Resolving inside the
+   * primitive is what stops that being expressible (ADR-0022, ADR-0030).
+   *
+   * `retain` deliberately keys by the delivered address: a presence carries no
+   * Address Resolution evidence of its own, and an address with no contact
+   * record yet must still have somewhere to live (ADR-0020).
+   *
+   * ponytail: an expired entry is filtered at read but never evicted, because
+   * expiry is not a transition (ADR-0028) and no moment exists to sweep at.
+   * Growth is one small entry per address ever seen active — bounded by the
+   * contacts and participants this Client already holds in full. Sweep on a
+   * contacts transition if a long-lived account ever makes it matter.
+   */
+  const presence = (() => {
+    const held = new Map<string, Observation<PresenceKind>>();
+    return {
+      read(subject: string, from: Derivation): PresenceKind | undefined {
+        for (const form of formsOf(subject)) {
+          const found = current(held.get(form), from);
+          if (found !== undefined) return found;
+        }
+        return undefined;
+      },
+      retain(subject: string, observation: Observation<PresenceKind>): void {
+        held.set(subject, observation);
+      },
+      /** Forget every form of this subject. True when anything was held. */
+      release(subject: string): boolean {
+        let removed = false;
+        for (const form of formsOf(subject)) removed = held.delete(form) || removed;
+        return removed;
+      },
+    };
+  })();
+
+  /**
    * Mutate every value one transition affects, then notify once.
    *
    * @remarks
@@ -434,44 +482,119 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     const touched = new Set<Namespace>();
     const touch = (namespace: Namespace): void => {
       touched.add(namespace);
-      if (namespace === "chats") orderedChats = undefined;
-      else if (namespace === "contacts") orderedContacts = undefined;
-      else if (namespace === "groups") orderedGroups = undefined;
+      // Keyed rather than a branch per namespace, so adding one cannot leave
+      // its ordered read stale behind an `if` nobody extended.
+      if (namespace !== "account") delete ordered[namespace];
+    };
+
+    /**
+     * The only writers in this Client, and they exist only in here.
+     *
+     * @remarks
+     * Storing a value used to be four things a person had to line up by hand at
+     * each of eleven sites: the right container, the copy that makes it ours,
+     * the announcement, and the announcement naming the same namespace as the
+     * container. Any one of those forgotten still compiles, still passes, and
+     * fails silently in front of an application — a list that stops updating,
+     * or a record a caller can reach into.
+     *
+     * Bound together here, none of them is a thing to remember. And because
+     * these are built per transaction rather than held on the Client, there is
+     * nothing to call from outside one: mutating outside a transaction stops
+     * being a mistake that can be made rather than one that is discouraged.
+     */
+    const put = {
+      account: (account: AccountRecord): void => {
+        record = own(account);
+        touch("account");
+      },
+      chat: (chat: ChatRecord): void => {
+        chats.set(chat.chatId, own(chat));
+        touch("chats");
+      },
+      contact: (contact: ContactRecord): void => {
+        contacts.set(contact.contactId, own(contact));
+        touch("contacts");
+      },
+      group: (group: GroupRecord): void => {
+        groups.set(group.groupId, own(group));
+        touch("groups");
+      },
+      alias: (nativeId: string, contactId: string): void => {
+        aliases.set(nativeId, contactId);
+        touch("contacts");
+      },
+      connection: (observation: Observation<Status>): void => {
+        connection = observation;
+        touch("account");
+      },
+      presence: (subject: string, observation: Observation<PresenceKind>): void => {
+        presence.retain(subject, observation);
+        touch("contacts");
+      },
+      /**
+       * Record that nothing will follow. Once only; the first cause is the one.
+       *
+       * @remarks
+       * The single writer that deliberately does *not* copy what it stores. The
+       * Runtime hands a terminal error out by identity so a caller can compare
+       * it against the cause it already holds, and copying would both break that
+       * and throw outright on an error carrying a function — which would lose
+       * the very failure being reported.
+       */
+      closed: (frame: Extract<WhatsAppDurableFrame, { type: "closed" }>): void => {
+        if (closure) return;
+        closure = "error" in frame ? { error: frame.error } : {};
+        touch("account");
+      },
+    };
+
+    const drop = {
+      /** Remove a contact and the native ids the patch says it freed. */
+      contact: (contactId: string, freed: readonly string[]): void => {
+        for (const nativeId of freed) aliases.delete(nativeId);
+        contacts.delete(contactId);
+        touch("contacts");
+      },
+      presence: (subject: string): void => {
+        if (presence.release(subject)) touch("contacts");
+      },
+    };
+
+    /** Forget everything durable, so a snapshot replaces rather than merges. */
+    const reset = (): void => {
+      chats.clear();
+      contacts.clear();
+      aliases.clear();
+      groups.clear();
+      for (const namespace of NAMESPACES) touch(namespace);
     };
 
     mutate({
       replace(snapshot) {
-        record = own(snapshot.account);
-        chats.clear();
-        for (const chat of snapshot.chats) chats.set(chat.chatId, own(chat));
-        contacts.clear();
-        for (const contact of snapshot.contacts) contacts.set(contact.contactId, own(contact));
-        aliases.clear();
+        reset();
+        put.account(snapshot.account);
+        for (const chat of snapshot.chats) put.chat(chat);
+        for (const contact of snapshot.contacts) put.contact(contact);
         for (const [nativeId, contactId] of Object.entries(snapshot.contactAliases))
-          aliases.set(nativeId, contactId);
-        groups.clear();
-        for (const group of snapshot.groups) groups.set(group.groupId, own(group));
-        for (const namespace of NAMESPACES) touch(namespace);
+          put.alias(nativeId, contactId);
+        for (const group of snapshot.groups) put.group(group);
       },
 
       apply(patch) {
         for (const upsert of patch.upserts) {
           switch (upsert.type) {
             case "account":
-              record = own(upsert.account);
-              touch("account");
+              put.account(upsert.account);
               break;
             case "chat":
-              chats.set(upsert.chat.chatId, own(upsert.chat));
-              touch("chats");
+              put.chat(upsert.chat);
               break;
             case "contact":
-              contacts.set(upsert.contact.contactId, own(upsert.contact));
-              touch("contacts");
+              put.contact(upsert.contact);
               break;
             case "group":
-              groups.set(upsert.group.groupId, own(upsert.group));
-              touch("groups");
+              put.group(upsert.group);
               break;
             case "message":
               // A message belongs to an opened conversation, which this layer
@@ -484,27 +607,24 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
           // What the delete freed is named by the patch, or read from the very
           // record being removed. Neither is a scan of every contact, which is
           // what maintaining Address Resolution from patches exists to avoid
-          // (ADR-0030). Dropping them keeps this map from retaining an entry
-          // per consolidation for ever; the aliases below then re-point every
-          // one of them, which is why deletes are applied first.
-          const freed = removed.freedNativeIds ?? contacts.get(removed.contactId)?.nativeIds ?? [];
-          for (const nativeId of freed) aliases.delete(nativeId);
-          if (contacts.delete(removed.contactId)) touch("contacts");
+          // (ADR-0030). Dropping them keeps the alias map from retaining an
+          // entry per consolidation for ever; the aliases below then re-point
+          // every one of them, which is why deletes are applied first.
+          drop.contact(
+            removed.contactId,
+            removed.freedNativeIds ?? contacts.get(removed.contactId)?.nativeIds ?? [],
+          );
         }
-        for (const alias of patch.aliases ?? []) {
-          aliases.set(alias.nativeId, alias.contactId);
-          touch("contacts");
-        }
+        for (const alias of patch.aliases ?? []) put.alias(alias.nativeId, alias.contactId);
       },
 
       observe(frame, claim) {
         if (frame.type === "connection") {
-          connection = {
+          put.connection({
             value: own(frame.state.status),
             expiresAt: frame.state.expiresAt,
             claim,
-          };
-          touch("account");
+          });
           return;
         }
         // In a group WhatsApp names the participant and in a 1:1 the chat is
@@ -513,31 +633,19 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         const subject = frame.presence.participant ?? frame.presence.chatId;
         if (frame.presence.kind === "unavailable") {
           // Not an observation that decays: it says the address is gone now, so
-          // its subject goes now rather than at some later deadline — and every
-          // form of that subject goes with it. WhatsApp addresses one peer by
-          // its PN on one occasion and its LID on another, so a `gone` naming
-          // one form has to end an observation made under the other; otherwise
-          // a read, which spans the forms, keeps answering with the sibling.
-          let removed = false;
-          for (const form of formsOf(subject)) removed = presence.delete(form) || removed;
-          if (removed) touch("contacts");
+          // its subject goes now rather than at some later deadline.
+          drop.presence(subject);
           return;
         }
-        // Stored under the address WhatsApp actually used. Not resolved to a
-        // contact: an address with no record yet must still have a key, and a
-        // presence supplies no Address Resolution evidence of its own (ADR-0020).
-        presence.set(subject, {
+        put.presence(subject, {
           value: frame.presence.kind,
           expiresAt: frame.expiresAt,
           claim,
         });
-        touch("contacts");
       },
 
       close(frame) {
-        if (closure) return;
-        closure = "error" in frame ? { error: frame.error } : {};
-        touch("account");
+        put.closed(frame);
       },
     });
 
@@ -612,7 +720,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     chats: {
       subscribe: subscribeTo("chats"),
       list: () =>
-        (orderedChats ??= Object.freeze(
+        (ordered.chats ??= Object.freeze(
           [...chats.values()].sort(
             (a, b) => b.lastMessageAt - a.lastMessageAt || compareId(a.chatId, b.chatId),
           ),
@@ -622,7 +730,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     contacts: {
       subscribe: subscribeTo("contacts"),
       list: () =>
-        (orderedContacts ??= Object.freeze(
+        (ordered.contacts ??= Object.freeze(
           [...contacts.values()].sort((a, b) => compareId(a.contactId, b.contactId)),
         )),
       resolve(nativeId) {
@@ -630,31 +738,14 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         return contactId === undefined ? undefined : contacts.get(contactId);
       },
       presence(nativeId) {
-        const from = basis();
-        // An observation is keyed by the address WhatsApp used, and the same
-        // peer is addressed by its PN form on one occasion and its LID form on
-        // another — so a presence observed under one form answers for the
-        // contact's others, exactly as the durable half of the same fact does:
-        // `projection.ts` resolves a last-seen through the alias map before
-        // recording it, and a live read that did not would report a
-        // consolidated contact as never present (ADR-0022, ADR-0030).
-        //
-        // First hit wins, in the contact's own `nativeIds` order. Two forms of
-        // one peer each holding a current observation is WhatsApp contradicting
-        // itself; an `Observation` keeps no `observedAt`, so there is nothing to
-        // prefer by, and inventing one would be a tie-break dressed as a fact.
-        for (const form of formsOf(nativeId)) {
-          const found = current(presence.get(form), from);
-          if (found !== undefined) return found;
-        }
-        return undefined;
+        return presence.read(nativeId, basis());
       },
     },
 
     groups: {
       subscribe: subscribeTo("groups"),
       list: () =>
-        (orderedGroups ??= Object.freeze(
+        (ordered.groups ??= Object.freeze(
           [...groups.values()].sort((a, b) => compareId(a.groupId, b.groupId)),
         )),
     },

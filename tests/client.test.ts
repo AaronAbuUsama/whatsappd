@@ -17,7 +17,11 @@ import type {
   WhatsAppBackend,
 } from "../src/runtime/contracts.ts";
 import { memoryBackend } from "../src/runtime/memory.ts";
-import { createWhatsAppRuntime, type WhatsAppRuntime } from "../src/runtime/runtime.ts";
+import {
+  createWhatsAppRuntime,
+  type RuntimeSession,
+  type WhatsAppRuntime,
+} from "../src/runtime/runtime.ts";
 import { createWhatsAppClient, type WhatsAppClientCore } from "../src/runtime/client.ts";
 import type { InboundMessage } from "../src/model/message.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
@@ -295,6 +299,64 @@ test("one patch changes every affected namespace in one commit and one delivery"
     for (const view of observed) expect(view).toEqual(final);
 
     for (const stop of off) stop();
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("every kind of change announces itself to the namespace that holds it", async () => {
+  // One assertion per writer. Before these, four of them — the account record,
+  // an alias, a live connection, and the wholesale replace — could stop
+  // announcing without a single test noticing.
+  const backend: WhatsAppBackend = { ...memoryBackend(), leases: movableLeaseStore() };
+  const worker = await lane({ backend, freshnessMs: 600_000 });
+  try {
+    const seen: Record<string, number> = { account: 0, chats: 0, contacts: 0, groups: 0 };
+    for (const namespace of ["account", "chats", "contacts", "groups"] as const)
+      worker.client[namespace].subscribe(() => void (seen[namespace] += 1));
+
+    // The account record: a connection instant is durable account state.
+    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+    await tick();
+    expect(seen.account > 0).toBe(true);
+    expect(worker.client.account.get().connection?.phase).toBe("online");
+    const afterConnection = seen.account;
+
+    // A chat.
+    await worker.driver.emit({
+      type: "message",
+      message: textMessage({ id: "m1", chatId: PERSON, text: "hi", timestamp: AT }),
+    });
+    await tick();
+    expect(seen.chats).toBe(1);
+
+    // A contact, and the aliases that come with it.
+    await worker.driver.emit({
+      type: "contact",
+      contact: { id: PERSON, nativeIds: [PERSON, PERSON_LID], displayName: "Person" },
+    });
+    await tick();
+    expect(seen.contacts > 0).toBe(true);
+    expect(worker.client.contacts.resolve(PERSON_LID)?.contactId).toBe(PERSON);
+
+    // A group.
+    await worker.driver.emit({
+      type: "group",
+      group: { kind: "metadata", id: ROOM, subject: "Room", participants: [], at: AT },
+    });
+    await tick();
+    expect(seen.groups).toBe(1);
+
+    // Live presence lands on the namespace that answers for addresses — twice,
+    // because one observation is both a live fact and a durable last-seen
+    // instant, and they are separate transitions (ADR-0020).
+    const beforePresence = seen.contacts;
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+    await tick();
+    expect(seen.contacts > beforePresence).toBe(true);
+    expect(worker.client.contacts.presence(PERSON)).toBe("typing");
+    expect(typeof worker.client.contacts.resolve(PERSON)?.lastSeenAt).toBe("number");
+    expect(afterConnection > 0).toBe(true);
   } finally {
     await worker.stop();
   }
@@ -744,11 +806,18 @@ test("a dropped revision replaces the core state from a fresh snapshot", async (
 
     // Now a published patch arrives from a revision the client is not at. The
     // reused pull loop re-snapshots rather than applying over the hole.
+    // A recovery replaces everything, so it must announce everything — an
+    // application cannot know which namespaces a fresh snapshot changed.
+    const woken = new Set<string>();
+    for (const namespace of ["account", "chats", "contacts", "groups"] as const)
+      worker.client[namespace].subscribe(() => void woken.add(namespace));
+
     await worker.driver.emit({
       type: "contact",
       contact: { id: SELF, nativeIds: [SELF], displayName: "Me" },
     });
     await until(() => worker.client.contacts.list().length === 3);
+    expect([...woken].sort()).toEqual(["account", "chats", "contacts", "groups"]);
 
     // Replaced, not merged, and the two halves of that are separate claims:
     // the silently accepted record is present because the fresh snapshot
@@ -1094,6 +1163,54 @@ test("an unavailable naming one native form ends the observation made under anot
     expect(notified).toBe(1);
   } finally {
     await worker.stop();
+  }
+});
+
+test("a session that throws on identity cannot silence the client", async () => {
+  // `RuntimeSession` is implemented by the application, and the Client samples
+  // its identity between committing a transition and announcing it. A throw
+  // there costs the whole delivery for a change that has already been applied —
+  // and the recovery path samples again, so a session that throws consistently
+  // gives a Client that mutates for ever and notifies never.
+  const driver = createTestWhatsAppSession();
+  let throwing = false;
+  const session: RuntimeSession = {
+    ...driver.session,
+    identity: () => {
+      if (throwing) throw new Error("the socket is gone");
+      return undefined;
+    },
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend: memoryBackend(),
+    openSession: () => session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    let notified = 0;
+    client.chats.subscribe(() => void (notified += 1));
+
+    throwing = true;
+    await driver
+      .emit({
+        type: "message",
+        message: textMessage({ id: "m1", chatId: PERSON, text: "hi", timestamp: AT }),
+      })
+      .catch(() => {});
+    await until(() => client.chats.list().length === 1);
+
+    // The state moved, so the announcement has to have happened too.
+    expect(chatIds(client.chats.list())).toEqual([PERSON]);
+    expect(notified).toBe(1);
+    // The identity is simply unknown, which is what a session that cannot
+    // answer means — not a reason to stop reporting the account at all.
+    expect(client.account.get().identity).toBe(undefined);
+    expect(client.account.get().closed).toBe(false);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
   }
 });
 
@@ -1459,6 +1576,17 @@ test("committed values are client-owned and unaffected by mutating what a caller
       },
     });
     await tick();
+
+    // A chat too, so every namespace's ingest is covered rather than two of
+    // three — each writer copies separately, so each has to be shown to.
+    const chat = textMessage({ id: "c1", chatId: ROOM, text: "hi", sender: PERSON, timestamp: AT });
+    await worker.driver.emit({ type: "message", message: chat });
+    await tick();
+    const storedChat = worker.client.chats.list().find((entry) => entry.chatId === ROOM);
+    assert.ok(storedChat);
+    assert.throws(() => {
+      (storedChat as { lastMessageAt: number }).lastMessageAt = 0;
+    }, TypeError);
 
     // The input the caller still holds.
     contact.displayName = "Renamed by the caller";

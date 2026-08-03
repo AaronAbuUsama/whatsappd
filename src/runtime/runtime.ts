@@ -806,7 +806,21 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     read: (fn) => backend.data.read(accountId, fn),
     // Sampled, never retained: `release()` clears the session, so a runtime
     // that has stopped consuming the account reports no identity.
-    identity: () => session?.identity?.(),
+    //
+    // Guarded here rather than at each caller, because this is the seam that
+    // knows the session is application code. A client samples this *between*
+    // committing a transition and announcing it, so a throw would cost the
+    // whole delivery for a change already applied — and its recovery path
+    // samples again, which would lose that too. A session that cannot answer
+    // has no identity to report; that is not a reason to stop reporting.
+    identity: () => {
+      try {
+        return session?.identity?.();
+      } catch (error) {
+        surface(error);
+        return undefined;
+      }
+    },
     currentClaim,
   });
 

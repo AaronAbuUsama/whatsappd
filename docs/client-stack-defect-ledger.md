@@ -22,6 +22,14 @@ A class is closed only when a _value-level primitive_ makes it unreachable by
 construction — an ordering rule re-established by hand at each site is what
 recurred nineteen times across the retired work.
 
+**How "closed" is decided here, because an earlier version of this file got it
+wrong.** A class is not closed because its fix looks structural. It is closed
+when someone has _written the violating code, compiled it, and run the suite_.
+An audit did exactly that against the round-2 head and found four classes
+recorded here as closed whose violations compiled clean and passed all 374
+tests. Every entry below now says which test it stands on, and an entry with no
+red test says so instead of claiming a guarantee it does not have.
+
 ## Classes
 
 ### C1 — publish before the transition is complete
@@ -31,8 +39,25 @@ which is not `async`. A function that cannot await cannot yield, so no
 application callback can observe a half-applied transition. There is one
 notification point per transition.
 
+**Narrowed by** the bound writers. `put`, `drop` and `reset` are built _inside_
+`commit`, closing over that transaction's `touch`, so there is nothing to call
+from anywhere else — the same scope trick `current()` uses, run in reverse.
+Storing a value used to be four things lined up by hand at eleven sites (the
+right container, the copy, the announcement, and the announcement naming the
+same namespace as the container); it is now one call that cannot do three of
+them wrongly.
+
+**Not fully closed, and the residue is named honestly.** The raw `Map`s are
+still in factory scope, so a determined edit can bypass the writers. What
+changed is that the bypass is now _greppable_ — a bare `chats.set(` with no
+`put.chat` — where before the correct and incorrect paths looked identical.
+
 **Inherited obligation.** Layers 2 and 3 add no second publication path. Every
-new mutation goes through `commit`; `fanout` is called from exactly one site.
+new mutation goes through a writer inside `commit`; `fanout` is called from
+exactly one site. Conversation state belongs in the factory beside the other
+cells with its own writers — **not** in per-`open()` locals with their own
+notification list, which is the retired design (`docs/issue-71-postmortem.md`
+§2) and which compiles clean against this head today.
 
 ### C2 — decaying state whose currency depends on a scheduler
 
@@ -98,19 +123,39 @@ forms went on reporting `typing` with nothing able to end it. That is the same
 class as the original defect — the live and durable halves of one fact
 disagreeing — closed on one path and left open on its sibling.
 
-**Closed by** `formsOf(nativeId)`: one function returning every address that
-speaks for a subject, with the read and the removal both routed through it.
-"Resolve the subject the same way on both paths" is an instruction; one function
-they both call is the primitive.
+**Closed by** moving the resolution _inside_ the thing it resolves for. The
+presence map is now private to a three-operation primitive (`read`, `retain`,
+`release`); `formsOf` is called within it, so there is no way to reach an entry
+without resolving the subject first. Routing two call sites through a shared
+helper was the first attempt, and it was still an instruction — an audit showed
+a third site keying the raw address compiled clean.
 
-**Inherited obligation.** Any new presence-shaped read or write goes through
-`formsOf`. Layer 2's opened-conversation presence is the next such site.
+`retain` deliberately keys by the address WhatsApp delivered: a presence carries
+no Address Resolution evidence of its own, and an address with no contact record
+yet must still have somewhere to live (ADR-0020).
+
+**Pinned by** two red tests — a read that does not span the forms, and a release
+that does not.
+
+**Inherited obligation.** Layer 2's opened-conversation presence uses this
+primitive rather than its own map.
 
 ### C4 — ownership defined by API visibility rather than memory provenance
 
-**Closed by** `own()` = `structuredClone` + deep freeze, once, at ingest. Reads
-return stored values directly. The terminal `error` is deliberately exempt: the
-Runtime hands it out by identity so callers can compare causes.
+**Narrowed by** `own()` = `structuredClone` + deep freeze, now called by the
+writers rather than by each ingest site, so a value cannot be stored without
+being copied through `put`. Reads return stored values directly.
+
+`put.closed` is the one writer that deliberately does _not_ copy. The Runtime
+hands a terminal error out by identity so a caller can compare it against the
+cause it holds — and copying would also throw outright on an error carrying a
+function in its `cause`, losing the very failure being reported. Proven: an
+audit ran `structuredClone` against that shape and got `DOMException: () => {}
+could not be cloned`.
+
+**Residue.** Three of the writers' copies are pinned by a red test; the account
+path is not independently falsifiable, because every reachable account change
+also marks through `put.connection` or `put.closed`.
 
 ### C5 — one listener Set holding several roles
 
@@ -150,10 +195,34 @@ adapter on the axis under test — especially object identity.
 
 ### C8 — ordering determinism
 
-**Closed by** `compareId` in `src/runtime/client.ts`, routed through by every
-ordered read. `localeCompare` disagrees with the stores' binary ordering. This
-is the control case from `docs/issue-71-postmortem.md` §3 — a value-level
-primitive that never recurred.
+**Held by** `compareId` in `src/runtime/client.ts`, routed through by every
+ordered read, and pinned by a test that first asserts its two fixtures order
+_differently_ under binary and locale rules before using them.
+
+**And it is a rule, not a construction** — a new sort site can call
+`localeCompare` and it compiles. It never recurred anyway, which is the useful
+correction to this file's own thesis: what predicts recurrence is not
+enforceability but whether the wrong path is _cheaper_. `compareId(a, b)` costs
+the same keystrokes as `a.localeCompare(b)`. "Remember to announce what you
+changed" cost strictly more than not bothering — which is why that one recurred
+and this one did not.
+
+### C10 — a rule whose wrong path is the cheaper one
+
+The generalisation of everything above, recorded so a later layer can apply the
+test rather than re-derive it.
+
+Before adding an obligation, ask what the _cheapest_ thing a future author can
+type is. If the correct path costs more than the incorrect one, the obligation
+will be missed — no matter how clearly it is documented here. The fix is never
+a firmer sentence in this file; it is making the cheap path the correct one, or
+making the wrong one unavailable.
+
+Applied: the ordered-read caches are keyed (`delete ordered[namespace]`) rather
+than an `if`-chain per namespace, so adding a namespace cannot leave a stale
+cache behind a branch nobody extended; and `NAMESPACES` defines `Namespace`
+rather than being annotated with it, so widening the type without widening the
+array is a compile error instead of a snapshot that silently stops recovering.
 
 ## Properties that are structurally unprovable at layer 1
 
