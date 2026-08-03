@@ -19,5 +19,5 @@ under `docs/adr/` when present. See `docs/agents/domain.md`.
 
 When asked to execute the issue DAG autonomously, follow
 `docs/agents/frontier-execution.md`. The durable GitHub graph, independent
-review loop, seven-pass ceiling, proof gate, and merge-frontier receipt are
+review loop, four-round ceiling, proof gate, and merge-frontier receipt are
 mandatory.

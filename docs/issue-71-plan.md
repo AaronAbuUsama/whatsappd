@@ -1,4 +1,7 @@
-# Issue #71 — attempt 3 plan
+# Issue #71 — attempt 3 plan (historical)
+
+> Superseded for execution by #105, #106 and #107. This file records the
+> investigation decisions; its six-slice/numeric-budget plan is retired.
 
 Decisions taken 2026-08-03 against `docs/issue-71-postmortem.md`. Every one of
 them is a change from what the retired attempts did.
@@ -11,9 +14,9 @@ them is a change from what the retired attempts did.
 | 4   | Live state      | Derived from `(observation, now)`; timers are latency, not correctness                                |
 | 5   | Conversations   | One shared window per `chatId`, N refcounted handles                                                  |
 | 6   | Listeners       | Synchronous, after commit, membership snapshotted; five closed rules                                  |
-| 7   | Reviewable unit | Substrate PRs, then six vertical slices, hard 400-line budget                                         |
+| 7   | Reviewable unit | Substrate PRs, then three coherent Client stack layers with no numeric diff limit                     |
 | 8   | Proof           | Positive artifact required; "did not throw" is not evidence                                           |
-| 9   | Factory         | `createWhatsAppClient(runtime)`. Owned lifecycle filed separately, blocked on #71                     |
+| 9   | Factory         | `createWhatsAppClient(runtime)`. Owned lifecycle remains #99, now blocked on #107                     |
 
 Recorded as ADR-0028 (joint 4), ADR-0029 (joints 3, 5, 6) and ADR-0030 (joint 2 —
 all three substrate changes). ADR-0011, ADR-0020 and ADR-0023 carry amendment
@@ -41,14 +44,15 @@ things change:
    record that never recurred was fixed with a primitive; the ordering fixes
    recurred four rounds running.
 
-3. **The reviewable unit is capped.** `finding supply ≈ (reviewable surface) ×
-(evidence standard)`. This repository has run this loop three times (#45/#47,
-   #51, #93/#94) and has only ever shrunk the loop, never the surface. PR #94 was
-   +4145/−760.
+3. **The reviewable unit follows coherent responsibilities.** `finding supply ≈
+(reviewable surface) × (evidence standard)`, but a numeric cap split the
+   mechanism in arbitrary places. The replacement stack isolates core
+   publication, conversations and public packaging while allowing each
+   responsibility to be complete.
 
 **The known risk:** claim 1 is a prediction. Nobody has yet built this Client on
-a fixed substrate. If slice c1 does not come in near its budget, that is the
-signal to stop and re-plan, not to raise the budget.
+a fixed substrate. If a stack layer needs a second state engine or compensation
+above a missing substrate guarantee, stop and re-plan before editing further.
 
 ---
 
@@ -160,15 +164,12 @@ the patch stream alone, with no snapshot re-read.
 
 ---
 
-## Phase 1 — the Client (six slices, after Phase 0 merges)
+## Phase 1 — the Client (replacement stack, after Phase 0 merges)
 
-Issue #71 rewritten: `docs/issue-71-rewrite.md`. Slices c1–c6 are specified
-there. **No slice exceeds 400 changed lines**; over budget means split, not
-review.
-
-Order matters only at the front: c1 establishes the commit primitive, the pull
-loop and the listener rules, and is reviewed with no conversations in it at all.
-c3, c4 and c5 can be authored in parallel once c1 is merged.
+Execution is #105 -> #106 -> #107. #105 establishes the private Runtime source,
+commit/delivery primitive and core namespaces; #106 completes conversations and
+lifetimes; #107 owns only the public/package cut. Each targets its predecessor
+while stacked and merges bottom-up.
 
 Do not import `src/runtime/client.ts` from PR #93 or #94 in any form. The
 previous plan mandated exactly that and it is why the second attempt's first
@@ -213,7 +214,7 @@ the last two PRs unbounded. File as their own ticket.
 
 ### Follow-up ticket — the Client owns its account lifecycle
 
-> **Blocked by #71.**
+> **Blocked by #107.**
 >
 > Today an application composes Backend, Runtime and Client and must close them
 > in the right order. Add one factory that owns all three:
