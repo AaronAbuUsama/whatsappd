@@ -337,6 +337,8 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `WhatsAppDataEvent`
 - `WhatsAppDataStore`
 - `WhatsAppDurableEvent`
+- `WhatsAppDurableFrame`
+- `WhatsAppLiveFrame`
 - `WhatsAppFault`
 - `WhatsAppPatch`
 - `WhatsAppRuntime`
