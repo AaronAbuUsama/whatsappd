@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
 import {
   StaleAccountClaimError,
+  type ContactRecord,
   type DurableInboundMessage,
   type DurableMedia,
   type MessageRecord,
@@ -569,8 +570,30 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         { accountId: ACCOUNT, contactId: LID, nativeIds: [LID, PN], displayName: "Linked" },
       ]);
       expect(snapshot.contactAliases).toEqual({ [LID]: LID, [PN]: LID });
-      expect(linked.patch.deletes).toEqual([{ type: "contact", contactId: PN }]);
+      expect(linked.patch.deletes).toEqual([
+        { type: "contact", contactId: PN, freedNativeIds: [PN] },
+      ]);
+      expect(linked.patch.aliases).toEqual([{ nativeId: PN, contactId: LID }]);
       expect((await resource.data.accepted(ACCOUNT, 0)).length).toBe(3);
+
+      // A consumer that has only ever seen patches, from revision 0, reaches
+      // the same Address Resolution as the snapshot above — no re-read.
+      const aliases = new Map<string, string>();
+      const contacts = new Map<string, ContactRecord>();
+      for (const { patch } of await resource.data.accepted(ACCOUNT, 0)) {
+        for (const record of patch.upserts)
+          if (record.type === "contact") contacts.set(record.contact.contactId, record.contact);
+        for (const removed of patch.deletes ?? []) {
+          contacts.delete(removed.contactId);
+          // Every id a delete frees is re-pointed by an alias in the same
+          // patch, so neither array has to be applied before the other.
+          for (const nativeId of removed.freedNativeIds ?? [])
+            expect(patch.aliases?.some((alias) => alias.nativeId === nativeId)).toBe(true);
+        }
+        for (const alias of patch.aliases ?? []) aliases.set(alias.nativeId, alias.contactId);
+      }
+      expect(Object.fromEntries(aliases)).toEqual(snapshot.contactAliases);
+      expect([...contacts.values()]).toEqual(snapshot.contacts);
     } finally {
       await resource.close();
     }

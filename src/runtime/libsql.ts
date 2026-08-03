@@ -26,6 +26,7 @@ import {
   type MessageReaction,
   type MessageReceipt,
   type MessageRecord,
+  type MirrorAlias,
   type MirrorDelete,
   type MirrorRecord,
   type StoredMessagePageOptions,
@@ -920,7 +921,21 @@ function mirrorRecord(value: unknown): MirrorRecord {
 function mirrorDelete(value: unknown): MirrorDelete {
   const record = object(value, "patch delete");
   if (record.type !== "contact") throw new Error("invalid libSQL patch delete type");
-  return { type: "contact", contactId: string(record.contactId, "patch delete contactId") };
+  return {
+    type: "contact",
+    contactId: string(record.contactId, "patch delete contactId"),
+    ...(record.freedNativeIds !== undefined && {
+      freedNativeIds: strings(record.freedNativeIds, "patch delete freedNativeIds"),
+    }),
+  };
+}
+
+function mirrorAlias(value: unknown): MirrorAlias {
+  const record = object(value, "patch alias");
+  return {
+    nativeId: string(record.nativeId, "patch alias nativeId"),
+    contactId: string(record.contactId, "patch alias contactId"),
+  };
 }
 
 function patch(value: unknown): WhatsAppPatch {
@@ -928,12 +943,15 @@ function patch(value: unknown): WhatsAppPatch {
   if (!Array.isArray(record.upserts)) throw new Error("invalid libSQL patch upserts");
   if (record.deletes !== undefined && !Array.isArray(record.deletes))
     throw new Error("invalid libSQL patch deletes");
+  if (record.aliases !== undefined && !Array.isArray(record.aliases))
+    throw new Error("invalid libSQL patch aliases");
   return {
     accountId: string(record.accountId, "patch accountId"),
     fromRevision: integer(record.fromRevision, "patch fromRevision"),
     revision: integer(record.revision, "patch revision"),
     upserts: record.upserts.map(mirrorRecord),
     ...(record.deletes !== undefined && { deletes: record.deletes.map(mirrorDelete) }),
+    ...(record.aliases !== undefined && { aliases: record.aliases.map(mirrorAlias) }),
   };
 }
 
@@ -1189,7 +1207,9 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
           ownedEvents,
         );
         const revision =
-          projection.upserts.length === 0 && projection.deletes.length === 0
+          projection.upserts.length === 0 &&
+          projection.deletes.length === 0 &&
+          projection.aliases.length === 0
             ? state.revision
             : state.revision + 1;
         const batch: AcceptedWhatsAppBatch = {
@@ -1204,6 +1224,7 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
             revision,
             upserts: projection.upserts,
             ...(projection.deletes.length > 0 && { deletes: projection.deletes }),
+            ...(projection.aliases.length > 0 && { aliases: projection.aliases }),
           },
         };
 

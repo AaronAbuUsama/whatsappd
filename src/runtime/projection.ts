@@ -11,6 +11,7 @@ import {
   type DurableUpdate,
   type GroupRecord,
   type MessageRecord,
+  type MirrorAlias,
   type MirrorDelete,
   type MirrorRecord,
   type ObservedInstant,
@@ -35,6 +36,8 @@ export type CurrentMirrorMutation =
 export interface CurrentMirrorProjection {
   readonly upserts: readonly MirrorRecord[];
   readonly deletes: readonly MirrorDelete[];
+  /** Only the aliases whose owner changed — see {@link WhatsAppPatch.aliases}. */
+  readonly aliases: readonly MirrorAlias[];
   readonly mutations: readonly CurrentMirrorMutation[];
 }
 
@@ -47,13 +50,14 @@ interface ProjectionState {
   message(chatId: string, messageId: string): Promise<MessageRecord | undefined>;
   upsert(record: MirrorRecord): void;
   delete(record: MirrorDelete): void;
-  alias(nativeId: string, contactId: string): void;
+  alias(nativeId: string, contactId: string): Promise<void>;
 }
 
 function projectionState(
   records: CurrentMirrorRecords,
   upserts: MirrorRecord[],
   deletes: MirrorDelete[],
+  aliases: MirrorAlias[],
   mutations: CurrentMirrorMutation[],
 ): ProjectionState {
   let account: AccountRecord | undefined;
@@ -115,9 +119,15 @@ function projectionState(
       deletes.push(record);
       mutations.push({ type: "delete", record });
     },
-    alias(nativeId, contactId) {
+    async alias(nativeId, contactId) {
+      // The mutation is written unconditionally — the store's alias write is an
+      // idempotent upsert — but only a change is a delta. Re-observing a
+      // contact re-asserts every alias it already had, and a patch carrying
+      // those would move the revision on an observation that changed nothing.
+      const owner = await this.contactId(nativeId);
       contactIds.set(nativeId, contactId);
       mutations.push({ type: "contact_alias", nativeId, contactId });
+      if (owner !== contactId) aliases.push({ nativeId, contactId });
     },
   };
 }
@@ -158,8 +168,17 @@ async function projectContact(state: ProjectionState, contact: ContactRecord): P
     ...(seen.length > 0 && { lastSeenAt: Math.max(...seen) }),
   };
 
-  for (const id of reachedIds.slice(1)) state.delete({ type: "contact", contactId: id });
-  for (const id of merged.nativeIds) state.alias(id, contactId);
+  for (const id of reachedIds.slice(1)) {
+    // The record's own native ids are what this delete frees; they are all in
+    // `merged.nativeIds` and so are all re-pointed by the aliases below.
+    const freedNativeIds = reached.find((record) => record.contactId === id)?.nativeIds;
+    state.delete({
+      type: "contact",
+      contactId: id,
+      ...(freedNativeIds?.length && { freedNativeIds }),
+    });
+  }
+  for (const id of merged.nativeIds) await state.alias(id, contactId);
   if (existing && isDeepStrictEqual(existing, merged)) return;
   state.upsert({ type: "contact", contact: merged });
 }
@@ -510,8 +529,9 @@ export async function projectCurrentMirror(
 ): Promise<CurrentMirrorProjection> {
   const upserts: MirrorRecord[] = [];
   const deletes: MirrorDelete[] = [];
+  const aliases: MirrorAlias[] = [];
   const mutations: CurrentMirrorMutation[] = [];
-  const state = projectionState(records, upserts, deletes, mutations);
+  const state = projectionState(records, upserts, deletes, aliases, mutations);
   for (const event of events) await projectEvent(state, accountId, event);
-  return { upserts, deletes, mutations };
+  return { upserts, deletes, aliases, mutations };
 }

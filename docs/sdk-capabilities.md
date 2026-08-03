@@ -302,6 +302,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `MessageRef`
 - `MetricEvent`
 - `MetricsHook`
+- `MirrorAlias`
 - `MirrorRecord`
 - `ObservedInstant`
 - `Outbound`

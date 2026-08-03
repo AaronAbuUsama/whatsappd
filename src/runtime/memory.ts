@@ -109,7 +109,7 @@ export function memoryDataStore(): WhatsAppDataStore {
 
         // Project into an overlay so a rejected event leaves nothing behind:
         // the append, projection, and revision commit together or not at all.
-        const { upserts, deletes, mutations } = await projectCurrentMirror(
+        const { upserts, deletes, aliases, mutations } = await projectCurrentMirror(
           {
             account: async () => mirror.account,
             chat: async (chatId) => mirror.chats.get(chatId),
@@ -124,7 +124,9 @@ export function memoryDataStore(): WhatsAppDataStore {
         );
         const fromRevision = mirror.revision;
         const revision =
-          upserts.length === 0 && deletes.length === 0 ? fromRevision : fromRevision + 1;
+          upserts.length === 0 && deletes.length === 0 && aliases.length === 0
+            ? fromRevision
+            : fromRevision + 1;
         const batch: AcceptedWhatsAppBatch = {
           accountId,
           seq: mirror.batches.length + 1,
@@ -137,6 +139,7 @@ export function memoryDataStore(): WhatsAppDataStore {
             revision,
             upserts,
             ...(deletes.length > 0 && { deletes }),
+            ...(aliases.length > 0 && { aliases }),
           },
         };
         for (const mutation of mutations) {
