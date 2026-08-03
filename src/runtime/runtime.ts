@@ -181,13 +181,24 @@ export interface WhatsAppRuntime {
    */
   onFrame(listener: (frame: WhatsAppDurableFrame) => void): Unsubscribe;
   /**
-   * Observe the expiring channel: presence and connection.
-   *
-   * @remarks
-   * A separate registration because these carry no revision and stop being
-   * true by wall clock, so nothing can order them against a patch (ADR-0030).
+   * Observe the expiring channel: presence and connection. A separate
+   * registration because these carry no revision and stop being true by wall
+   * clock, so nothing can order them against a patch (ADR-0030).
    */
   onLive(listener: (frame: WhatsAppLiveFrame) => void): Unsubscribe;
+}
+
+/**
+ * One registration on one channel — a record, never the callback itself.
+ *
+ * @remarks
+ * Unsubscribing and resubscribing the same function during a fanout owes both
+ * effects: the old registration ends now, the new one starts next frame. A
+ * `Set` keyed by the callback cannot tell them apart, and could not give one
+ * subscription per registration to a function registered twice (ADR-0013).
+ */
+interface Registration<Frame> {
+  readonly notify: (frame: Frame) => void;
 }
 
 /**
@@ -212,9 +223,9 @@ const surface = (error: unknown): void => {
  * Three properties, each a primitive rather than an ordering to re-establish at
  * every publication site (ADR-0029 rules 2–4):
  *
- * - membership is copied before the first delivery, so a listener that
- *   resubscribes during fanout is not re-visited. Iterating the live `Set`
- *   re-enters it — one publication was measured driving 200,000 deliveries;
+ * - membership is copied before the first delivery, so a registration made
+ *   during fanout is not visited. Iterating the live `Set` re-enters it — one
+ *   publication was measured driving 200,000 deliveries;
  * - membership is rechecked before each call, so unsubscribing *another*
  *   listener during fanout takes effect on the frame already in flight;
  * - the copy each observer owns is taken outside the region guarding the call,
@@ -222,7 +233,7 @@ const surface = (error: unknown): void => {
  *   listener, which ends the stream silently with no terminal frame.
  */
 function deliver<Frame extends { readonly type: string }>(
-  listeners: ReadonlySet<(frame: Frame) => void>,
+  listeners: ReadonlySet<Registration<Frame>>,
   frame: Frame,
 ): void {
   const receiving = [...listeners];
@@ -238,7 +249,7 @@ function deliver<Frame extends { readonly type: string }>(
       continue;
     }
     try {
-      listener(owned);
+      listener.notify(owned);
     } catch (error) {
       // Observers are downstream of a committed write, so one broken observer
       // cannot roll it back or keep the rest from seeing it — and it stays
@@ -277,8 +288,8 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   const leaseTtlMs = config.leaseTtlMs ?? 30_000;
   const freshnessMs = config.freshnessMs ?? 15_000;
 
-  const durableListeners = new Set<(frame: WhatsAppDurableFrame) => void>();
-  const liveListeners = new Set<(frame: WhatsAppLiveFrame) => void>();
+  const durableListeners = new Set<Registration<WhatsAppDurableFrame>>();
+  const liveListeners = new Set<Registration<WhatsAppLiveFrame>>();
 
   /**
    * One runtime consumes one account once, and `stopped` latches on the way
@@ -650,12 +661,14 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         listener({ ...terminal });
         return () => {};
       }
-      durableListeners.add(listener);
-      return () => durableListeners.delete(listener);
+      const registration = { notify: listener };
+      durableListeners.add(registration);
+      return () => durableListeners.delete(registration);
     },
     onLive(listener) {
-      liveListeners.add(listener);
-      return () => liveListeners.delete(listener);
+      const registration = { notify: listener };
+      liveListeners.add(registration);
+      return () => liveListeners.delete(registration);
     },
   };
 }

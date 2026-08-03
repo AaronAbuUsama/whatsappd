@@ -2205,9 +2205,8 @@ test("a frame observer that resubscribes during fanout is not re-visited", async
   let off = (): void => {};
   const churn = (): void => {
     deliveries += 1;
-    // Bounded so a runtime that re-visits the live registry finishes and fails
-    // on the count rather than hanging the suite: one emit was measured
-    // driving 200,000 deliveries this way.
+    // Bounded so a runtime that re-visits the live registry finishes and
+    // fails on the count rather than hanging the suite.
     if (deliveries > 1_000) return;
     off();
     off = runtime.onFrame(churn);
@@ -2218,6 +2217,32 @@ test("a frame observer that resubscribes during fanout is not re-visited", async
 
   expect(deliveries).toBe(1);
   off();
+  await runtime.stop();
+});
+
+test("re-registering an observer during fanout defers it to the next frame", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+  const seen: string[] = [];
+  const observer = (frame: WhatsAppDurableFrame): void => void seen.push(frame.type);
+  let off = (): void => {};
+  let churned = false;
+  runtime.onFrame(() => {
+    if (churned) return;
+    churned = true;
+    // The *same callback*, unsubscribed and subscribed again: the old
+    // registration ends now, the new one starts next frame.
+    off();
+    off = runtime.onFrame(observer);
+  });
+  off = runtime.onFrame(observer);
+
+  await driver.emit({ type: "message", message: hello() });
+  expect(seen).toEqual([]);
+  await driver.emit({ type: "message", message: hello("m2", "Again") });
+
+  // Exactly one delivery — one registration, not two and not none.
+  expect(seen).toEqual(["patch"]);
   await runtime.stop();
 });
 
