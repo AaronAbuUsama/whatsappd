@@ -175,7 +175,7 @@ async function transact<T>(
     } finally {
       transaction.close();
     }
-  });
+  }, mode);
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {

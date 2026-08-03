@@ -989,3 +989,33 @@ test("a second Runtime on an independent backend fails before opening WhatsApp",
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("close waits for a read still holding its transaction open", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-close-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const backend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+
+  try {
+    // A read runs off the shared write queue once the file is in WAL, so it is
+    // not covered by the queue close() drains. Returning while one is open
+    // hands the caller a database it is still reading — this suite's own
+    // factories delete the directory on the next line.
+    await backend.data.snapshot(ACCOUNT);
+    const order: string[] = [];
+    const reading = backend.data.read(ACCOUNT, async (view) => {
+      await view.snapshot();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const second = await view.snapshot();
+      order.push("read");
+      return second.revision;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const closing = backend.close().then(() => order.push("close"));
+
+    expect(await reading).toBe(0);
+    await closing;
+    expect(order).toEqual(["read", "close"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
