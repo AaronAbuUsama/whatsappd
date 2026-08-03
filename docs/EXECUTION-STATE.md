@@ -4,7 +4,8 @@ Last updated: 2026-08-03. The capability catalogue merged at
 `d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the first executable
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. After #64/#70 and substrate
 #96–#98 landed, the owner replaced the underspecified #71/#22/#23/#30/#40/#41
-spine with the executable stack #105–#113. #105 is the current frontier.
+spine with the executable stack #105–#113. #105 is the current executable
+frontier.
 
 ## Where everything lives
 
@@ -12,7 +13,7 @@ spine with the executable stack #105–#113. #105 is the current frontier.
 | -------------------------------- | ---------------------------------------------------------- |
 | Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
-| Accepted architecture decisions  | `docs/adr/0001` … `0026`                                   |
+| Accepted architecture decisions  | `docs/adr/0001` … `0030` (`0027` reserved)                 |
 | Published build specification    | GitHub issue #15                                           |
 | Capability planning guide        | `docs/sdk-capabilities.md`                                 |
 | Execution-graph repair           | GitHub issue #68                                           |
@@ -187,10 +188,12 @@ completed substrate: #64  #70  #96  #97  #98
                                   #113 publish 0.3.0
 ```
 
-#105–#110 form the ordered implementation stack. Each PR names and targets its
-predecessor while stacked, then merges bottom-up. #110 and #111 may proceed in
-parallel after #109; #112 is their convergence gate. Only **#105** is currently
-labelled `ready-for-agent`.
+#105–#110 form the ordered implementation stack. A child may start from its
+predecessor's reviewed exact head after the documented handoff gate, targets
+that predecessor while stacked, and never merges before it. #110 and #111 may
+proceed in parallel after #109; #112 is their convergence gate. #105–#112 are
+fully specified for agents and #113 is a human release operation, but only
+**#105** is executable before the first handoff.
 
 Post-0.3 and research lanes do not block that spine:
 

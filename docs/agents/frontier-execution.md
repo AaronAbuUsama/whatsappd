@@ -6,13 +6,21 @@ DAG.
 ## Source of truth
 
 - GitHub Issues owns node state and dependency edges.
-- A node is executable only when it is open, labelled `ready-for-agent`,
-  unclaimed by another active lane, and every issue named under `Blocked by` is
-  closed.
+- A node is fully specified when it has the appropriate `ready-for-agent` or
+  `ready-for-human` label. Labels describe who can execute the issue; blockers
+  still govern when it may begin and merge.
+- An ordinary node is executable only when it is open, labelled
+  `ready-for-agent`, unclaimed by another active lane, and every issue named
+  under `Blocked by` is closed.
+- A declared stack child may begin before its direct predecessor issue closes
+  only after that predecessor PR has a clean exact-head review, green required
+  checks, and its acceptance, proof, and handoff receipt. The child branches
+  from that exact reviewed head and targets the predecessor PR. All other
+  blockers must be closed, and the child may not merge before its predecessor.
 - Pull requests are implementation and review surfaces, never new work intake.
-- After every merge, the orchestrator reads GitHub again, prints the whole DAG
-  with merged, in-flight, frontier, and blocked nodes, and dispatches only the
-  newly executable frontier.
+- After every stack handoff and merge, the orchestrator reads GitHub again,
+  prints the whole DAG with merged, in-flight, frontier, and blocked nodes, and
+  dispatches only the newly executable frontier.
 
 ## Lane shape
 
@@ -71,8 +79,10 @@ The implementing agent follows the issue's reviewer brief and:
 A review pass means one complete GitHub Codex bot verdict over the current PR
 head, not one comment or one finding.
 
-The hard ceiling is four complete review rounds per PR. A stack keeps one
-persistent defect-class ledger; opening the next PR does not reset history.
+The hard ceiling is four complete review rounds per PR. Each PR starts its own
+numeric round counter at 1. A stack keeps one persistent defect-class ledger,
+so opening the next PR resets the number but not the history, dispositions, or
+root-cause evidence for recurring defect classes.
 
 - round 1 adjudicates findings before any edit;
 - a repeated defect class or any fix requiring a new mechanism triggers
