@@ -69,11 +69,20 @@ It exposes named domain state and actions, reconciles live changes with stored
 pages, and owns opened conversations for applications and UI bindings.
 _Avoid_: HTTP client, backend SDK
 
-**Opened Conversation**:
-A client-scoped view of one chat that combines current and saved messages,
-stored paging state, live presence, and message actions until the caller closes
-it. Closing the view releases resources; it does not delete or leave the chat.
-_Avoid_: WhatsApp session, transport channel, selected React component
+**Retained Messages**:
+One chat's messages as the Client holds them — saved rows already read plus the
+live upserts that have arrived since — together with how much further back the
+local mirror can still go. Read by chat id; extended backwards by chat id. It is
+not something a caller opens, owns or closes, and asking for it never contacts
+WhatsApp.
+_Avoid_: opened conversation, WhatsApp session, transport channel, selected
+React component
+
+> Replaced **Opened Conversation** on 2026-08-03, which named a per-chat view
+> held "until the caller closes it". That handle was retired unbuilt with the
+> #106 design decision; see ADR-0023 and ADR-0029. The term is recorded here
+> rather than deleted because it appears in issues and reviews written before
+> that date.
 
 **WhatsApp Operation**:
 The durable, account-scoped receipt for a requested side effect. Its identity

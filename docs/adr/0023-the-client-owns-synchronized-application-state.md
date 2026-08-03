@@ -2,6 +2,16 @@
 status: accepted
 ---
 
+> Amended by #106's design decision of 2026-08-03: the opened-conversation
+> controller returned by `chats.open(chatId)` is retired unbuilt. Four
+> independent designs were produced for it; three concluded the handle was what
+> made `docs/issue-71-postmortem.md` §2's retired per-`open()` state _typeable_,
+> and the fourth — briefed to defend it — agreed. Message state is now a fifth
+> namespace read by chat id, with no handle, no `open()` and no per-chat
+> `close()`. Everything else below stands: the Client still owns hydration,
+> patch application, gap replacement, page reconciliation by message identity,
+> connection freshness and short-lived presence.
+>
 > Extended by ADR-0028 and ADR-0029, which specify the mechanism this decision
 > only assigns: live state is derived rather than committed, and the Client
 > commits every affected value through one non-`async` boundary and notifies once
@@ -18,9 +28,10 @@ short-lived presence, opened-conversation state, operation results, and
 resource cancellation. Applications consume named domain state and actions;
 they do not merge Snapshot Windows, patches, pages, or source batches.
 
-The Client is organized into stable domain namespaces. `chats.open(chatId)`
-returns an opened-conversation controller that owns one chat's saved messages,
-live upserts, paging state, presence, and message actions until it is closed.
+The Client is organized into stable domain namespaces, one of which owns a
+chat's saved messages, its live upserts and its paging state. That namespace is
+read by chat id and extended backwards by chat id; it hands out no per-chat
+controller and has no per-chat lifetime to close.
 The raw snapshot, patch, accepted-source, lease, credential, and transport
 surfaces remain lower-level runtime and backend contracts.
 

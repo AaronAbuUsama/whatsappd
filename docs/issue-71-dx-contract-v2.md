@@ -1,3 +1,10 @@
+> **Historical.** Records planning superseded by the #105–#107 stack, and kept
+> for the reasoning rather than the interface. Its `chats.open(chatId)`
+> conversation handle was retired unbuilt on 2026-08-03 (ADR-0023, ADR-0029),
+> and several of its type shapes were deliberately diverged from by #105. Where
+> this file disagrees with `src/runtime/client.ts` on `master`, or with the
+> current issue bodies, it loses.
+
 ## Parent
 
 #68, #15

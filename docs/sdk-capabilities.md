@@ -15,19 +15,18 @@ Automated tests do not establish real-account or rendered behavior.
 
 ## Target Client shape
 
-Selected interface: `namespaces-plus-opened-conversation` (ADR-0023).
+Selected interface: `namespaces-only` (ADR-0023, amended 2026-08-03). The
+opened-conversation controller this section used to show was retired unbuilt;
+messages are a namespace read by chat id, with no handle and no per-chat close.
 
 ```ts
-const conversation = await client.chats.open(chatId, { signal });
-await conversation.send.text("Hello");
-await conversation.send.document(bytes, { fileName: "invoice.pdf", mimetype: "application/pdf" });
-await conversation.messages.react(messageId, "👍");
-await conversation.markRead();
-await conversation.loadOlder(); // saved database rows only
-await conversation.requestPhoneHistory(); // distinct phone request
-conversation.close();
+client.messages.get(chatId); // held rows + live upserts, newest first
+client.messages.older(chatId); // one page further back; saved rows only, never WhatsApp
 await client.close();
 ```
+
+The action surface — sends, reactions, mark-read, phone-history requests — is
+re-specified by #108 against this shape and is not settled here.
 
 ### Namespaces
 
@@ -80,8 +79,8 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 | `ACC-15` | accounts | Access raw credentials, signal keys, pairing secrets, prekeys, or crypto operations. | available: `available-in-baileys` | internal | `intentionally-internal` | No friendly Client operation | Credential/protected-challenge capabilities only; never consumer data |
 | `CHAT-01` | chats | List current chat summaries. | available: `available-in-baileys` (`B:events chats.*`, history sync) | implemented | Current whatsappd implements this capability. | `chats.list()`; `useChats` | Data mirror; friendly Client #105/#106/#107, required for 0.3 |
 | `CHAT-02` | chats | Read one current chat. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | `chats.get(chatId)`; `useChat` | Data mirror; friendly Client #105/#106/#107, required for 0.3 |
-| `CHAT-03` | chats | Open one synchronized conversation. | not-applicable: n/a product composition | not-implemented | Consumers currently combine `watch()` and `messages()` themselves | `chats.open(chatId)`; `useConversation` | Client-owned state per ADR-0023; #105/#106/#107, required for 0.3 |
-| `CHAT-04` | chats | Page older messages already saved in the backend. | not-applicable: n/a storage read | implemented | Current whatsappd implements this capability. | `conversation.loadOlder()`; `useConversation` | Data store shipped low-level; friendly Client #105/#106/#107 required for 0.3 |
+| `CHAT-03` | chats | Open one synchronized conversation. | not-applicable: n/a product composition | not-implemented | Consumers currently combine `watch()` and `messages()` themselves | `messages.get(chatId)` / `messages.older(chatId)` | Client-owned state per ADR-0023; #105/#106/#107, required for 0.3 |
+| `CHAT-04` | chats | Page older messages already saved in the backend. | not-applicable: n/a storage read | implemented | Current whatsappd implements this capability. | `messages.older(chatId)` | Data store shipped low-level; friendly Client #105/#106/#107 required for 0.3 |
 | `CHAT-05` | chats | Ask the phone for older messages and receive a submission receipt only. | partial: `partial-or-unstable` (`fetchMessageHistory`); behavior is unresolved (#18/#50) | implemented | Current whatsappd implements this capability. | `conversation.requestPhoneHistory()`; `usePhoneHistoryRequest` if UI needs shared status | Manual durable operation #108 required for 0.3; automatic scheduler #25/#50 post-0.3 |
 | `CHAT-06` | chats | Automatically and fairly backfill every eligible chat without claiming completeness. | research-required: `research-required` because responses were not observed | not-implemented | `deferred` | `account.history.state/pause/resume`; `useHistoryBackfill` | Durable progress + commands #25/#50, research-gated post-0.3 |
 | `CHAT-07` | chats | Observe initial, recent, full, on-demand, and unlabeled conversation-sync batches. | available: `available-in-baileys` (`messaging-history.set/status`) | implemented | Current whatsappd implements this capability. | Internal Client ingestion, not a UI event | Accepted data; no on-demand integration observation recorded; execution: #105/#106/#107; release: required for 0.3 |
