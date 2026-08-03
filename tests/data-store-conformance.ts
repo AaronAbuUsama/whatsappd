@@ -789,6 +789,15 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         );
       await write("seed-pn", PN, AT);
       await write("seed-room", ROOM, AT);
+      // Every message this test commits to PN, in commit order, so the record
+      // a read returns can be checked against the revision it claims.
+      const pnWrites = [
+        { id: "seed-pn", at: AT },
+        ...Array.from({ length: 25 }, (_, index) => ({
+          id: `r${Math.floor(index / 5)}-${index % 5}`,
+          at: AT + 1 + Math.floor(index / 5) * 10 + (index % 5),
+        })),
+      ];
 
       const pinned: number[] = [];
       for (let round = 0; round < 5; round += 1) {
@@ -801,7 +810,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         // correct, and no in-process test can distinguish it from that queue.
         const writing = (async () => {
           for (let step = 0; step < 5; step += 1)
-            await write(`r${round}-${step}`, PN, AT + round * 10 + step);
+            await write(`r${round}-${step}`, PN, AT + 1 + round * 10 + step);
         })();
         const seen = await resource.data.read(ACCOUNT, async (view) => {
           const snapshot = await view.snapshot();
@@ -812,12 +821,27 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
           const first = await view.messages(PN, { limit: 2 });
           await yielded();
           const second = await view.messages(ROOM, { limit: 2 });
-          return [snapshot.revision, first.revision, second.revision];
+          return {
+            revisions: [snapshot.revision, first.revision, second.revision],
+            // Records, not labels. An implementation that read the live maps
+            // and stamped them with the revision it captured at `read()` agrees
+            // on the numbers above and disagrees here.
+            chatAt: snapshot.chats.find((chat) => chat.chatId === PN)?.lastMessageAt,
+            newest: first.messages[0]?.messageId,
+          };
         });
         await writing;
-        expect(new Set(seen).size).toBe(1);
-        assert.ok(seen[0] !== undefined);
-        pinned.push(seen[0]);
+        expect(new Set(seen.revisions).size).toBe(1);
+        const revision = seen.revisions[0];
+        assert.ok(revision !== undefined);
+        // Every acceptance moves the revision by one, so the revision names
+        // exactly how much of the writer this read was allowed to see — and
+        // the records it returned have to be that much and no more.
+        const reflected = pnWrites[revision - 2];
+        assert.ok(reflected !== undefined);
+        expect(seen.newest).toBe(reflected.id);
+        expect(seen.chatAt).toBe(reflected.at);
+        pinned.push(revision);
       }
 
       // …and the writer really was advancing: every pinned revision is below

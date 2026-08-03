@@ -1172,6 +1172,11 @@ function validatePage(options: StoredMessagePageOptions | undefined): number {
   return limit;
 }
 
+/** An open read, cleared when its callback settles so nothing joins it later. */
+interface OpenRead {
+  transaction: Transaction | undefined;
+}
+
 function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
   /**
    * The read transaction the current async context is already inside, if any.
@@ -1182,7 +1187,7 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
    * context — and a callback that reaches a *different* store must not join
    * this one, whose transaction is open on a different database.
    */
-  const openReads = new AsyncLocalStorage<Transaction>();
+  const openReads = new AsyncLocalStorage<OpenRead>();
 
   /**
    * One account's mirror, answered through an already-open read transaction.
@@ -1318,11 +1323,21 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
     // queue, so the inner transaction would queue behind the outer one that is
     // waiting on this very callback — a deadlock, not a slower read. Joining
     // also answers both at one revision, which is what `read()` promises.
-    const joined = openReads.getStore();
+    const joined = openReads.getStore()?.transaction;
     if (joined) return fn(view(joined, accountId));
-    return transact(client, "read", (transaction) =>
-      openReads.run(transaction, () => fn(view(transaction, accountId))),
-    );
+    // Held in a box the callback's own scope clears, because an async
+    // descendant `fn` never awaited keeps this context alive past `run()` —
+    // and joining a transaction that has already committed is worse than
+    // opening a fresh one.
+    const open: OpenRead = { transaction: undefined };
+    return transact(client, "read", async (transaction) => {
+      open.transaction = transaction;
+      try {
+        return await openReads.run(open, () => fn(view(transaction, accountId)));
+      } finally {
+        open.transaction = undefined;
+      }
+    });
   };
 
   return {
