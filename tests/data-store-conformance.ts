@@ -27,6 +27,9 @@ interface DataStoreResource {
 
 type DataStoreFactory = () => Promise<DataStoreResource>;
 
+/** Let queued work run — never a timed wait. */
+const yielded = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,
   event,
@@ -775,6 +778,95 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         await assert.rejects(resource.data.messages(ACCOUNT, PN, { limit }), RangeError);
         await assert.rejects(resource.data.accepted(ACCOUNT, 0, limit), RangeError);
       }
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] a joint read answers every question at one revision`, async () => {
+    const resource = await create();
+    try {
+      const write = (id: string, chatId: string, timestamp: number): Promise<unknown> =>
+        resource.data.accept(
+          ACCOUNT,
+          [
+            observed({
+              type: "message",
+              // A group message names its author; a 1:1's author is the chat.
+              message: textMessage({
+                id,
+                chatId,
+                text: id,
+                timestamp,
+                ...(chatId === ROOM && { sender: PN }),
+              }),
+            }),
+          ],
+          1,
+        );
+      await write("seed-pn", PN, AT);
+      await write("seed-room", ROOM, AT);
+      // Every message this test commits to PN, in commit order, so the record
+      // a read returns can be checked against the revision it claims.
+      const pnWrites = [
+        { id: "seed-pn", at: AT },
+        ...Array.from({ length: 25 }, (_, index) => ({
+          id: `r${Math.floor(index / 5)}-${index % 5}`,
+          at: AT + 1 + Math.floor(index / 5) * 10 + (index % 5),
+        })),
+      ];
+
+      const pinned: number[] = [];
+      for (let round = 0; round < 5; round += 1) {
+        // A writer advancing the mirror for as long as the read is open. The
+        // read must not be able to see part of what it commits.
+        // The in-memory store is the leg that observes this: local libSQL
+        // clients in one process share `LazyLibsqlClient.run`'s queue, so an
+        // open read holds it and no write commits inside one. libSQL's
+        // transaction is what makes a remote or multi-process deployment
+        // correct, and no in-process test can distinguish it from that queue.
+        const writing = (async () => {
+          for (let step = 0; step < 5; step += 1)
+            await write(`r${round}-${step}`, PN, AT + 1 + round * 10 + step);
+        })();
+        const seen = await resource.data.read(ACCOUNT, async (view) => {
+          const snapshot = await view.snapshot();
+          // Opening a conversation does other work between its reads, and the
+          // writer above gets to commit while it does. Yielding here is what
+          // makes the read observe that rather than finishing inside one turn.
+          await yielded();
+          const first = await view.messages(PN, { limit: 2 });
+          await yielded();
+          const second = await view.messages(ROOM, { limit: 2 });
+          return {
+            revisions: [snapshot.revision, first.revision, second.revision],
+            // Records, not labels. An implementation that read the live maps
+            // and stamped them with the revision it captured at `read()` agrees
+            // on the numbers above and disagrees here.
+            chatAt: snapshot.chats.find((chat) => chat.chatId === PN)?.lastMessageAt,
+            newest: first.messages[0]?.messageId,
+          };
+        });
+        await writing;
+        expect(new Set(seen.revisions).size).toBe(1);
+        const revision = seen.revisions[0];
+        assert.ok(revision !== undefined);
+        // Every acceptance moves the revision by one, so the revision names
+        // exactly how much of the writer this read was allowed to see — and
+        // the records it returned have to be that much and no more.
+        const reflected = pnWrites[revision - 2];
+        assert.ok(reflected !== undefined);
+        expect(seen.newest).toBe(reflected.id);
+        expect(seen.chatAt).toBe(reflected.at);
+        pinned.push(revision);
+      }
+
+      // …and the writer really was advancing: every pinned revision is below
+      // the revision the mirror finished at, so none of the reads above was
+      // taken against a mirror nothing was writing to.
+      const final = (await resource.data.snapshot(ACCOUNT)).revision;
+      expect(final).toBe(27);
+      expect(pinned.every((revision) => revision < final)).toBe(true);
     } finally {
       await resource.close();
     }

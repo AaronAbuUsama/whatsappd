@@ -29,6 +29,7 @@ import {
   type MirrorAlias,
   type MirrorDelete,
   type MirrorRecord,
+  type MirrorView,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
   type WhatsAppDataEvent,
@@ -1208,6 +1209,137 @@ function validatePage(options: StoredMessagePageOptions | undefined): number {
 }
 
 function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
+  /**
+   * One account's mirror, answered through an already-open read transaction.
+   * Neither read opens a second one — which is what would let a page disagree
+   * with the snapshot taken beside it, and would deadlock against the shared
+   * local-client queue.
+   */
+  const view = (transaction: Transaction, accountId: string): MirrorView => {
+    return {
+      async snapshot() {
+        const state = await accountState(transaction, accountId);
+        if (!state)
+          return {
+            accountId,
+            revision: 0,
+            account: { accountId },
+            chats: [],
+            contacts: [],
+            contactAliases: {},
+            groups: [],
+          };
+        const chatRows = await transaction.execute({
+          sql: "SELECT chat_id, data_json FROM wa_chats WHERE account_id = ? ORDER BY chat_id",
+          args: [accountId],
+        });
+        const contactRows = await transaction.execute({
+          sql: `SELECT contact_id, data_json FROM wa_contacts
+            WHERE account_id = ? ORDER BY contact_id`,
+          args: [accountId],
+        });
+        const aliasRows = await transaction.execute({
+          sql: `SELECT native_id, contact_id FROM wa_contact_aliases
+            WHERE account_id = ? ORDER BY native_id`,
+          args: [accountId],
+        });
+        const groupRows = await transaction.execute({
+          sql: "SELECT group_id, data_json FROM wa_groups WHERE account_id = ? ORDER BY group_id",
+          args: [accountId],
+        });
+        const chats = chatRows.rows.map((row) => {
+          const record = scoped(
+            chatRecord(parsed(row.data_json, "chat data_json")),
+            accountId,
+            "chat",
+          );
+          if (record.chatId !== string(row.chat_id, "chat chat_id"))
+            throw new Error("invalid libSQL chat identity");
+          return record;
+        });
+        const contacts = contactRows.rows.map((row) => {
+          const record = scoped(
+            contactRecord(parsed(row.data_json, "contact data_json")),
+            accountId,
+            "contact",
+          );
+          if (record.contactId !== string(row.contact_id, "contact contact_id"))
+            throw new Error("invalid libSQL contact identity");
+          return record;
+        });
+        const contactIds = new Set(contacts.map(({ contactId }) => contactId));
+        const contactAliases = Object.fromEntries(
+          aliasRows.rows.map((row) => {
+            const nativeId = string(row.native_id, "contact alias native_id");
+            const contactId = string(row.contact_id, "contact alias contact_id");
+            if (!contactIds.has(contactId)) throw new Error("invalid libSQL contact alias owner");
+            return [nativeId, contactId];
+          }),
+        );
+        const groups = groupRows.rows.map((row) => {
+          const record = scoped(
+            groupRecord(parsed(row.data_json, "group data_json")),
+            accountId,
+            "group",
+          );
+          if (record.groupId !== string(row.group_id, "group group_id"))
+            throw new Error("invalid libSQL group identity");
+          return record;
+        });
+        return {
+          accountId,
+          revision: state.revision,
+          account: state.account,
+          chats,
+          contacts,
+          contactAliases,
+          groups,
+        };
+      },
+
+      async messages(chatId, options) {
+        const limit = validatePage(options);
+        const state = await accountState(transaction, accountId);
+        const before = options?.before;
+        const result = await transaction.execute({
+          sql: `SELECT message_id, timestamp, data_json FROM wa_messages
+            WHERE account_id = ? AND chat_id = ?
+              ${before ? "AND (timestamp < ? OR (timestamp = ? AND message_id < ?))" : ""}
+            ORDER BY timestamp DESC, message_id DESC LIMIT ?`,
+          args: before
+            ? [accountId, chatId, before.timestamp, before.timestamp, before.messageId, limit + 1]
+            : [accountId, chatId, limit + 1],
+        });
+        const rows = result.rows.slice(0, limit);
+        const messages = rows.map((row) => {
+          const record = scoped(
+            messageRecord(parsed(row.data_json, "message data_json")),
+            accountId,
+            "message",
+          );
+          if (
+            record.chatId !== chatId ||
+            record.messageId !== string(row.message_id, "message message_id") ||
+            record.timestamp !== number(row.timestamp, "message timestamp")
+          )
+            throw new Error("invalid libSQL message identity");
+          return record;
+        });
+        const last = result.rows.length > limit ? messages.at(-1) : undefined;
+        return {
+          accountId,
+          chatId,
+          revision: state?.revision ?? 0,
+          messages,
+          ...(last && { nextBefore: { timestamp: last.timestamp, messageId: last.messageId } }),
+        };
+      },
+    };
+  };
+
+  const read: WhatsAppDataStore["read"] = (accountId, fn) =>
+    transact(client, "read", (transaction) => fn(view(transaction, accountId)));
+
   return {
     async accept(accountId, events, fencingToken) {
       if (!Number.isSafeInteger(fencingToken) || fencingToken < 0)
@@ -1292,127 +1424,10 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
       });
     },
 
-    snapshot(accountId) {
-      return transact(client, "read", async (transaction) => {
-        const state = await accountState(transaction, accountId);
-        if (!state)
-          return {
-            accountId,
-            revision: 0,
-            account: { accountId },
-            chats: [],
-            contacts: [],
-            contactAliases: {},
-            groups: [],
-          };
-        const chatRows = await transaction.execute({
-          sql: "SELECT chat_id, data_json FROM wa_chats WHERE account_id = ? ORDER BY chat_id",
-          args: [accountId],
-        });
-        const contactRows = await transaction.execute({
-          sql: `SELECT contact_id, data_json FROM wa_contacts
-            WHERE account_id = ? ORDER BY contact_id`,
-          args: [accountId],
-        });
-        const aliasRows = await transaction.execute({
-          sql: `SELECT native_id, contact_id FROM wa_contact_aliases
-            WHERE account_id = ? ORDER BY native_id`,
-          args: [accountId],
-        });
-        const groupRows = await transaction.execute({
-          sql: "SELECT group_id, data_json FROM wa_groups WHERE account_id = ? ORDER BY group_id",
-          args: [accountId],
-        });
-        const chats = chatRows.rows.map((row) => {
-          const record = scoped(
-            chatRecord(parsed(row.data_json, "chat data_json")),
-            accountId,
-            "chat",
-          );
-          if (record.chatId !== string(row.chat_id, "chat chat_id"))
-            throw new Error("invalid libSQL chat identity");
-          return record;
-        });
-        const contacts = contactRows.rows.map((row) => {
-          const record = scoped(
-            contactRecord(parsed(row.data_json, "contact data_json")),
-            accountId,
-            "contact",
-          );
-          if (record.contactId !== string(row.contact_id, "contact contact_id"))
-            throw new Error("invalid libSQL contact identity");
-          return record;
-        });
-        const contactIds = new Set(contacts.map(({ contactId }) => contactId));
-        const contactAliases = Object.fromEntries(
-          aliasRows.rows.map((row) => {
-            const nativeId = string(row.native_id, "contact alias native_id");
-            const contactId = string(row.contact_id, "contact alias contact_id");
-            if (!contactIds.has(contactId)) throw new Error("invalid libSQL contact alias owner");
-            return [nativeId, contactId];
-          }),
-        );
-        const groups = groupRows.rows.map((row) => {
-          const record = scoped(
-            groupRecord(parsed(row.data_json, "group data_json")),
-            accountId,
-            "group",
-          );
-          if (record.groupId !== string(row.group_id, "group group_id"))
-            throw new Error("invalid libSQL group identity");
-          return record;
-        });
-        return {
-          accountId,
-          revision: state.revision,
-          account: state.account,
-          chats,
-          contacts,
-          contactAliases,
-          groups,
-        };
-      });
-    },
-
-    async messages(accountId, chatId, options) {
-      const limit = validatePage(options);
-      return transact(client, "read", async (transaction) => {
-        const state = await accountState(transaction, accountId);
-        const before = options?.before;
-        const result = await transaction.execute({
-          sql: `SELECT message_id, timestamp, data_json FROM wa_messages
-            WHERE account_id = ? AND chat_id = ?
-              ${before ? "AND (timestamp < ? OR (timestamp = ? AND message_id < ?))" : ""}
-            ORDER BY timestamp DESC, message_id DESC LIMIT ?`,
-          args: before
-            ? [accountId, chatId, before.timestamp, before.timestamp, before.messageId, limit + 1]
-            : [accountId, chatId, limit + 1],
-        });
-        const rows = result.rows.slice(0, limit);
-        const messages = rows.map((row) => {
-          const record = scoped(
-            messageRecord(parsed(row.data_json, "message data_json")),
-            accountId,
-            "message",
-          );
-          if (
-            record.chatId !== chatId ||
-            record.messageId !== string(row.message_id, "message message_id") ||
-            record.timestamp !== number(row.timestamp, "message timestamp")
-          )
-            throw new Error("invalid libSQL message identity");
-          return record;
-        });
-        const last = result.rows.length > limit ? messages.at(-1) : undefined;
-        return {
-          accountId,
-          chatId,
-          revision: state?.revision ?? 0,
-          messages,
-          ...(last && { nextBefore: { timestamp: last.timestamp, messageId: last.messageId } }),
-        };
-      });
-    },
+    read,
+    snapshot: (accountId) => read(accountId, (mirror) => mirror.snapshot()),
+    messages: (accountId, chatId, options) =>
+      read(accountId, (mirror) => mirror.messages(chatId, options)),
 
     accepted(accountId, afterSeq, limit = 100) {
       if (!Number.isInteger(limit) || limit < 1)

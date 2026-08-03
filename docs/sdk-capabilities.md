@@ -304,6 +304,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `MetricsHook`
 - `MirrorAlias`
 - `MirrorRecord`
+- `MirrorView`
 - `ObservedInstant`
 - `Outbound`
 - `PairingError`

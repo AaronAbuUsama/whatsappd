@@ -418,6 +418,20 @@ export interface AcceptedWhatsAppBatch {
   readonly patch: WhatsAppPatch;
 }
 
+/**
+ * One account's current mirror, held at one revision (ADR-0030).
+ *
+ * @remarks
+ * The same two reads {@link WhatsAppDataStore} offers directly, minus the
+ * account — {@link WhatsAppDataStore.read} named it once, so nothing inside can
+ * disagree with it. Every answer describes the mirror at one revision, however
+ * many questions are asked and however many writes commit meanwhile.
+ */
+export interface MirrorView {
+  snapshot(): Promise<WhatsAppSnapshot>;
+  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
+}
+
 /** Durable WhatsApp state: the accepted source log and the current mirror. */
 export interface WhatsAppDataStore {
   /**
@@ -457,6 +471,23 @@ export interface WhatsAppDataStore {
    * on to a newer claim.
    */
   claim(accountId: string, fencingToken: number): Promise<void>;
+
+  /**
+   * Answer any number of reads about one account at a single revision.
+   *
+   * @remarks
+   * Opening a conversation needs both global state and that chat's newest page.
+   * Taken as separate reads those arrive at two revisions, and the only
+   * reconciliation available above the store is read-both-compare-retry, which
+   * against a live write stream is unbounded and livelock-prone (ADR-0030).
+   *
+   * This exposes the transaction boundary both implementations already have
+   * internally rather than adding a capability. `view` is the read seam for
+   * the duration of `fn`, and the only one: the store's own methods open a
+   * second, later read, which against a local libSQL file queues behind the
+   * one still waiting on `fn` and does not return.
+   */
+  read<T>(accountId: string, fn: (view: MirrorView) => Promise<T>): Promise<T>;
 
   /** Read the account's current mirror and its revision. */
   snapshot(accountId: string): Promise<WhatsAppSnapshot>;
