@@ -451,8 +451,7 @@ export interface WhatsAppDataStore {
    *
    * This exposes the transaction boundary both implementations already have
    * internally rather than adding a capability. `view` is the read seam for the
-   * duration of `fn`: calling the store's own methods from inside it opens a
-   * second, later transaction and answers at a different revision.
+   * duration of `fn`: the store's own methods open a second, later transaction.
    */
   read<T>(accountId: string, fn: (view: MirrorView) => Promise<T>): Promise<T>;
 
