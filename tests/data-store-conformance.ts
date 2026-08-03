@@ -30,6 +30,14 @@ type DataStoreFactory = () => Promise<DataStoreResource>;
 /** Let queued work run — never a timed wait. */
 const yielded = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+/**
+ * Yield a bounded number of times. Waiting on another party this way fails the
+ * assertion that follows if it never arrives, rather than hanging the suite.
+ */
+const yieldedUpTo = async (count: number): Promise<void> => {
+  for (let index = 0; index < count; index += 1) await yielded();
+};
+
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,
   event,
@@ -819,30 +827,42 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       const pinned: number[] = [];
       for (let round = 0; round < 5; round += 1) {
         // A writer advancing the mirror for as long as the read is open. The
-        // read must not be able to see part of what it commits.
-        // The in-memory store is the leg that observes this. Nothing can
-        // commit inside an open libSQL read here, and the reason is the
-        // storage engine rather than this package: a local libSQL file runs
-        // `journal_mode = delete`, where a read transaction holds a shared
-        // lock and every writer gets `SQLITE_BUSY` until it commits. That
-        // holds for a second connection, a second backend, and a worker
-        // thread alike, so the libSQL leg confirms the reads agree and does
-        // not confirm behaviour under a concurrent commit.
+        // read must not be able to see part of what it commits — and both legs
+        // really do commit while it is open, so this is snapshot isolation
+        // being proven and not a writer that was serialized behind the read.
+        // The libSQL leg earns that by running its local file in WAL: under the
+        // rollback journal an open read refused every writer on the file, so
+        // the only reachable outcome was a mirror nothing was writing to.
+        let committed = 0;
+        let landed = (): void => {};
+        const commitLanded = new Promise<void>((resolve) => {
+          landed = resolve;
+        });
         const writing = (async () => {
-          for (let step = 0; step < 5; step += 1)
+          for (let step = 0; step < 5; step += 1) {
             await write(`r${round}-${step}`, PN, AT + 1 + round * 10 + step);
+            committed += 1;
+            landed();
+          }
         })();
         const seen = await resource.data.read(ACCOUNT, async (view) => {
           const snapshot = await view.snapshot();
+          const before = committed;
           // Opening a conversation does other work between its reads, and the
-          // writer above gets to commit while it does. Yielding here is what
-          // makes the read observe that rather than finishing inside one turn.
-          await yielded();
+          // writer above gets to commit while it does. Waiting for one of those
+          // commits here is what makes the read observe that rather than
+          // finishing inside one turn. A store that serializes its writers
+          // behind the read runs out of turns and fails `during` below.
+          await Promise.race([commitLanded, yieldedUpTo(100)]);
           const first = await view.messages(PN, { limit: 2 });
           await yielded();
           const second = await view.messages(ROOM, { limit: 2 });
           return {
             revisions: [snapshot.revision, first.revision, second.revision],
+            // Commits this read outlived. Its revisions all being equal only
+            // means something once this is above zero: otherwise the mirror
+            // stood still and agreeing about it proves nothing.
+            during: committed - before,
             // Records, not labels. An implementation that read the live maps
             // and stamped them with the revision it captured at `read()` agrees
             // on the numbers above and disagrees here.
@@ -851,6 +871,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
           };
         });
         await writing;
+        assert.ok(seen.during > 0, "no write committed while the read was open");
         expect(new Set(seen.revisions).size).toBe(1);
         const revision = seen.revisions[0];
         assert.ok(revision !== undefined);
