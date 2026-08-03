@@ -945,13 +945,32 @@ function patch(value: unknown): WhatsAppPatch {
     throw new Error("invalid libSQL patch deletes");
   if (record.aliases !== undefined && !Array.isArray(record.aliases))
     throw new Error("invalid libSQL patch aliases");
+  const upserts = record.upserts.map(mirrorRecord);
+  // A batch written before the patch carried aliases has none recorded, but
+  // every alias it would have carried is derivable from its own contact
+  // upserts: each record names the native ids it owns, and a record is only
+  // upserted when those changed. Replaying the derived set in order reaches
+  // the same Address Resolution as replaying the deltas would, because a
+  // redundant alias sets a key to the value it already holds — so a consumer
+  // reading from revision 0 across an upgrade is not left with a partial map.
+  const aliases =
+    record.aliases !== undefined
+      ? record.aliases.map(mirrorAlias)
+      : upserts.flatMap((upsert) =>
+          upsert.type === "contact"
+            ? upsert.contact.nativeIds.map((nativeId) => ({
+                nativeId,
+                contactId: upsert.contact.contactId,
+              }))
+            : [],
+        );
   return {
     accountId: string(record.accountId, "patch accountId"),
     fromRevision: integer(record.fromRevision, "patch fromRevision"),
     revision: integer(record.revision, "patch revision"),
-    upserts: record.upserts.map(mirrorRecord),
+    upserts,
     ...(record.deletes !== undefined && { deletes: record.deletes.map(mirrorDelete) }),
-    ...(record.aliases !== undefined && { aliases: record.aliases.map(mirrorAlias) }),
+    ...(aliases.length > 0 && { aliases }),
   };
 }
 
