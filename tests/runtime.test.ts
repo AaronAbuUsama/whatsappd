@@ -2601,7 +2601,10 @@ test("a late PN/LID link consolidates existing contacts and publishes the remova
     },
   ]);
   expect(snapshot.contactAliases).toEqual({ [LID]: LID, [PERSON]: LID });
-  expect(linked.patch.deletes).toEqual([{ type: "contact", contactId: PERSON }]);
+  expect(linked.patch.deletes).toEqual([
+    { type: "contact", contactId: PERSON, freedNativeIds: [PERSON] },
+  ]);
+  expect(linked.patch.aliases).toEqual([{ nativeId: PERSON, contactId: LID }]);
   expect((await data.accepted("personal", 0)).length).toBe(3);
 });
 

@@ -508,6 +508,60 @@ test("a replacement claim fences an independent stale backend before its first w
   }
 });
 
+test("a patch stored before aliases were carried still resolves addresses", async () => {
+  const LID = "55555@lid";
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-legacy-patch-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  try {
+    // Let the real backend build the schema, then write the row a version
+    // before this change would have written: a consolidation whose patch
+    // carries the merged contact and the redundant delete, and no aliases.
+    const created = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    await created.data.claim(ACCOUNT, 1);
+    await created.close();
+
+    const legacy = createClient({ url });
+    await legacy.execute({
+      sql: `INSERT INTO wa_accepted_batches
+        (account_id, seq, from_revision, revision, events_json, patch_json)
+        VALUES (?, 1, 0, 1, ?, ?)`,
+      args: [
+        ACCOUNT,
+        JSON.stringify([]),
+        JSON.stringify({
+          accountId: ACCOUNT,
+          fromRevision: 0,
+          revision: 1,
+          upserts: [
+            {
+              type: "contact",
+              contact: { accountId: ACCOUNT, contactId: LID, nativeIds: [LID, CHAT] },
+            },
+          ],
+          deletes: [{ type: "contact", contactId: CHAT }],
+        }),
+      ],
+    });
+    legacy.close();
+
+    const upgraded = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    try {
+      const batch = (await upgraded.data.accepted(ACCOUNT, 0))[0];
+      // Derived from the patch's own contact upsert rather than recorded, so a
+      // consumer reading from revision 0 across the upgrade still reaches the
+      // same Address Resolution instead of a map missing its whole history.
+      expect(batch?.patch.aliases).toEqual([
+        { nativeId: LID, contactId: LID },
+        { nativeId: CHAT, contactId: LID },
+      ]);
+    } finally {
+      await upgraded.close();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("migrations preserve wa_auth and credential clear cannot reach mirror data or another account", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-credentials-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;

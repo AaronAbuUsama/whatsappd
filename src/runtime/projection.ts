@@ -11,6 +11,7 @@ import {
   type DurableUpdate,
   type GroupRecord,
   type MessageRecord,
+  type MirrorAlias,
   type MirrorDelete,
   type MirrorRecord,
   type ObservedInstant,
@@ -35,6 +36,8 @@ export type CurrentMirrorMutation =
 export interface CurrentMirrorProjection {
   readonly upserts: readonly MirrorRecord[];
   readonly deletes: readonly MirrorDelete[];
+  /** Only the aliases whose owner changed — see {@link WhatsAppPatch.aliases}. */
+  readonly aliases: readonly MirrorAlias[];
   readonly mutations: readonly CurrentMirrorMutation[];
 }
 
@@ -47,13 +50,14 @@ interface ProjectionState {
   message(chatId: string, messageId: string): Promise<MessageRecord | undefined>;
   upsert(record: MirrorRecord): void;
   delete(record: MirrorDelete): void;
-  alias(nativeId: string, contactId: string): void;
+  alias(nativeId: string, contactId: string): Promise<void>;
 }
 
 function projectionState(
   records: CurrentMirrorRecords,
   upserts: MirrorRecord[],
   deletes: MirrorDelete[],
+  aliases: MirrorAlias[],
   mutations: CurrentMirrorMutation[],
 ): ProjectionState {
   let account: AccountRecord | undefined;
@@ -115,9 +119,15 @@ function projectionState(
       deletes.push(record);
       mutations.push({ type: "delete", record });
     },
-    alias(nativeId, contactId) {
+    async alias(nativeId, contactId) {
+      // The mutation is written unconditionally — the store's alias write is an
+      // idempotent upsert — but only a change is a delta. Re-observing a
+      // contact re-asserts every alias it already had, and a patch carrying
+      // those would move the revision on an observation that changed nothing.
+      const owner = await this.contactId(nativeId);
       contactIds.set(nativeId, contactId);
       mutations.push({ type: "contact_alias", nativeId, contactId });
+      if (owner !== contactId) aliases.push({ nativeId, contactId });
     },
   };
 }
@@ -133,9 +143,13 @@ async function projectChat(state: ProjectionState, chat: ChatRecord): Promise<vo
 
 async function projectContact(state: ProjectionState, contact: ContactRecord): Promise<void> {
   const reachedIds: string[] = [];
+  /** Which of this observation's forms reached each owner, record or not. */
+  const reachedBy = new Map<string, string[]>();
   for (const nativeId of contact.nativeIds) {
     const reached = await state.contactId(nativeId);
-    if (reached !== undefined && !reachedIds.includes(reached)) reachedIds.push(reached);
+    if (reached === undefined) continue;
+    if (!reachedIds.includes(reached)) reachedIds.push(reached);
+    reachedBy.set(reached, [...(reachedBy.get(reached) ?? []), nativeId]);
   }
   const contactId = reachedIds[0] ?? contact.contactId;
   const reached: ContactRecord[] = [];
@@ -158,8 +172,24 @@ async function projectContact(state: ProjectionState, contact: ContactRecord): P
     ...(seen.length > 0 && { lastSeenAt: Math.max(...seen) }),
   };
 
-  for (const id of reachedIds.slice(1)) state.delete({ type: "contact", contactId: id });
-  for (const id of merged.nativeIds) state.alias(id, contactId);
+  for (const id of reachedIds.slice(1)) {
+    // What this delete frees is the record's own native ids, plus the forms
+    // that reached it — which is all there is to name when the record itself
+    // is missing. Both are in `merged.nativeIds`, so the aliases below
+    // re-point every one of them.
+    const freedNativeIds = [
+      ...new Set([
+        ...(reached.find((record) => record.contactId === id)?.nativeIds ?? []),
+        ...(reachedBy.get(id) ?? []),
+      ]),
+    ];
+    state.delete({
+      type: "contact",
+      contactId: id,
+      ...(freedNativeIds.length > 0 && { freedNativeIds }),
+    });
+  }
+  for (const id of merged.nativeIds) await state.alias(id, contactId);
   if (existing && isDeepStrictEqual(existing, merged)) return;
   state.upsert({ type: "contact", contact: merged });
 }
@@ -510,8 +540,9 @@ export async function projectCurrentMirror(
 ): Promise<CurrentMirrorProjection> {
   const upserts: MirrorRecord[] = [];
   const deletes: MirrorDelete[] = [];
+  const aliases: MirrorAlias[] = [];
   const mutations: CurrentMirrorMutation[] = [];
-  const state = projectionState(records, upserts, deletes, mutations);
+  const state = projectionState(records, upserts, deletes, aliases, mutations);
   for (const event of events) await projectEvent(state, accountId, event);
-  return { upserts, deletes, mutations };
+  return { upserts, deletes, aliases, mutations };
 }

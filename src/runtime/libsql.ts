@@ -26,6 +26,7 @@ import {
   type MessageReaction,
   type MessageReceipt,
   type MessageRecord,
+  type MirrorAlias,
   type MirrorDelete,
   type MirrorRecord,
   type StoredMessagePageOptions,
@@ -920,7 +921,21 @@ function mirrorRecord(value: unknown): MirrorRecord {
 function mirrorDelete(value: unknown): MirrorDelete {
   const record = object(value, "patch delete");
   if (record.type !== "contact") throw new Error("invalid libSQL patch delete type");
-  return { type: "contact", contactId: string(record.contactId, "patch delete contactId") };
+  return {
+    type: "contact",
+    contactId: string(record.contactId, "patch delete contactId"),
+    ...(record.freedNativeIds !== undefined && {
+      freedNativeIds: strings(record.freedNativeIds, "patch delete freedNativeIds"),
+    }),
+  };
+}
+
+function mirrorAlias(value: unknown): MirrorAlias {
+  const record = object(value, "patch alias");
+  return {
+    nativeId: string(record.nativeId, "patch alias nativeId"),
+    contactId: string(record.contactId, "patch alias contactId"),
+  };
 }
 
 function patch(value: unknown): WhatsAppPatch {
@@ -928,12 +943,34 @@ function patch(value: unknown): WhatsAppPatch {
   if (!Array.isArray(record.upserts)) throw new Error("invalid libSQL patch upserts");
   if (record.deletes !== undefined && !Array.isArray(record.deletes))
     throw new Error("invalid libSQL patch deletes");
+  if (record.aliases !== undefined && !Array.isArray(record.aliases))
+    throw new Error("invalid libSQL patch aliases");
+  const upserts = record.upserts.map(mirrorRecord);
+  // A batch written before the patch carried aliases has none recorded, but
+  // every alias it would have carried is derivable from its own contact
+  // upserts: each record names the native ids it owns, and a record is only
+  // upserted when those changed. Replaying the derived set in order reaches
+  // the same Address Resolution as replaying the deltas would, because a
+  // redundant alias sets a key to the value it already holds — so a consumer
+  // reading from revision 0 across an upgrade is not left with a partial map.
+  const aliases =
+    record.aliases !== undefined
+      ? record.aliases.map(mirrorAlias)
+      : upserts.flatMap((upsert) =>
+          upsert.type === "contact"
+            ? upsert.contact.nativeIds.map((nativeId) => ({
+                nativeId,
+                contactId: upsert.contact.contactId,
+              }))
+            : [],
+        );
   return {
     accountId: string(record.accountId, "patch accountId"),
     fromRevision: integer(record.fromRevision, "patch fromRevision"),
     revision: integer(record.revision, "patch revision"),
-    upserts: record.upserts.map(mirrorRecord),
+    upserts,
     ...(record.deletes !== undefined && { deletes: record.deletes.map(mirrorDelete) }),
+    ...(aliases.length > 0 && { aliases }),
   };
 }
 
@@ -1189,7 +1226,9 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
           ownedEvents,
         );
         const revision =
-          projection.upserts.length === 0 && projection.deletes.length === 0
+          projection.upserts.length === 0 &&
+          projection.deletes.length === 0 &&
+          projection.aliases.length === 0
             ? state.revision
             : state.revision + 1;
         const batch: AcceptedWhatsAppBatch = {
@@ -1204,6 +1243,7 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
             revision,
             upserts: projection.upserts,
             ...(projection.deletes.length > 0 && { deletes: projection.deletes }),
+            ...(projection.aliases.length > 0 && { aliases: projection.aliases }),
           },
         };
 
@@ -1219,7 +1259,12 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
             batch.fromRevision,
             batch.revision,
             json(batch.events),
-            json(batch.patch),
+            // `aliases` is written even when empty, so its *absence* means one
+            // thing only: a row stored before the patch carried them. An
+            // ordinary batch that changed a contact without changing Address
+            // Resolution omits it from the patch it returns, and a decoder
+            // reading absence as "legacy" would invent deltas for that row.
+            json({ ...batch.patch, aliases: projection.aliases }),
           ],
         });
         await transaction.execute({

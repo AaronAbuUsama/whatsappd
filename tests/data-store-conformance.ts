@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
 import {
   StaleAccountClaimError,
+  type ContactRecord,
   type DurableInboundMessage,
   type DurableMedia,
   type MessageRecord,
@@ -107,6 +108,30 @@ test("the Current Mirror projection reads only the message key touched by an upd
   expect(projection.upserts).toMatchObject([
     { type: "message", message: { messageId: "current", receipts: [{ status: "read" }] } },
   ]);
+});
+
+test("a delete names the forms that reached a contact whose record is gone", async () => {
+  const records: CurrentMirrorRecords = {
+    account: async () => ({ accountId: ACCOUNT }),
+    chat: async () => undefined,
+    contact: async (contactId) =>
+      contactId === LID ? { accountId: ACCOUNT, contactId: LID, nativeIds: [LID] } : undefined,
+    // PN's alias names an owner whose contact record is not there, so the
+    // record's own native ids cannot say what the delete frees.
+    contactId: async (nativeId) => (nativeId === LID ? LID : nativeId === PN ? "gone" : undefined),
+    group: async () => undefined,
+    message: async () => undefined,
+  };
+
+  const projection = await projectCurrentMirror(records, ACCOUNT, [
+    observed({ type: "contact", contact: { id: LID, nativeIds: [LID, PN] } }),
+  ]);
+
+  expect(projection.deletes).toEqual([
+    { type: "contact", contactId: "gone", freedNativeIds: [PN] },
+  ]);
+  // …and it is re-pointed in the same projection, so nothing is stranded.
+  expect(projection.aliases).toEqual([{ nativeId: PN, contactId: LID }]);
 });
 
 export function dataStoreConformance(name: string, create: DataStoreFactory): void {
@@ -569,8 +594,43 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         { accountId: ACCOUNT, contactId: LID, nativeIds: [LID, PN], displayName: "Linked" },
       ]);
       expect(snapshot.contactAliases).toEqual({ [LID]: LID, [PN]: LID });
-      expect(linked.patch.deletes).toEqual([{ type: "contact", contactId: PN }]);
+      expect(linked.patch.deletes).toEqual([
+        { type: "contact", contactId: PN, freedNativeIds: [PN] },
+      ]);
+      expect(linked.patch.aliases).toEqual([{ nativeId: PN, contactId: LID }]);
       expect((await resource.data.accepted(ACCOUNT, 0)).length).toBe(3);
+
+      // A consumer that has only ever seen patches, from revision 0, reaches
+      // the same Address Resolution as the snapshot above — no re-read.
+      const aliases = new Map<string, string>();
+      const contacts = new Map<string, ContactRecord>();
+      for (const { patch } of await resource.data.accepted(ACCOUNT, 0)) {
+        for (const record of patch.upserts)
+          if (record.type === "contact") contacts.set(record.contact.contactId, record.contact);
+        for (const removed of patch.deletes ?? []) {
+          contacts.delete(removed.contactId);
+          // Every id a delete frees is re-pointed by an alias in the same
+          // patch, so neither array has to be applied before the other.
+          for (const nativeId of removed.freedNativeIds ?? [])
+            expect(patch.aliases?.some((alias) => alias.nativeId === nativeId)).toBe(true);
+        }
+        for (const alias of patch.aliases ?? []) aliases.set(alias.nativeId, alias.contactId);
+      }
+      expect(Object.fromEntries(aliases)).toEqual(snapshot.contactAliases);
+      expect([...contacts.values()]).toEqual(snapshot.contacts);
+
+      // A change that moves a contact record but no alias carries no delta —
+      // and what `accepted()` reads back is exactly what `accept()` returned,
+      // so absence of a delta cannot be re-read as something to synthesize.
+      const renamed = await contact(LID, [LID, PN], "Renamed");
+      expect(renamed.patch.upserts.length).toBe(1);
+      expect(renamed.patch.aliases).toBe(undefined);
+      expect((await resource.data.accepted(ACCOUNT, 0)).map(({ patch }) => patch.aliases)).toEqual([
+        [{ nativeId: PN, contactId: PN }],
+        [{ nativeId: LID, contactId: LID }],
+        [{ nativeId: PN, contactId: LID }],
+        undefined,
+      ]);
     } finally {
       await resource.close();
     }

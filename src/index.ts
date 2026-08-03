@@ -85,6 +85,7 @@ export type {
   MessageReaction,
   MessageReceipt,
   MessageRecord,
+  MirrorAlias,
   MirrorRecord,
   ObservedInstant,
   StoredMessageCursor,
