@@ -303,6 +303,7 @@ Opened conversation: `state`, `subscribe`, `loadOlder`, `requestPhoneHistory`, `
 - `MetricEvent`
 - `MetricsHook`
 - `MirrorRecord`
+- `MirrorView`
 - `ObservedInstant`
 - `Outbound`
 - `PairingError`

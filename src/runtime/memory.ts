@@ -23,6 +23,7 @@ import {
   type GroupRecord,
   type MediaStore,
   type MessageRecord,
+  type MirrorView,
   type StoredMessageCursor,
   type WhatsAppBackend,
   type WhatsAppDataStore,
@@ -95,6 +96,76 @@ export function memoryDataStore(): WhatsAppDataStore {
     };
     accounts.set(accountId, created);
     return created;
+  };
+
+  /**
+   * The account's mirror as it stands right now.
+   *
+   * @remarks
+   * The read transaction, in a process that has no database to open one in.
+   * Acceptance replaces map entries rather than mutating records in place, so
+   * copying the maps is enough: every later write lands in the live mirror and
+   * none of it is visible through these.
+   */
+  const pin = (mirror: AccountMirror): AccountMirror => ({
+    ...mirror,
+    chats: new Map(mirror.chats),
+    contacts: new Map(mirror.contacts),
+    contactKeys: new Map(mirror.contactKeys),
+    groups: new Map(mirror.groups),
+    messages: new Map(mirror.messages),
+  });
+
+  const view = (accountId: string, mirror: AccountMirror): MirrorView => ({
+    async snapshot() {
+      return copy({
+        accountId,
+        revision: mirror.revision,
+        account: mirror.account,
+        chats: [...mirror.chats.values()],
+        contacts: [...mirror.contacts.values()],
+        contactAliases: Object.fromEntries(mirror.contactKeys),
+        groups: [...mirror.groups.values()],
+      });
+    },
+
+    async messages(chatId, options) {
+      const limit = options?.limit ?? 25;
+      if (!Number.isInteger(limit) || limit < 1)
+        throw new RangeError(`limit must be a positive integer, got ${limit}`);
+      const before = options?.before;
+      // ponytail: no ordering index, so a page sorts the chat's whole history.
+      // Fine while the mirror is a Map in one process; the persistent backend
+      // (#38) pages on a `(chat_id, timestamp desc, message_id desc)` index.
+      const ordered = [...mirror.messages.values()]
+        .filter((message) => message.chatId === chatId)
+        .sort(newestFirst);
+      // Strictly older than the cursor in that same order, so a message sharing
+      // its timestamp is included or excluded by identity rather than by luck.
+      const from = before ? ordered.findIndex((message) => newestFirst(before, message) < 0) : 0;
+      const older = from === -1 ? [] : ordered.slice(from);
+      const messages = older.slice(0, limit);
+      // Named only when an older stored message really exists, so following the
+      // cursor never hands a caller an empty page and calls that the end.
+      const last = older.length > limit ? messages[messages.length - 1] : undefined;
+      return copy({
+        accountId,
+        chatId,
+        // Read from the same mirror state as the rows above, so a consumer can
+        // tell which patches this page already reflects.
+        revision: mirror.revision,
+        messages,
+        ...(last && { nextBefore: { timestamp: last.timestamp, messageId: last.messageId } }),
+      });
+    },
+  });
+
+  const read: WhatsAppDataStore["read"] = async (accountId, fn) => {
+    // Every acceptance already offered is applied first, as a direct read would
+    // wait for it — then the mirror is pinned, so nothing offered afterwards
+    // can reach any of the answers `fn` gets.
+    await operations;
+    return fn(view(accountId, pin(mirrorOf(accountId))));
   };
 
   return {
@@ -186,51 +257,10 @@ export function memoryDataStore(): WhatsAppDataStore {
       });
     },
 
-    async snapshot(accountId) {
-      await operations;
-      const mirror = mirrorOf(accountId);
-      return copy({
-        accountId,
-        revision: mirror.revision,
-        account: mirror.account,
-        chats: [...mirror.chats.values()],
-        contacts: [...mirror.contacts.values()],
-        contactAliases: Object.fromEntries(mirror.contactKeys),
-        groups: [...mirror.groups.values()],
-      });
-    },
-
-    async messages(accountId, chatId, options) {
-      const limit = options?.limit ?? 25;
-      if (!Number.isInteger(limit) || limit < 1)
-        throw new RangeError(`limit must be a positive integer, got ${limit}`);
-      await operations;
-      const before = options?.before;
-      const mirror = mirrorOf(accountId);
-      // ponytail: no ordering index, so a page sorts the chat's whole history.
-      // Fine while the mirror is a Map in one process; the persistent backend
-      // (#38) pages on a `(chat_id, timestamp desc, message_id desc)` index.
-      const ordered = [...mirror.messages.values()]
-        .filter((message) => message.chatId === chatId)
-        .sort(newestFirst);
-      // Strictly older than the cursor in that same order, so a message sharing
-      // its timestamp is included or excluded by identity rather than by luck.
-      const from = before ? ordered.findIndex((message) => newestFirst(before, message) < 0) : 0;
-      const older = from === -1 ? [] : ordered.slice(from);
-      const messages = older.slice(0, limit);
-      // Named only when an older stored message really exists, so following the
-      // cursor never hands a caller an empty page and calls that the end.
-      const last = older.length > limit ? messages[messages.length - 1] : undefined;
-      return copy({
-        accountId,
-        chatId,
-        // Read from the same mirror state as the rows above, so a consumer can
-        // tell which patches this page already reflects.
-        revision: mirror.revision,
-        messages,
-        ...(last && { nextBefore: { timestamp: last.timestamp, messageId: last.messageId } }),
-      });
-    },
+    read,
+    snapshot: (accountId) => read(accountId, (mirror) => mirror.snapshot()),
+    messages: (accountId, chatId, options) =>
+      read(accountId, (mirror) => mirror.messages(chatId, options)),
 
     async accepted(accountId, afterSeq, limit = 100) {
       if (!Number.isInteger(limit) || limit < 1)

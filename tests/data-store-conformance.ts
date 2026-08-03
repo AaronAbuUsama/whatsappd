@@ -26,6 +26,9 @@ interface DataStoreResource {
 
 type DataStoreFactory = () => Promise<DataStoreResource>;
 
+/** Let queued work run — never a timed wait. */
+const yielded = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,
   event,
@@ -715,6 +718,66 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         await assert.rejects(resource.data.messages(ACCOUNT, PN, { limit }), RangeError);
         await assert.rejects(resource.data.accepted(ACCOUNT, 0, limit), RangeError);
       }
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] a joint read answers every question at one revision`, async () => {
+    const resource = await create();
+    try {
+      const write = (id: string, chatId: string, timestamp: number): Promise<unknown> =>
+        resource.data.accept(
+          ACCOUNT,
+          [
+            observed({
+              type: "message",
+              // A group message names its author; a 1:1's author is the chat.
+              message: textMessage({
+                id,
+                chatId,
+                text: id,
+                timestamp,
+                ...(chatId === ROOM && { sender: PN }),
+              }),
+            }),
+          ],
+          1,
+        );
+      await write("seed-pn", PN, AT);
+      await write("seed-room", ROOM, AT);
+
+      const pinned: number[] = [];
+      for (let round = 0; round < 5; round += 1) {
+        // A writer advancing the mirror for as long as the read is open. The
+        // read must not be able to see part of what it commits.
+        const writing = (async () => {
+          for (let step = 0; step < 5; step += 1)
+            await write(`r${round}-${step}`, PN, AT + round * 10 + step);
+        })();
+        const seen = await resource.data.read(ACCOUNT, async (view) => {
+          const snapshot = await view.snapshot();
+          // Opening a conversation does other work between its reads, and the
+          // writer above gets to commit while it does. Yielding here is what
+          // makes the read observe that rather than finishing inside one turn.
+          await yielded();
+          const first = await view.messages(PN, { limit: 2 });
+          await yielded();
+          const second = await view.messages(ROOM, { limit: 2 });
+          return [snapshot.revision, first.revision, second.revision];
+        });
+        await writing;
+        expect(new Set(seen).size).toBe(1);
+        assert.ok(seen[0] !== undefined);
+        pinned.push(seen[0]);
+      }
+
+      // …and the writer really was advancing: every pinned revision is below
+      // the revision the mirror finished at, so none of the reads above was
+      // taken against a mirror nothing was writing to.
+      const final = (await resource.data.snapshot(ACCOUNT)).revision;
+      expect(final).toBe(27);
+      expect(pinned.every((revision) => revision < final)).toBe(true);
     } finally {
       await resource.close();
     }

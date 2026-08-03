@@ -86,6 +86,7 @@ export type {
   MessageReceipt,
   MessageRecord,
   MirrorRecord,
+  MirrorView,
   ObservedInstant,
   StoredMessageCursor,
   StoredMessagePage,

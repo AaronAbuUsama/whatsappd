@@ -28,6 +28,7 @@ import {
   type MessageRecord,
   type MirrorDelete,
   type MirrorRecord,
+  type MirrorView,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
   type WhatsAppDataEvent,
@@ -1171,84 +1172,15 @@ function validatePage(options: StoredMessagePageOptions | undefined): number {
 }
 
 function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
-  return {
-    async accept(accountId, events, fencingToken) {
-      if (!Number.isSafeInteger(fencingToken) || fencingToken < 0)
-        throw new RangeError(`fencingToken must be a non-negative integer, got ${fencingToken}`);
-      const ownedEvents = structuredClone(events);
-      return transact(client, "write", async (transaction) => {
-        await ensureAccount(transaction, accountId);
-        const state = await accountState(transaction, accountId);
-        if (!state) throw new Error("libSQL account was not created");
-        if (fencingToken < state.newestFencingToken)
-          throw new StaleAccountClaimError(accountId, fencingToken, state.newestFencingToken);
-
-        const projection = await projectCurrentMirror(
-          projectionRecords(transaction, accountId, state.account),
-          accountId,
-          ownedEvents,
-        );
-        const revision =
-          projection.upserts.length === 0 && projection.deletes.length === 0
-            ? state.revision
-            : state.revision + 1;
-        const batch: AcceptedWhatsAppBatch = {
-          accountId,
-          seq: state.sourceSeq + 1,
-          fromRevision: state.revision,
-          revision,
-          events: ownedEvents,
-          patch: {
-            accountId,
-            fromRevision: state.revision,
-            revision,
-            upserts: projection.upserts,
-            ...(projection.deletes.length > 0 && { deletes: projection.deletes }),
-          },
-        };
-
-        for (const mutation of projection.mutations)
-          await applyMutation(transaction, accountId, mutation);
-        await transaction.execute({
-          sql: `INSERT INTO wa_accepted_batches
-            (account_id, seq, from_revision, revision, events_json, patch_json)
-            VALUES (?, ?, ?, ?, ?, ?)`,
-          args: [
-            accountId,
-            batch.seq,
-            batch.fromRevision,
-            batch.revision,
-            json(batch.events),
-            json(batch.patch),
-          ],
-        });
-        await transaction.execute({
-          sql: `UPDATE wa_accounts SET revision = ?, source_seq = ?, newest_fencing_token = ?
-            WHERE account_id = ?`,
-          args: [revision, batch.seq, Math.max(fencingToken, state.newestFencingToken), accountId],
-        });
-        return structuredClone(batch);
-      });
-    },
-
-    async claim(accountId, fencingToken) {
-      if (!Number.isSafeInteger(fencingToken) || fencingToken < 0)
-        throw new RangeError(`fencingToken must be a non-negative integer, got ${fencingToken}`);
-      await transact(client, "write", async (transaction) => {
-        await ensureAccount(transaction, accountId);
-        const state = await accountState(transaction, accountId);
-        if (!state) throw new Error("libSQL account was not created");
-        if (fencingToken < state.newestFencingToken)
-          throw new StaleAccountClaimError(accountId, fencingToken, state.newestFencingToken);
-        await transaction.execute({
-          sql: "UPDATE wa_accounts SET newest_fencing_token = ? WHERE account_id = ?",
-          args: [fencingToken, accountId],
-        });
-      });
-    },
-
-    snapshot(accountId) {
-      return transact(client, "read", async (transaction) => {
+  /**
+   * One account's mirror, answered through an already-open read transaction.
+   * Neither read opens a second one — which is what would let a page disagree
+   * with the snapshot taken beside it, and would deadlock against the shared
+   * local-client queue.
+   */
+  const view = (transaction: Transaction, accountId: string): MirrorView => {
+    return {
+      async snapshot() {
         const state = await accountState(transaction, accountId);
         if (!state)
           return {
@@ -1326,12 +1258,10 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
           contactAliases,
           groups,
         };
-      });
-    },
+      },
 
-    async messages(accountId, chatId, options) {
-      const limit = validatePage(options);
-      return transact(client, "read", async (transaction) => {
+      async messages(chatId, options) {
+        const limit = validatePage(options);
         const state = await accountState(transaction, accountId);
         const before = options?.before;
         const result = await transaction.execute({
@@ -1366,8 +1296,93 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
           messages,
           ...(last && { nextBefore: { timestamp: last.timestamp, messageId: last.messageId } }),
         };
+      },
+    };
+  };
+
+  const read: WhatsAppDataStore["read"] = (accountId, fn) =>
+    transact(client, "read", (transaction) => fn(view(transaction, accountId)));
+
+  return {
+    async accept(accountId, events, fencingToken) {
+      if (!Number.isSafeInteger(fencingToken) || fencingToken < 0)
+        throw new RangeError(`fencingToken must be a non-negative integer, got ${fencingToken}`);
+      const ownedEvents = structuredClone(events);
+      return transact(client, "write", async (transaction) => {
+        await ensureAccount(transaction, accountId);
+        const state = await accountState(transaction, accountId);
+        if (!state) throw new Error("libSQL account was not created");
+        if (fencingToken < state.newestFencingToken)
+          throw new StaleAccountClaimError(accountId, fencingToken, state.newestFencingToken);
+
+        const projection = await projectCurrentMirror(
+          projectionRecords(transaction, accountId, state.account),
+          accountId,
+          ownedEvents,
+        );
+        const revision =
+          projection.upserts.length === 0 && projection.deletes.length === 0
+            ? state.revision
+            : state.revision + 1;
+        const batch: AcceptedWhatsAppBatch = {
+          accountId,
+          seq: state.sourceSeq + 1,
+          fromRevision: state.revision,
+          revision,
+          events: ownedEvents,
+          patch: {
+            accountId,
+            fromRevision: state.revision,
+            revision,
+            upserts: projection.upserts,
+            ...(projection.deletes.length > 0 && { deletes: projection.deletes }),
+          },
+        };
+
+        for (const mutation of projection.mutations)
+          await applyMutation(transaction, accountId, mutation);
+        await transaction.execute({
+          sql: `INSERT INTO wa_accepted_batches
+            (account_id, seq, from_revision, revision, events_json, patch_json)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+          args: [
+            accountId,
+            batch.seq,
+            batch.fromRevision,
+            batch.revision,
+            json(batch.events),
+            json(batch.patch),
+          ],
+        });
+        await transaction.execute({
+          sql: `UPDATE wa_accounts SET revision = ?, source_seq = ?, newest_fencing_token = ?
+            WHERE account_id = ?`,
+          args: [revision, batch.seq, Math.max(fencingToken, state.newestFencingToken), accountId],
+        });
+        return structuredClone(batch);
       });
     },
+
+    async claim(accountId, fencingToken) {
+      if (!Number.isSafeInteger(fencingToken) || fencingToken < 0)
+        throw new RangeError(`fencingToken must be a non-negative integer, got ${fencingToken}`);
+      await transact(client, "write", async (transaction) => {
+        await ensureAccount(transaction, accountId);
+        const state = await accountState(transaction, accountId);
+        if (!state) throw new Error("libSQL account was not created");
+        if (fencingToken < state.newestFencingToken)
+          throw new StaleAccountClaimError(accountId, fencingToken, state.newestFencingToken);
+        await transaction.execute({
+          sql: "UPDATE wa_accounts SET newest_fencing_token = ? WHERE account_id = ?",
+          args: [fencingToken, accountId],
+        });
+      });
+    },
+
+    read,
+    snapshot: (accountId) => read(accountId, (mirror) => mirror.snapshot()),
+    messages: (accountId, chatId, options) =>
+      read(accountId, (mirror) => mirror.messages(chatId, options)),
 
     accepted(accountId, afterSeq, limit = 100) {
       if (!Number.isInteger(limit) || limit < 1)
