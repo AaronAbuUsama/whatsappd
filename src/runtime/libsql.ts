@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { Client, Row, Transaction } from "@libsql/client";
 import type { ContactUpdate } from "../model/contact.ts";
 import type { GroupUpdate } from "../model/group.ts";
@@ -1172,23 +1171,7 @@ function validatePage(options: StoredMessagePageOptions | undefined): number {
   return limit;
 }
 
-/** An open read, cleared when its callback settles so nothing joins it later. */
-interface OpenRead {
-  transaction: Transaction | undefined;
-}
-
 function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
-  /**
-   * The read transaction the current async context is already inside, if any.
-   *
-   * @remarks
-   * Per store, not per module: it distinguishes *nested* from merely
-   * concurrent — two `read()` calls racing each other each get their own
-   * context — and a callback that reaches a *different* store must not join
-   * this one, whose transaction is open on a different database.
-   */
-  const openReads = new AsyncLocalStorage<OpenRead>();
-
   /**
    * One account's mirror, answered through an already-open read transaction.
    * Neither read opens a second one — which is what would let a page disagree
@@ -1317,28 +1300,8 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
     };
   };
 
-  const read: WhatsAppDataStore["read"] = (accountId, fn) => {
-    // A read reached from inside another one joins it instead of opening a
-    // second transaction. Local clients in this process share one operation
-    // queue, so the inner transaction would queue behind the outer one that is
-    // waiting on this very callback — a deadlock, not a slower read. Joining
-    // also answers both at one revision, which is what `read()` promises.
-    const joined = openReads.getStore()?.transaction;
-    if (joined) return fn(view(joined, accountId));
-    // Held in a box the callback's own scope clears, because an async
-    // descendant `fn` never awaited keeps this context alive past `run()` —
-    // and joining a transaction that has already committed is worse than
-    // opening a fresh one.
-    const open: OpenRead = { transaction: undefined };
-    return transact(client, "read", async (transaction) => {
-      open.transaction = transaction;
-      try {
-        return await openReads.run(open, () => fn(view(transaction, accountId)));
-      } finally {
-        open.transaction = undefined;
-      }
-    });
-  };
+  const read: WhatsAppDataStore["read"] = (accountId, fn) =>
+    transact(client, "read", (transaction) => fn(view(transaction, accountId)));
 
   return {
     async accept(accountId, events, fencingToken) {

@@ -9,7 +9,6 @@ import {
   type WhatsAppDataStore,
   type WhatsAppDurableEvent,
 } from "../src/runtime/contracts.ts";
-import { memoryDataStore } from "../src/runtime/memory.ts";
 import { projectCurrentMirror, type CurrentMirrorRecords } from "../src/runtime/projection.ts";
 import { textMessage } from "../src/testing.ts";
 
@@ -26,21 +25,6 @@ interface DataStoreResource {
 }
 
 type DataStoreFactory = () => Promise<DataStoreResource>;
-
-/** Fail a hung read instead of hanging the suite — a deadlock has no other tell. */
-const withDeadline = async <T>(work: Promise<T>, ms = 2_000): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`a read did not settle within ${ms}ms`)), ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-};
 
 /** Let queued work run — never a timed wait. */
 const yielded = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -126,33 +110,6 @@ test("the Current Mirror projection reads only the message key touched by an upd
   expect(projection.upserts).toMatchObject([
     { type: "message", message: { messageId: "current", receipts: [{ status: "read" }] } },
   ]);
-});
-
-test("a read on one store does not join another store's open read", async () => {
-  const first = memoryDataStore();
-  const second = memoryDataStore();
-  const store = (data: WhatsAppDataStore, id: string): Promise<unknown> =>
-    data.accept(
-      ACCOUNT,
-      [
-        observed({
-          type: "message",
-          message: textMessage({ id, chatId: PN, text: id, timestamp: AT }),
-        }),
-      ],
-      1,
-    );
-  await store(first, "in-first");
-  await store(second, "in-second");
-
-  // Same account id, different stores. A read reached from inside another
-  // store's read is a *different* transaction on different state, and joining
-  // it would answer from the wrong database.
-  const inside = await first.read(ACCOUNT, async () =>
-    (await second.messages(ACCOUNT, PN)).messages.map(({ messageId }) => messageId),
-  );
-
-  expect(inside).toEqual(["in-second"]);
 });
 
 export function dataStoreConformance(name: string, create: DataStoreFactory): void {
@@ -850,40 +807,6 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       const final = (await resource.data.snapshot(ACCOUNT)).revision;
       expect(final).toBe(27);
       expect(pinned.every((revision) => revision < final)).toBe(true);
-    } finally {
-      await resource.close();
-    }
-  });
-
-  test(`[${name}] a read reached from inside a read joins it`, async () => {
-    const resource = await create();
-    try {
-      await resource.data.accept(
-        ACCOUNT,
-        [
-          observed({
-            type: "message",
-            message: textMessage({ id: "seed", chatId: PN, text: "seed", timestamp: AT }),
-          }),
-        ],
-        1,
-      );
-      const seen = await withDeadline(
-        resource.data.read(ACCOUNT, async (view) => {
-          const outer = (await view.snapshot()).revision;
-          // A consumer reaching the store instead of the view, and a nested
-          // `read()`, must join this transaction. Opening a second one queues
-          // behind the read waiting on this callback and never returns.
-          const direct = (await resource.data.snapshot(ACCOUNT)).revision;
-          const nested = await resource.data.read(
-            ACCOUNT,
-            async (inner) => (await inner.messages(PN)).revision,
-          );
-          return [outer, direct, nested];
-        }),
-      );
-
-      expect(seen).toEqual([1, 1, 1]);
     } finally {
       await resource.close();
     }
