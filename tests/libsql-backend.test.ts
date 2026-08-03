@@ -1019,3 +1019,24 @@ test("close waits for a read still holding its transaction open", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("several backends can open one new database at the same time", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-open-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  // Opening is what creates the schema and moves the journal, and entering WAL
+  // takes the whole file — an upgrade SQLite refuses immediately instead of
+  // handing to the busy timeout. Opening outside the shared queue therefore
+  // loses every client but one, which no test reached while each suite opened
+  // its backends one at a time.
+  const backends = Array.from({ length: 6 }, () =>
+    libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() }),
+  );
+
+  try {
+    const opened = await Promise.all(backends.map((backend) => backend.data.snapshot(ACCOUNT)));
+    expect(opened.map((snapshot) => snapshot.revision)).toEqual([0, 0, 0, 0, 0, 0]);
+  } finally {
+    await Promise.all(backends.map((backend) => backend.close()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

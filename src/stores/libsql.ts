@@ -144,7 +144,14 @@ export function lazyLibsqlClient(
   return {
     run(operation, mode = "write") {
       if (closed) return Promise.reject(new Error("libSQL client is closed"));
-      if (mode !== "read" || fileKey === undefined) return queued(operation);
+      // A client's first operation stays in the queue whatever its mode, because
+      // opening is what creates the schema and moves the journal, and entering
+      // WAL takes the whole file. That upgrade is one of the cases SQLite
+      // refuses `SQLITE_BUSY` on immediately rather than handing to the busy
+      // timeout, so letting several clients on one file open at once loses all
+      // but one of them. Connecting inside the queue is what already serialized
+      // them; only a read on an open client is safe to let out.
+      if (mode !== "read" || fileKey === undefined || ready === undefined) return queued(operation);
       // A WAL reader holds its own snapshot and never waits for a writer, so it
       // does not belong in the queue: `WhatsAppDataStore.read()` keeps its
       // transaction open for a function this package does not control, and
