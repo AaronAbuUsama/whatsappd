@@ -40,3 +40,8 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+      # `pnpm pack` archives whatever `dist/` already holds, so this proof has
+      # to build first or it inspects an artifact older than the change under
+      # test. The `proof:pack` script owns that build; this step does not
+      # depend on the one above having run.
+      - run: pnpm proof:pack
