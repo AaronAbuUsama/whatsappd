@@ -28,6 +28,22 @@ One issue is one implementation lane, branch, worktree, and pull request.
 5. It works only its assigned issue, satisfies the written acceptance criteria,
    records the required proof, and opens one PR targeting `master`.
 
+### The reviewable unit is bounded before the PR opens
+
+Finding supply is roughly `reviewable surface × evidence standard`. Per-pass
+patching shrinks neither, which is why three separate loops in this repository
+(#45/#47, #51, #93/#94) ran long without converging.
+
+CI enforces a budget of 400 changed lines across `src/` and `tests/` per PR. It
+is a check rather than a rule because a remembered rule is the failure class
+this policy exists to prevent. A unit that genuinely cannot be split raises it
+with `PR-Budget: <n>` in the PR body and states why; raising it without a reason
+is itself a review finding.
+
+An issue whose work does not fit the budget is split into vertical slices, each
+merging on its own, **before** the first implementation PR opens. Slicing after
+the surface is already too large is what has never worked here.
+
 ## GitHub review loop
 
 The implementing agent must not grade its own work and must not create a
@@ -57,6 +73,44 @@ The hard ceiling is seven complete review passes:
 - unresolved actionable findings after pass 7 block the lane and prohibit
   merge.
 
+### What diagnosis must produce
+
+The diagnosis trigger works — it is why #93 and #94 stopped at four passes each
+rather than running to twenty-one. What failed afterwards is what diagnosis was
+allowed to conclude.
+
+A lane retired after diagnosis **may not be restarted against the same
+artifact.** PR #94's first implementation commit was byte-identical to PR #93's
+head — same blob SHA for both the implementation and its tests — because the
+re-chartered issue instructed the agent to carry the retired unit forward. That
+is one review loop relabelled as two attempts, and the ledger reset hid it.
+
+A restart is valid only when at least one of these is true, and it says which:
+
+- the reviewable unit is smaller than the retired one;
+- a defect class was moved to the layer that causes it, rather than compensated
+  for at the layer that observes it;
+- a specification contradiction was resolved by choosing, rather than by adding
+  a requirement.
+
+Carrying forward a retired implementation is not a restart. Neither is a new
+plan over the same artifact.
+
+### The specification does not move during a lane
+
+An issue body is not edited in response to a review finding. Nine revisions of
+issue #71 included five that landed minutes after a specific finding and
+generalised it into a requirement, one written a single minute before the commit
+it described. Six of its sixteen acceptance criteria were findings promoted to
+requirements — each naming its originating defect rather than the property
+behind it, which is how thirteen of sixteen were graded satisfied on a PR nobody
+trusted, and how one criterion was marked satisfied on the exact head where two
+violations of it were filed.
+
+A finding that suggests the specification is wrong stops the lane and reopens
+the specification deliberately, with the orchestrator. It does not edit the
+issue mid-flight.
+
 The required GitHub Codex bot review is not a delegated task. The implementing
 agent may not create reviewer tasks or additional workers, and may not claim
 another issue.
@@ -67,9 +121,18 @@ A PR may merge only when all of these are true:
 
 - every acceptance criterion is met;
 - the required proof rung has current evidence for the PR head;
+- **the proof's evidence is an artifact the behaviour produced**, not the
+  absence of an error. A command exiting zero, a suite reporting green, or a
+  process not rejecting are all satisfiable by a proof that executed nothing.
+  Assert a value the behaviour under test wrote, and state what makes the proof
+  fail red if it does not run;
+- **independent confirmations are counted, not assumed.** One local run plus two
+  CI Node versions is one confirmation of behaviour, not three — a version
+  matrix cannot vary a defect in a test's own construction. Checks that cannot
+  observe the behaviour contribute zero;
 - the GitHub Codex review bot has posted a clean verdict for the current head;
 - all actionable review findings are resolved;
-- repository CI is green;
+- repository CI is green, including the reviewable-unit budget;
 - the branch is current and mergeable against `master`;
 - no secret, private corpus, credential, or live-account artifact is included.
 

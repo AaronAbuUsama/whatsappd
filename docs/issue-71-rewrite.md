@@ -64,8 +64,18 @@ head, because a previous version of this issue instructed the implementer to
 carry the retired unit forward. Eight review rounds produced 28 findings, 19 of
 which were the same defect class recurring at a new site.
 
-`docs/issue-71-postmortem.md` is the full investigation. Four of its conclusions
-change this issue:
+**Read before implementing:**
+
+- `docs/issue-71-plan.md` — the nine decisions behind this body, the Phase 0
+  substrate specs, the disposition of the retired work, and the process rules
+  this issue is executed under. **Start here.**
+- `docs/issue-71-postmortem.md` — the full investigation, ten sections.
+- ADR-0028, ADR-0029, ADR-0030 — the decisions themselves, normative.
+- `docs/agents/frontier-execution.md` — the reviewable-unit budget, what a
+  restart after diagnosis must produce, and why this specification does not move
+  during a lane.
+
+Four conclusions from the investigation change this issue:
 
 1. **The domain behaviour was never the problem.** Merging, ordering, paging and
    dedupe worked in the first commit and never regressed. `client.ts` grew
