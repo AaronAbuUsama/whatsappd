@@ -453,7 +453,7 @@ export interface WhatsAppDataStore {
    * internally rather than adding a capability. `view` is the read seam for
    * the duration of `fn`, and the only one: the store's own methods open a
    * second, later read, which against a local libSQL file queues behind the
-   * one waiting on this callback and does not return.
+   * one still waiting on `fn` and does not return.
    */
   read<T>(accountId: string, fn: (view: MirrorView) => Promise<T>): Promise<T>;
 
