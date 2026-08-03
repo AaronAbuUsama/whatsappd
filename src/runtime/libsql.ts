@@ -1259,7 +1259,12 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
             batch.fromRevision,
             batch.revision,
             json(batch.events),
-            json(batch.patch),
+            // `aliases` is written even when empty, so its *absence* means one
+            // thing only: a row stored before the patch carried them. An
+            // ordinary batch that changed a contact without changing Address
+            // Resolution omits it from the patch it returns, and a decoder
+            // reading absence as "legacy" would invent deltas for that row.
+            json({ ...batch.patch, aliases: projection.aliases }),
           ],
         });
         await transaction.execute({

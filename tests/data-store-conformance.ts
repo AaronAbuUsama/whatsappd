@@ -618,6 +618,19 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       }
       expect(Object.fromEntries(aliases)).toEqual(snapshot.contactAliases);
       expect([...contacts.values()]).toEqual(snapshot.contacts);
+
+      // A change that moves a contact record but no alias carries no delta —
+      // and what `accepted()` reads back is exactly what `accept()` returned,
+      // so absence of a delta cannot be re-read as something to synthesize.
+      const renamed = await contact(LID, [LID, PN], "Renamed");
+      expect(renamed.patch.upserts.length).toBe(1);
+      expect(renamed.patch.aliases).toBe(undefined);
+      expect((await resource.data.accepted(ACCOUNT, 0)).map(({ patch }) => patch.aliases)).toEqual([
+        [{ nativeId: PN, contactId: PN }],
+        [{ nativeId: LID, contactId: LID }],
+        [{ nativeId: PN, contactId: LID }],
+        undefined,
+      ]);
     } finally {
       await resource.close();
     }
