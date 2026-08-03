@@ -1,5 +1,6 @@
 import { addressOf, type InboundMessage } from "./model/message.ts";
 import type { MessageRef, Outbound, SendOptions } from "./model/outbound.ts";
+import type { WaIdentity } from "./model/status.ts";
 import type { WhatsAppSession } from "./session.ts";
 import { createSubscriptionDispatcher, type WhatsAppEvent } from "./subscription.ts";
 
@@ -62,13 +63,34 @@ export interface RecordedSessionCommands {
 export interface TestWhatsAppSessionDriver {
   readonly session: Pick<
     WhatsAppSession,
-    "subscribe" | "send" | "markRead" | "setTyping" | "requestHistory" | "start" | "stop"
+    | "subscribe"
+    | "send"
+    | "markRead"
+    | "setTyping"
+    | "requestHistory"
+    | "start"
+    | "stop"
+    | "identity"
   >;
   readonly commands: RecordedSessionCommands;
   emit(event: TestWhatsAppEvent): Promise<void>;
 }
 
-export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
+export interface TestWhatsAppSessionOptions {
+  /**
+   * The linked account's own identity, as a live socket would report it.
+   *
+   * @remarks
+   * Reported only while the session is attached: `stop()` clears it, exactly as
+   * the real session's `identity()` reads through a socket it no longer has.
+   * Omit it for a session that never learned one.
+   */
+  readonly identity?: WaIdentity;
+}
+
+export function createTestWhatsAppSession(
+  options: TestWhatsAppSessionOptions = {},
+): TestWhatsAppSessionDriver {
   const sent: Array<{
     readonly to: string;
     readonly content: Outbound;
@@ -107,13 +129,22 @@ export function createTestWhatsAppSession(): TestWhatsAppSessionDriver {
   // A driver used without a supervising consumer must not crash the process on
   // a handler failure the caller already received from `emit()`.
   void life.catch(() => {});
+  let identity = options.identity;
 
   return {
     session: {
-      subscribe: (handlers, options) => dispatcher.subscribe(handlers, options),
+      subscribe: (handlers, subscribeOptions) => dispatcher.subscribe(handlers, subscribeOptions),
       send,
       start: () => life,
+      // A fresh object per call, because the live session builds one from the
+      // socket every time (`src/baileys/socket.ts`). Returning a stable
+      // reference here would let a consumer cache identity by reference, pass
+      // its own test, and re-copy on every read in production.
+      identity: () => identity && { ...identity },
       async stop() {
+        // The real session reads its identity through the socket, so stopping
+        // takes it away rather than leaving a stale one attached.
+        identity = undefined;
         endSession();
       },
       async markRead(refs) {

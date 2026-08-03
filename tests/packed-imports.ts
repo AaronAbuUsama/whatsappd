@@ -42,6 +42,19 @@ try {
         .map((file) => readFile(path.join(dist, file), "utf8")),
     )
   ).join("\n");
+  // A positive control, before anything is asserted absent. Every check below
+  // is a negative — `regex.test(declarations) === false` — and a `dist/` that
+  // is empty, stale, or emitted no `.d.mts` at all satisfies every one of them
+  // while observing nothing. That is the shape of the false green in
+  // `docs/issue-71-postmortem.md` section 6, so the file has to prove it is
+  // looking at real declarations first.
+  assert.ok(declarations.length > 0, "no packed declarations were read");
+  for (const published of ["createWhatsAppRuntime", "WhatsAppRuntime", "createSession"]) {
+    assert.ok(
+      new RegExp(`\\b${published}\\b`).test(declarations),
+      `${published} is missing from the packed declarations — they are not the artifact under test`,
+    );
+  }
   for (const removed of [
     "SessionStore",
     "IncomingMessage",
@@ -51,6 +64,31 @@ try {
     "libsqlStore",
   ]) {
     assert.equal(new RegExp(`\\b${removed}\\b`).test(declarations), false);
+  }
+  // The runtime-to-client source is an internal Module, not a public Adapter:
+  // its joint read, its account claim and its identity sample are how the
+  // friendly client reaches the Data Store transaction without a Backend
+  // parameter or a public `runtime.read()` (ADR-0030). None of it, and no part
+  // of the client core this stack layer builds on it, is a published contract
+  // yet. `RuntimeSession.identity` is deliberately not in this list: an
+  // application supplies its own session, so that capability has to be
+  // declarable.
+  for (const modulePrivate of [
+    "ClientRuntimeSource",
+    "clientSourceFor",
+    "ClientClaim",
+    "currentClaim",
+    "createWhatsAppClient",
+    "WhatsAppClientCore",
+    "ClientAccountState",
+    "ClientNamespace",
+    "fanout",
+  ]) {
+    assert.equal(
+      new RegExp(`\\b${modulePrivate}\\b`).test(declarations),
+      false,
+      `${modulePrivate} must not reach the packed declarations`,
+    );
   }
   for (const retiredVocabulary of [
     /\bcallbacks?\b/i,
@@ -93,7 +131,7 @@ try {
       });
       assert.equal(typeof backend.close, "function");
       await backend.close();
-      for (const removed of ["createChannelAdapter", "bindTools"]) {
+      for (const removed of ["createChannelAdapter", "bindTools", "createWhatsAppClient"]) {
         assert.equal(removed in root, false);
       }
       for (const subpath of ["adapters/eve", "channel", "sidecar", "stores/libsql", "stores/memory", "tools"]) {

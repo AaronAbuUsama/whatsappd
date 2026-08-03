@@ -12,7 +12,7 @@
  *
  * @packageDocumentation
  */
-import { isOnline, isTerminal, type Status } from "../model/status.ts";
+import { isOnline, isTerminal, type Status, type WaIdentity } from "../model/status.ts";
 import { refOf } from "../model/outbound.ts";
 import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
@@ -25,6 +25,7 @@ import {
   type AccountLeaseStore,
   type DurableInboundMessage,
   type DurableUpdate,
+  type MirrorView,
   type StoredMessagePage,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
@@ -126,6 +127,17 @@ export interface RuntimeSession {
   ): Unsubscribe;
   start?(): Promise<void>;
   stop?(): Promise<void>;
+  /**
+   * The linked account's own identity, once this session knows it.
+   *
+   * @remarks
+   * Sampled from whichever session is attached right now rather than retained,
+   * so a runtime that has stopped consuming the account reports no identity at
+   * all — the same distinction {@link WhatsAppClientConnectionState} draws
+   * between an observation and a stored status (ADR-0020). Optional because the
+   * runtime never requires it; a session that cannot answer simply has none.
+   */
+  identity?(): WaIdentity | undefined;
 }
 
 /** Configuration for {@link createWhatsAppRuntime}. */
@@ -188,6 +200,47 @@ export interface WhatsAppRuntime {
   onLive(listener: (frame: WhatsAppLiveFrame) => void): Unsubscribe;
 }
 
+/** An account claim as a client may hold it: a copy, never the live lease. */
+export interface ClientClaim {
+  readonly fencingToken: number;
+  readonly expiresAt: number;
+}
+
+/**
+ * Everything the friendly client needs from the runtime that produced it.
+ *
+ * @remarks
+ * An internal Module with exactly one production implementation, not an
+ * Adapter and not a port: nothing here is replaceable, and every member exists
+ * because the alternative would widen a public contract. `read()` is the Data
+ * Store's joint transaction, which a client receiving only a
+ * {@link WhatsAppRuntime} could otherwise reach only by being handed a
+ * {@link WhatsAppBackend} — infrastructure ownership leaking into application
+ * state. `frames()` is the same pull loop {@link WhatsAppClient.watch} follows,
+ * not a second one. `identity()` and `currentClaim()` sample what is attached
+ * and held right now, so neither can be retained past the session or lease that
+ * made it true (ADR-0030).
+ */
+export interface ClientRuntimeSource {
+  frames(signal?: AbortSignal): AsyncIterable<WhatsAppDurableFrame>;
+  onLive(listener: (frame: WhatsAppLiveFrame, claim: ClientClaim) => void): Unsubscribe;
+  read<T>(fn: (view: MirrorView) => Promise<T>): Promise<T>;
+  identity(): WaIdentity | undefined;
+  currentClaim(): ClientClaim | undefined;
+}
+
+/**
+ * The source each runtime this module created registered for its clients.
+ *
+ * @remarks
+ * Weak, and keyed by the runtime itself, so the association costs a runtime
+ * nothing once an application drops it — and so a value that merely has a
+ * runtime's shape has no source at all, which is what keeps
+ * `createWhatsAppClient()` a factory over *this* module's runtimes rather than
+ * over a structural type anything can satisfy.
+ */
+export const clientSourceFor = new WeakMap<WhatsAppRuntime, ClientRuntimeSource>();
+
 /**
  * One registration on one channel — a record, never the callback itself.
  *
@@ -215,7 +268,7 @@ interface Registration<Frame> {
  * never fatal. `--no-warnings` silences it, as it silences every warning; that
  * is the operator asking not to be told.
  */
-const surface = (error: unknown): void => {
+export const surface = (error: unknown): void => {
   try {
     process.emitWarning(
       error instanceof Error ? error : new Error(String(error), { cause: error }),
@@ -230,47 +283,52 @@ const surface = (error: unknown): void => {
 };
 
 /**
- * Deliver one frame to a copy of one channel's listeners.
+ * Call every current member of one listener set, once, in isolation.
  *
  * @remarks
- * Three properties, each a primitive rather than an ordering to re-establish at
- * every publication site (ADR-0029 rules 2–4):
+ * The one delivery primitive both the runtime's channels and the client's
+ * namespaces are built from, because ADR-0029's rules 2–4 are properties of a
+ * *value* — a membership copy and a membership check — and an ordering
+ * re-established by hand at each publication site is what stayed defective
+ * across all eight review rounds of the retired client:
  *
- * - membership is copied before the first delivery, so a registration made
- *   during fanout is not visited. Iterating the live `Set` re-enters it — one
+ * - membership is copied before the first call, so a registration made during
+ *   fanout is not visited. Iterating the live `Set` re-enters it — one
  *   publication was measured driving 200,000 deliveries;
  * - membership is rechecked before each call, so unsubscribing *another*
- *   listener during fanout takes effect on the frame already in flight;
- * - the copy each observer owns is taken outside the region guarding the call,
- *   so a frame that cannot be cloned costs one delivery rather than every
- *   listener, which ends the stream silently with no terminal frame.
+ *   listener during fanout takes effect on the delivery already in flight;
+ * - each call is isolated, so one listener — or one value that cannot be
+ *   prepared for it — costs one delivery rather than every listener, which
+ *   would end a stream silently with no terminal frame. A failing listener
+ *   stays subscribed: one dropped for a single bad value never receives
+ *   `closed` and simply goes quiet for ever.
  */
-function deliver<Frame extends { readonly type: string }>(
-  listeners: ReadonlySet<Registration<Frame>>,
-  frame: Frame,
+export function fanout<Listener>(
+  listeners: ReadonlySet<Listener>,
+  call: (listener: Listener) => void,
 ): void {
   const receiving = [...listeners];
   for (const listener of receiving) {
     if (!listeners.has(listener)) continue;
-    let owned: Frame;
     try {
-      // Each observer owns its view of mutable JavaScript data. Terminal
-      // errors deliberately retain identity so callers can compare causes.
-      owned = frame.type === "closed" ? { ...frame } : structuredClone(frame);
+      call(listener);
     } catch (error) {
-      surface(error);
-      continue;
-    }
-    try {
-      listener.notify(owned);
-    } catch (error) {
-      // Observers are downstream of a committed write, so one broken observer
-      // cannot roll it back or keep the rest from seeing it — and it stays
-      // subscribed, because an observer dropped for one bad frame never
-      // receives `closed` and simply goes quiet for ever.
       surface(error);
     }
   }
+}
+
+/** Deliver one frame to a copy of one channel's listeners. */
+function deliver<Frame extends { readonly type: string }>(
+  listeners: ReadonlySet<Registration<Frame>>,
+  frame: Frame,
+): void {
+  fanout(listeners, (listener) => {
+    // Each observer owns its view of mutable JavaScript data, and the copy is
+    // taken per listener so an unclonable frame costs one delivery. Terminal
+    // errors deliberately retain identity so callers can compare causes.
+    listener.notify(frame.type === "closed" ? { ...frame } : structuredClone(frame));
+  });
 }
 
 /**
@@ -701,7 +759,14 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     return attempt;
   }
 
-  return {
+  /** Whether a session's failure to report its identity has been surfaced. */
+  let identityFaultReported = false;
+
+  /** The claim as anything outside this closure may hold it (ADR-0030). */
+  const currentClaim = (): ClientClaim | undefined =>
+    lease && { fencingToken: lease.fencingToken, expiresAt: lease.expiresAt };
+
+  const runtime: WhatsAppRuntime = {
     accountId,
     start,
     stop,
@@ -725,10 +790,175 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       return () => liveListeners.delete(registration);
     },
   };
+
+  clientSourceFor.set(runtime, {
+    // The same coordination `watch()` follows, reached through the same
+    // function: a second subscribe/snapshot/gap/cancellation loop is the
+    // duplication ADR-0030 exists to prevent.
+    frames: (signal) => durableFrames(runtime, signal ? { signal } : undefined),
+    onLive: (listener) =>
+      runtime.onLive((frame) => {
+        const claim = currentClaim();
+        // A live observation is only ever some claim's. Published without one —
+        // as an `unavailable` presence arriving after teardown is — there is
+        // nothing a client could treat as current, so it is not delivered at
+        // all rather than delivered for the client to remember to discard.
+        if (!claim) return;
+        listener(frame, claim);
+      }),
+    read: (fn) => backend.data.read(accountId, fn),
+    // Sampled, never retained: `release()` clears the session, so a runtime
+    // that has stopped consuming the account reports no identity.
+    //
+    // Guarded here rather than at each caller, because this is the seam that
+    // knows the session is application code. A client samples this *between*
+    // committing a transition and announcing it, so a throw would cost the
+    // whole delivery for a change already applied — and its recovery path
+    // samples again, which would lose that too. A session that cannot answer
+    // has no identity to report; that is not a reason to stop reporting.
+    identity: () => {
+      try {
+        return session?.identity?.();
+      } catch (error) {
+        // Reported once. A client samples this on every read that derives live
+        // state, not only per delivery, so a session that fails persistently
+        // would otherwise emit one warning per application read — and a warning
+        // handler that itself reads the account would never terminate.
+        if (!identityFaultReported) {
+          identityFaultReported = true;
+          surface(error);
+        }
+        return undefined;
+      }
+    },
+    currentClaim,
+  });
+
+  return runtime;
 }
 
 /** Distinguishes "the watch was cancelled" from any snapshot a read returns. */
 const CANCELLED = Symbol("cancelled");
+
+/**
+ * The two reads {@link durableFrames} follows an account's mirror through.
+ *
+ * @remarks
+ * Deliberately narrower than {@link WhatsAppRuntime}: the coordination below is
+ * the whole of this project's frame-following correctness, so it is written
+ * once against exactly what it uses and every consumer — the in-process client
+ * and the friendly client's private source — is forced through that one
+ * implementation rather than re-deriving it.
+ */
+interface DurableFrameSource {
+  snapshot(): Promise<WhatsAppSnapshot>;
+  onFrame(listener: (frame: WhatsAppDurableFrame) => void): Unsubscribe;
+}
+
+/**
+ * Follow one account's revision-ordered channel: a current Snapshot Window
+ * first, then every contiguous change after it.
+ *
+ * @remarks
+ * Subscribes before the first read, applies only contiguous revisions,
+ * replaces state from a fresh snapshot across a gap, makes cancellation
+ * awaitable rather than merely observable, and ends on the terminal frame.
+ */
+async function* durableFrames(
+  source: DurableFrameSource,
+  options?: { readonly signal?: AbortSignal },
+): AsyncGenerator<WhatsAppDurableFrame> {
+  const signal = options?.signal;
+  const queued: WhatsAppDurableFrame[] = [];
+  let wake: (() => void) | undefined;
+  let close!: (frame: Extract<WhatsAppDurableFrame, { type: "closed" }>) => void;
+  const closed = new Promise<Extract<WhatsAppDurableFrame, { type: "closed" }>>((resolve) => {
+    close = resolve;
+  });
+  const push = (frame: WhatsAppDurableFrame): void => {
+    queued.push(frame);
+    if (frame.type === "closed") close(frame);
+    wake?.();
+  };
+  // Subscribed before the snapshot is read, so a change committed while it
+  // is being read is buffered rather than lost.
+  const off = source.onFrame(push);
+  let onAbort = (): void => {};
+  // Cancellation has to be awaitable, not just observable: a snapshot read
+  // that never settles would otherwise keep the generator suspended past
+  // the abort, holding its subscription with no way to reach cleanup.
+  const cancelled = new Promise<typeof CANCELLED>((resolve) => {
+    if (signal?.aborted) resolve(CANCELLED);
+    onAbort = (): void => {
+      wake?.();
+      resolve(CANCELLED);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+
+  // The revision the consumer has been brought up to. Patches are applied
+  // only from exactly here (ADR-0011), so it moves with what is yielded
+  // rather than staying at the first snapshot's revision.
+  let applied = -1;
+  const resnapshot = async (): Promise<
+    WhatsAppSnapshot | typeof CANCELLED | Extract<WhatsAppDurableFrame, { type: "closed" }>
+  > => {
+    const alreadyClosed = queued.find(
+      (frame): frame is Extract<WhatsAppDurableFrame, { type: "closed" }> =>
+        frame.type === "closed",
+    );
+    if (alreadyClosed) return alreadyClosed;
+    const snapshot = await Promise.race([source.snapshot(), cancelled, closed]);
+    if (snapshot === CANCELLED || "type" in snapshot) return snapshot;
+    applied = snapshot.revision;
+    return snapshot;
+  };
+
+  try {
+    const snapshot = await resnapshot();
+    if (snapshot === CANCELLED || signal?.aborted) return;
+    if ("type" in snapshot) {
+      yield snapshot;
+      return;
+    }
+    yield { type: "snapshot", snapshot };
+    while (!signal?.aborted) {
+      for (const frame of queued.splice(0)) {
+        if (frame.type === "patch") {
+          // Already applied — a repeat, or a change the snapshot carried.
+          if (frame.patch.revision <= applied) continue;
+          // A missing intermediate change cannot be applied over, and
+          // nothing may be silently skipped: replace state with a snapshot.
+          if (frame.patch.fromRevision !== applied) {
+            const fresh = await resnapshot();
+            if (fresh === CANCELLED || signal?.aborted) return;
+            if ("type" in fresh) {
+              yield fresh;
+              return;
+            }
+            yield { type: "snapshot", snapshot: fresh };
+            continue;
+          }
+          applied = frame.patch.revision;
+        }
+        yield frame;
+        // The runtime has stopped consuming the account, so nothing can
+        // follow: end the stream rather than suspending on a wake that will
+        // never come.
+        if (frame.type === "closed") return;
+        if (signal?.aborted) return;
+      }
+      if (queued.length === 0 && !signal?.aborted)
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      wake = undefined;
+    }
+  } finally {
+    off();
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
 
 /**
  * Create the client for a runtime living in this process.
@@ -741,98 +971,6 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
     // Straight to the mirror, deliberately independent of any watch: paging is
     // a read, and nothing about it asks WhatsApp for anything (ADR-0010).
     messages: (chatId, options) => runtime.messages(chatId, options),
-
-    async *watch(options) {
-      const signal = options?.signal;
-      const queued: WhatsAppDurableFrame[] = [];
-      let wake: (() => void) | undefined;
-      let close!: (frame: Extract<WhatsAppDurableFrame, { type: "closed" }>) => void;
-      const closed = new Promise<Extract<WhatsAppDurableFrame, { type: "closed" }>>((resolve) => {
-        close = resolve;
-      });
-      const push = (frame: WhatsAppDurableFrame): void => {
-        queued.push(frame);
-        if (frame.type === "closed") close(frame);
-        wake?.();
-      };
-      // Subscribed before the snapshot is read, so a change committed while it
-      // is being read is buffered rather than lost.
-      const off = runtime.onFrame(push);
-      let onAbort = (): void => {};
-      // Cancellation has to be awaitable, not just observable: a snapshot read
-      // that never settles would otherwise keep the generator suspended past
-      // the abort, holding its subscription with no way to reach cleanup.
-      const cancelled = new Promise<typeof CANCELLED>((resolve) => {
-        if (signal?.aborted) resolve(CANCELLED);
-        onAbort = (): void => {
-          wake?.();
-          resolve(CANCELLED);
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-      });
-
-      // The revision the consumer has been brought up to. Patches are applied
-      // only from exactly here (ADR-0011), so it moves with what is yielded
-      // rather than staying at the first snapshot's revision.
-      let applied = -1;
-      const resnapshot = async (): Promise<
-        WhatsAppSnapshot | typeof CANCELLED | Extract<WhatsAppDurableFrame, { type: "closed" }>
-      > => {
-        const alreadyClosed = queued.find(
-          (frame): frame is Extract<WhatsAppDurableFrame, { type: "closed" }> =>
-            frame.type === "closed",
-        );
-        if (alreadyClosed) return alreadyClosed;
-        const snapshot = await Promise.race([runtime.snapshot(), cancelled, closed]);
-        if (snapshot === CANCELLED || "type" in snapshot) return snapshot;
-        applied = snapshot.revision;
-        return snapshot;
-      };
-
-      try {
-        const snapshot = await resnapshot();
-        if (snapshot === CANCELLED || signal?.aborted) return;
-        if ("type" in snapshot) {
-          yield snapshot;
-          return;
-        }
-        yield { type: "snapshot", snapshot };
-        while (!signal?.aborted) {
-          for (const frame of queued.splice(0)) {
-            if (frame.type === "patch") {
-              // Already applied — a repeat, or a change the snapshot carried.
-              if (frame.patch.revision <= applied) continue;
-              // A missing intermediate change cannot be applied over, and
-              // nothing may be silently skipped: replace state with a snapshot.
-              if (frame.patch.fromRevision !== applied) {
-                const fresh = await resnapshot();
-                if (fresh === CANCELLED || signal?.aborted) return;
-                if ("type" in fresh) {
-                  yield fresh;
-                  return;
-                }
-                yield { type: "snapshot", snapshot: fresh };
-                continue;
-              }
-              applied = frame.patch.revision;
-            }
-            yield frame;
-            // The runtime has stopped consuming the account, so nothing can
-            // follow: end the stream rather than suspending on a wake that will
-            // never come.
-            if (frame.type === "closed") return;
-            if (signal?.aborted) return;
-          }
-          if (queued.length === 0 && !signal?.aborted)
-            await new Promise<void>((resolve) => {
-              wake = resolve;
-            });
-          wake = undefined;
-        }
-      } finally {
-        off();
-        signal?.removeEventListener("abort", onAbort);
-      }
-    },
+    watch: (options) => durableFrames(runtime, options),
   };
 }
