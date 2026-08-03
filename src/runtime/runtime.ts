@@ -205,15 +205,17 @@ interface Registration<Frame> {
  * Report an observer's failure where nothing downstream can swallow it.
  *
  * @remarks
- * Rethrown on a fresh microtask so it reaches the process's uncaught-exception
- * path rather than the runtime's own control flow. An observer is application
- * code: a failing one must be able neither to roll back a committed write nor
- * to disappear without evidence (ADR-0029 rule 4).
+ * An observer is application code, and a failing one must be able neither to
+ * roll back a committed write, nor to disappear without evidence, nor to stop
+ * the other observers. Rethrowing asynchronously satisfies the first two and
+ * breaks the third: with no `uncaughtException` handler installed — the normal
+ * worker — the throw ends the process, so nobody receives the next frame or
+ * `closed`, which is the very isolation this is meant to provide. A warning is
+ * asynchronous, always printed, observable on `process.on("warning")`, and
+ * never fatal.
  */
 const surface = (error: unknown): void => {
-  queueMicrotask(() => {
-    throw error;
-  });
+  process.emitWarning(error instanceof Error ? error : new Error(String(error)));
 };
 
 /**
@@ -315,6 +317,8 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
   let terminal: Extract<WhatsAppDurableFrame, { type: "closed" }> | undefined;
+  /** Guards the terminal replay against a listener that resubscribes inside it. */
+  let replaying = false;
 
   const publishDurable = (frame: WhatsAppDurableFrame): void => deliver(durableListeners, frame);
   const publishLive = (frame: WhatsAppLiveFrame): void => deliver(liveListeners, frame);
@@ -518,6 +522,11 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         // is worse than reporting a messy stop.
         terminal = { type: "closed", ...(failure && { error: failure.error }) };
         publishDurable(terminal);
+        // Nothing can be published again on either channel, and a closed
+        // runtime an application still holds would otherwise keep every
+        // observer and its captured state alive for the process's life.
+        durableListeners.clear();
+        liveListeners.clear();
       }
     })());
   }
@@ -658,7 +667,19 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
     onFrame(listener) {
       if (terminal) {
-        listener({ ...terminal });
+        // Replaying the terminal frame to a late subscriber must not re-enter:
+        // a listener that resubscribes from `closed` would otherwise recurse
+        // until the stack ran out. The stream is over, and one delivery is the
+        // whole of what a late subscriber is owed.
+        if (replaying) return () => {};
+        replaying = true;
+        try {
+          listener({ ...terminal });
+        } catch (error) {
+          surface(error);
+        } finally {
+          replaying = false;
+        }
         return () => {};
       }
       const registration = { notify: listener };
@@ -666,6 +687,9 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       return () => durableListeners.delete(registration);
     },
     onLive(listener) {
+      // Nothing follows the terminal frame on this channel, so a registration
+      // made after it would be retained for ever and never called.
+      if (terminal) return () => {};
       const registration = { notify: listener };
       liveListeners.add(registration);
       return () => liveListeners.delete(registration);

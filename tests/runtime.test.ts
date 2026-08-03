@@ -43,6 +43,27 @@ const AT = 1_700_000_000_000;
 /** Let queued microtasks and one macrotask turn drain — never a timed wait. */
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
+/**
+ * Collect what the runtime surfaced while `work` ran.
+ *
+ * @remarks
+ * `process.on("warning")` and nothing else — the same environment a worker
+ * runs in. A harness that had to install an uncaught-exception capture would
+ * be proving isolation the production path does not have.
+ */
+async function surfaced(work: () => Promise<void>): Promise<unknown[]> {
+  const warnings: unknown[] = [];
+  const collect = (warning: unknown): void => void warnings.push(warning);
+  process.on("warning", collect);
+  try {
+    await work();
+    await tick();
+  } finally {
+    process.off("warning", collect);
+  }
+  return warnings;
+}
+
 /** Keep timer-driven public behavior observable on Node even when its timer is unreferenced. */
 async function withDeadline<T>(promise: Promise<T>, ms = 1_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2163,11 +2184,9 @@ test("a throwing frame observer stays subscribed, and its failure is surfaced", 
   const { driver, runtime } = lane("personal");
   await runtime.start();
   const broken = new Error("observer failed");
-  const surfaced: unknown[] = [];
   const brokenSaw: string[] = [];
   const healthySaw: string[] = [];
-  process.setUncaughtExceptionCaptureCallback((error) => surfaced.push(error));
-  try {
+  const warnings = await surfaced(async () => {
     runtime.onFrame((frame) => {
       brokenSaw.push(frame.type);
       throw broken;
@@ -2181,10 +2200,7 @@ test("a throwing frame observer stays subscribed, and its failure is surfaced", 
     // Teardown stamps the disconnection, so a third patch precedes the
     // terminal frame.
     await runtime.stop();
-    await tick();
-  } finally {
-    process.setUncaughtExceptionCaptureCallback(null);
-  }
+  });
 
   expect((await runtime.messages(PERSON)).messages.map((message) => message.messageId)).toEqual([
     "m2",
@@ -2192,10 +2208,11 @@ test("a throwing frame observer stays subscribed, and its failure is surfaced", 
   ]);
   expect(healthySaw).toEqual(["patch", "patch", "patch", "closed"]);
   // Still subscribed after failing: it saw every later frame including the
-  // terminal one, which a silently unsubscribed observer never receives.
+  // terminal one, which a silently unsubscribed observer never receives — and
+  // this process is still alive to check, which a rethrow would not leave it.
   expect(brokenSaw).toEqual(healthySaw);
-  expect(surfaced.length).toBe(4);
-  expect(surfaced.every((error) => error === broken)).toBe(true);
+  expect(warnings.length).toBe(4);
+  expect(warnings.every((error) => error === broken)).toBe(true);
 });
 
 test("a frame observer that resubscribes during fanout is not re-visited", async () => {
@@ -2249,19 +2266,44 @@ test("re-registering an observer during fanout defers it to the next frame", asy
 test("unsubscribing another observer during fanout drops it from the frame in flight", async () => {
   const { driver, runtime } = lane("personal");
   await runtime.start();
+  let cancelled = 0;
   let dropped = 0;
   let off = (): void => {};
   // Registered first, so the cancellation lands while the frame is still being
   // delivered rather than before it starts.
-  runtime.onFrame(() => off());
+  runtime.onFrame(() => {
+    cancelled += 1;
+    off();
+  });
   off = runtime.onFrame(() => {
     dropped += 1;
   });
 
   await driver.emit({ type: "message", message: hello() });
 
-  expect(dropped).toBe(0);
+  // Both numbers, so a fanout that never ran fails here instead of reading as
+  // a successful cancellation.
+  expect([cancelled, dropped]).toEqual([1, 0]);
   await runtime.stop();
+});
+
+test("an observer that resubscribes from the terminal frame is not replayed for ever", async () => {
+  const { runtime } = lane("personal");
+  await runtime.start();
+  let replays = 0;
+  runtime.onFrame(function resubscribe(frame) {
+    if (frame.type !== "closed") return;
+    replays += 1;
+    // Registering after the stream ended is what replays the terminal frame,
+    // so an observer that does it from inside that replay would recurse.
+    runtime.onFrame(resubscribe);
+  });
+
+  await runtime.stop();
+
+  // One delivery for the frame itself, one for the late registration it made.
+  // A third would be a recursion that only the stack depth bounds.
+  expect(replays).toBe(2);
 });
 
 test("a frame that cannot be cloned costs one delivery, not every observer", async () => {
@@ -2269,9 +2311,7 @@ test("a frame that cannot be cloned costs one delivery, not every observer", asy
   await runtime.start();
   const durable: string[] = [];
   const live: string[] = [];
-  const surfaced: unknown[] = [];
-  process.setUncaughtExceptionCaptureCallback((error) => surfaced.push(error));
-  try {
+  const warnings = await surfaced(async () => {
     runtime.onFrame((frame) => void durable.push(frame.type));
     runtime.onLive((frame) => void live.push(frame.type));
 
@@ -2281,12 +2321,9 @@ test("a frame that cannot be cloned costs one delivery, not every observer", asy
       type: "presence",
       presence: { chatId: PERSON, kind: "available", at: AT, seen: () => {} } as PresenceUpdate,
     });
-    await tick();
-  } finally {
-    process.setUncaughtExceptionCaptureCallback(null);
-  }
+  });
   expect(live).toEqual([]);
-  expect(surfaced.map((error) => (error as Error).name)).toEqual(["DataCloneError"]);
+  expect(warnings.map((error) => (error as Error).name)).toEqual(["DataCloneError"]);
 
   // Both observers are still registered: the next frame on either channel
   // reaches them, and the terminal frame does too.
