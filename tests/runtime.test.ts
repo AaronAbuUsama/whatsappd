@@ -2306,6 +2306,22 @@ test("an observer that resubscribes from the terminal frame is not replayed for 
   expect(replays).toBe(2);
 });
 
+test("an observer registered from inside a terminal replay still receives it", async () => {
+  const { runtime } = lane("personal");
+  await runtime.start();
+  await runtime.stop();
+
+  const seen: string[] = [];
+  // Registering late replays the terminal frame — and a subscriber that
+  // another subscriber registers while handling it is owed one too.
+  runtime.onFrame((frame) => {
+    seen.push(`first:${frame.type}`);
+    runtime.onFrame((later) => void seen.push(`second:${later.type}`));
+  });
+
+  expect(seen).toEqual(["first:closed", "second:closed"]);
+});
+
 test("a frame that cannot be cloned costs one delivery, not every observer", async () => {
   const { driver, runtime } = lane("personal");
   await runtime.start();

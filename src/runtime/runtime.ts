@@ -212,10 +212,21 @@ interface Registration<Frame> {
  * worker — the throw ends the process, so nobody receives the next frame or
  * `closed`, which is the very isolation this is meant to provide. A warning is
  * asynchronous, always printed, observable on `process.on("warning")`, and
- * never fatal.
+ * never fatal. `--no-warnings` silences it, as it silences every warning; that
+ * is the operator asking not to be told.
  */
 const surface = (error: unknown): void => {
-  process.emitWarning(error instanceof Error ? error : new Error(String(error)));
+  try {
+    process.emitWarning(
+      error instanceof Error ? error : new Error(String(error), { cause: error }),
+    );
+  } catch {
+    // Describing a failure must not become a second one escaping the fanout:
+    // `String()` throws for a null-prototype object or a hostile
+    // `Symbol.toPrimitive`, and observers that have not run yet would lose a
+    // committed frame to it.
+    process.emitWarning(new Error("an observer failed with a value that cannot be described"));
+  }
 };
 
 /**
@@ -317,8 +328,36 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
   let terminal: Extract<WhatsAppDurableFrame, { type: "closed" }> | undefined;
-  /** Guards the terminal replay against a listener that resubscribes inside it. */
+  /** Late subscribers owed the terminal frame, and those already handed it. */
+  const owedTerminal: Array<(frame: WhatsAppDurableFrame) => void> = [];
+  const handedTerminal = new Set<(frame: WhatsAppDurableFrame) => void>();
   let replaying = false;
+
+  /**
+   * Hand the terminal frame to one subscriber that arrived after closure.
+   *
+   * @remarks
+   * Drained rather than delivered inline, and through {@link deliver} rather
+   * than beside it, so registration during a replay behaves exactly as
+   * registration during a fanout does — that seam is where every listener
+   * defect in this rewrite lived. Draining is what lets a subscriber
+   * registered by another subscriber's terminal callback still receive it;
+   * handing each callback the frame once is what stops a subscriber that
+   * re-registers *itself* from being handed it for ever.
+   */
+  const replayTerminal = (listener: (frame: WhatsAppDurableFrame) => void): void => {
+    if (!terminal || handedTerminal.has(listener)) return;
+    handedTerminal.add(listener);
+    owedTerminal.push(listener);
+    if (replaying) return;
+    replaying = true;
+    try {
+      for (let next = owedTerminal.shift(); next; next = owedTerminal.shift())
+        deliver(new Set([{ notify: next }]), terminal);
+    } finally {
+      replaying = false;
+    }
+  };
 
   const publishDurable = (frame: WhatsAppDurableFrame): void => deliver(durableListeners, frame);
   const publishLive = (frame: WhatsAppLiveFrame): void => deliver(liveListeners, frame);
@@ -667,19 +706,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
     onFrame(listener) {
       if (terminal) {
-        // Replaying the terminal frame to a late subscriber must not re-enter:
-        // a listener that resubscribes from `closed` would otherwise recurse
-        // until the stack ran out. The stream is over, and one delivery is the
-        // whole of what a late subscriber is owed.
-        if (replaying) return () => {};
-        replaying = true;
-        try {
-          listener({ ...terminal });
-        } catch (error) {
-          surface(error);
-        } finally {
-          replaying = false;
-        }
+        replayTerminal(listener);
         return () => {};
       }
       const registration = { notify: listener };
