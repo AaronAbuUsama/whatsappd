@@ -134,8 +134,24 @@ a third site keying the raw address compiled clean.
 no Address Resolution evidence of its own, and an address with no contact record
 yet must still have somewhere to live (ADR-0020).
 
-**Pinned by** two red tests — a read that does not span the forms, and a release
-that does not.
+**Recurred a second time, at review round 3, on the primitive's own third
+seam.** `read` and `release` resolved the subject; `retain` did not — correctly,
+since a presence carries no Address Resolution evidence — but `read` then
+answered in the contact's `nativeIds` order and returned the _first_ current
+hit. So a peer who went idle in a 1:1 (observed under its PN) and then started
+typing in a group (observed under its LID) was reported idle, on both forms, for
+the whole freshness window; and the delivery announcing the change reported the
+state before it.
+
+**Closed by** ordering on arrival. The primitive stamps each retained
+observation with a counter and `read` returns the newest current one. The first
+attempt ordered on `expiresAt` and was wrong for a reason worth recording: two
+observations of one peer routinely land in the _same millisecond_, and
+`expiresAt` is the observation instant plus a constant, so it cannot separate
+them. The test caught it.
+
+**Pinned by** three red tests — a read that does not span the forms, a release
+that does not, and a read that answers in `nativeIds` order rather than newest.
 
 **Inherited obligation.** Layer 2's opened-conversation presence uses this
 primitive rather than its own map.
@@ -162,6 +178,11 @@ also marks through `put.connection` or `put.closed`.
 **Closed by** `fanout()` in `src/runtime/runtime.ts`, shared by the Runtime's
 channels and the Client's namespaces, plus registration _records_ rather than
 callbacks as Set members.
+
+**Pinned by** the listener-rule tests, and — since round 3 — by one that
+subscribes a single function twice and asserts two deliveries, then releases one
+and asserts one more. Until that was written, a Set deduped by callback identity
+passed the entire suite, which is this file's own rule going unapplied to itself.
 
 **Recurred once, inside this PR.** Membership was copied per namespace rather
 than per transition, so a listener reached under one namespace could add or
@@ -235,6 +256,9 @@ provable only if the substrate changes.
 | Freed native ids are dropped from the alias map             | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                                                              |
 | The delivery basis is restored rather than cleared          | Save/restore is defensive against a nested `commit`, which no public path can currently produce.                                                                                                                                           |
 | `close()` releases each registration; `close()` is memoized | After `following` is false and the pump has ended, no commit follows, so neither is behaviourally observable. Releasing each registration detaches caller-supplied abort signals; the memo makes concurrent closes join. Both are hygiene. |
+| `put.account`'s and `put.connection`'s marks, separately    | Mutually redundant: every reachable account change marks through at least one of them, so neither is falsifiable alone. Removing **both** is caught.                                                                                       |
+| `put.alias`'s mark                                          | Redundant with `put.contact` — every alias the projection emits accompanies the contact upsert that produced it (`projection.ts`). Not, as an earlier note here said, with `put.connection`.                                               |
+| `error` present-but-`undefined` on a closure                | `error` is spread rather than tested, so a failure whose cause _is_ `undefined` still reports the key. Correct in code, and **unproven**: no public path constructs a terminal failure with an `undefined` cause.                          |
 
 ## Decisions taken here that a later layer may want to revisit
 

@@ -385,7 +385,17 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       held.pushName !== identity.pushName ||
       held.phoneE164 !== identity.phoneE164
     )
-      identityCopy = own(identity);
+      // Rebuilt from the declared fields rather than `own()`ed. This is the one
+      // value entering Client state that a `structuredClone` has not already
+      // vetted — every other arrives through `deliver()`, which cloned it — and
+      // it is sampled between committing a transition and announcing it, where
+      // a throw would cost the delivery outright. An application session may
+      // return anything; copying exactly the contract cannot fail.
+      identityCopy = Object.freeze({
+        jid: identity.jid,
+        ...(identity.pushName !== undefined && { pushName: identity.pushName }),
+        ...(identity.phoneE164 !== undefined && { phoneE164: identity.phoneE164 }),
+      });
     return identityCopy;
   };
 
@@ -448,17 +458,47 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
    * contacts transition if a long-lived account ever makes it matter.
    */
   const presence = (() => {
-    const held = new Map<string, Observation<PresenceKind>>();
+    /**
+     * Each retained observation, and the arrival that produced it.
+     *
+     * @remarks
+     * Ordered by arrival rather than by `expiresAt`. Two observations of one
+     * peer commonly land in the same millisecond — going idle in a 1:1 and
+     * typing in a group, in one batch — and `expiresAt` is the observation
+     * instant plus a constant, so it cannot separate them. A counter can, and
+     * it is what "newest" has to mean here regardless of clock resolution.
+     */
+    const held = new Map<string, { readonly at: number; readonly of: Observation<PresenceKind> }>();
+    let arrivals = 0;
     return {
+      /**
+       * What this subject is doing now, across every form of its contact.
+       *
+       * @remarks
+       * The newest current observation wins, not the first form in the
+       * contact's list. WhatsApp names the chat in a 1:1 and the participant in
+       * a group, so one peer is observed under its PN on one occasion and its
+       * LID on another — and going idle in a 1:1 then typing in a group is a
+       * *sequence*, not a contradiction. Answering in `nativeIds` order reported
+       * the superseded value for a whole freshness window, and made the delivery
+       * that announced the change report the state before it.
+       *
+       * `expiresAt` is the observation instant plus one runtime-constant
+       * freshness, so it orders two observations of one peer exactly as their
+       * arrival did.
+       */
       read(subject: string, from: Derivation): PresenceKind | undefined {
+        let newest: { readonly at: number; readonly of: Observation<PresenceKind> } | undefined;
         for (const form of formsOf(subject)) {
-          const found = current(held.get(form), from);
-          if (found !== undefined) return found;
+          const entry = held.get(form);
+          if (!entry || current(entry.of, from) === undefined) continue;
+          if (!newest || entry.at > newest.at) newest = entry;
         }
-        return undefined;
+        return newest?.of.value;
       },
       retain(subject: string, observation: Observation<PresenceKind>): void {
-        held.set(subject, observation);
+        arrivals += 1;
+        held.set(subject, { at: arrivals, of: observation });
       },
       /** Forget every form of this subject. True when anything was held. */
       release(subject: string): boolean {

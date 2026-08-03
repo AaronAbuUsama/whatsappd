@@ -315,11 +315,19 @@ test("every kind of change announces itself to the namespace that holds it", asy
     for (const namespace of ["account", "chats", "contacts", "groups"] as const)
       worker.client[namespace].subscribe(() => void (seen[namespace] += 1));
 
-    // The account record: a connection instant is durable account state.
+    // A transitional phase deliberately: `connecting` records no durable
+    // instant, so the mirror revision does not move and the live announcement
+    // is the only one there is. Driving `online` instead would let the durable
+    // patch stand in, and this assertion would hold with the live mark deleted.
+    await worker.driver.emit({ type: "connection", status: { phase: "connecting" } });
+    await tick();
+    expect(seen.account).toBe(1);
+    expect(worker.client.account.get().connection?.phase).toBe("connecting");
+
+    // …and then the durable half, which does move the account record.
     await worker.driver.emit({ type: "connection", status: { phase: "online" } });
     await tick();
-    expect(seen.account > 0).toBe(true);
-    expect(worker.client.account.get().connection?.phase).toBe("online");
+    expect(typeof worker.client.account.get().lastConnectedAt).toBe("number");
     const afterConnection = seen.account;
 
     // A chat.
@@ -1132,6 +1140,45 @@ test("a listener that closes the client cannot split its own delivery either", a
   }
 });
 
+test("the newest observation wins across a contact's native forms", async () => {
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    await worker.driver.emit({
+      type: "contact",
+      contact: { id: PERSON, nativeIds: [PERSON, PERSON_LID] },
+    });
+    // Idle in the 1:1, where WhatsApp names the chat — the PN form.
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "idle" } });
+    await tick();
+    expect(worker.client.contacts.presence(PERSON)).toBe("idle");
+
+    // What every listener was told during the transition that follows.
+    const announced: Array<string | undefined> = [];
+    worker.client.contacts.subscribe(() =>
+      announced.push(worker.client.contacts.presence(PERSON_LID)),
+    );
+
+    // Then typing in a group, where WhatsApp names the participant — the LID
+    // form. A sequence, not a contradiction: the later observation is the truth.
+    await worker.driver.emit({
+      type: "presence",
+      presence: { chatId: ROOM, participant: PERSON_LID, kind: "typing" },
+    });
+    await tick();
+
+    // Answering in `nativeIds` order would report the superseded `idle` here,
+    // for both forms and for the whole freshness window.
+    expect(worker.client.contacts.presence(PERSON_LID)).toBe("typing");
+    expect(worker.client.contacts.presence(PERSON)).toBe("typing");
+    // …and the delivery that announced the change must not report the state
+    // before it.
+    expect(announced.includes("typing")).toBe(true);
+    expect(announced.includes("idle")).toBe(false);
+  } finally {
+    await worker.stop();
+  }
+});
+
 test("an unavailable naming one native form ends the observation made under another", async () => {
   const worker = await lane({ freshnessMs: 600_000 });
   try {
@@ -1208,6 +1255,17 @@ test("a session that throws on identity cannot silence the client", async () => 
     // answer means — not a reason to stop reporting the account at all.
     expect(client.account.get().identity).toBe(undefined);
     expect(client.account.get().closed).toBe(false);
+
+    // Reported once, not once per read. Every read that derives live state
+    // samples the identity, so a persistently failing session would otherwise
+    // emit a warning per application read. At most one appears here, and it is
+    // the first fault's — `process.emitWarning` delivers asynchronously, so it
+    // can land inside this window rather than before it.
+    const reads = 50;
+    const repeated = await surfaced(async () => {
+      for (let read = 0; read < reads; read += 1) client.account.get();
+    });
+    expect(repeated.length <= 1).toBe(true);
   } finally {
     await client.close();
     await runtime.stop().catch(() => {});
@@ -1659,6 +1717,115 @@ test("committed values are client-owned and unaffected by mutating what a caller
     expect(worker.client.groups.list()[0]?.participants.length).toBe(1);
   } finally {
     await worker.stop();
+  }
+});
+
+test("a function subscribed twice owes two deliveries, and one release owes one", async () => {
+  // A registration is a record, not the callback. A set keyed by the callback
+  // could express neither of these (ADR-0013), and would pass every other test
+  // in this file.
+  const worker = await lane();
+  try {
+    let calls = 0;
+    const listener = (): void => void (calls += 1);
+    const offFirst = worker.client.chats.subscribe(listener);
+    worker.client.chats.subscribe(listener);
+
+    await worker.driver.emit({
+      type: "message",
+      message: textMessage({ id: "m1", chatId: PERSON, text: "one", timestamp: AT }),
+    });
+    await tick();
+    expect(calls).toBe(2);
+
+    // Releasing one registration leaves its twin subscribed.
+    offFirst();
+    await worker.driver.emit({
+      type: "message",
+      message: textMessage({ id: "m2", chatId: PERSON, text: "two", timestamp: AT + 1 }),
+    });
+    await tick();
+    expect(calls).toBe(3);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a live connection status is owned, and a closure carries an undefined cause", async () => {
+  // The connection status is committed state like any record, and the only one
+  // whose copy no other test performs.
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+    await tick();
+    const status = worker.client.account.get().connection;
+    assert.ok(status);
+    assert.throws(() => {
+      (status as { phase: string }).phase = "forged";
+    }, TypeError);
+    expect(worker.client.account.get().connection?.phase).toBe("online");
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a deliberate stop reports no failure, which is how a failure is told apart", async () => {
+  const worker = await lane();
+  try {
+    expect("error" in worker.client.account.get()).toBe(false);
+    await worker.runtime.stop();
+    await until(() => worker.client.account.get().closed);
+    // Closed, and no `error` key at all — `error` is spread rather than tested,
+    // so its *presence* is what says a failure ended this, independently of
+    // what the cause turned out to be.
+    expect(worker.client.account.get().closed).toBe(true);
+    expect("error" in worker.client.account.get()).toBe(false);
+  } finally {
+    await worker.client.close();
+  }
+});
+
+test("an identity a session builds from anything is still copied safely", async () => {
+  // The one value entering Client state that no `structuredClone` has already
+  // vetted, sampled between committing a transition and announcing it. An
+  // application session may return an object carrying anything; copying the
+  // declared fields cannot fail, where cloning it wholesale would throw and
+  // cost the delivery.
+  const driver = createTestWhatsAppSession();
+  const session: RuntimeSession = {
+    ...driver.session,
+    identity: () => ({
+      jid: "15551230000:7@s.whatsapp.net",
+      pushName: "Me",
+      // Not part of `WaIdentity`, and not structured-cloneable.
+      refresh: () => {},
+    }),
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend: memoryBackend(),
+    openSession: () => session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    let notified = 0;
+    client.chats.subscribe(() => void (notified += 1));
+
+    await driver.emit({
+      type: "message",
+      message: textMessage({ id: "m1", chatId: PERSON, text: "hi", timestamp: AT }),
+    });
+    await until(() => client.chats.list().length === 1);
+
+    expect(notified).toBe(1);
+    expect(client.account.get().identity?.jid).toBe("15551230000:7@s.whatsapp.net");
+    expect(client.account.get().identity?.pushName).toBe("Me");
+    // Only the contract's fields are carried across.
+    expect("refresh" in (client.account.get().identity ?? {})).toBe(false);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
   }
 });
 

@@ -759,6 +759,9 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     return attempt;
   }
 
+  /** Whether a session's failure to report its identity has been surfaced. */
+  let identityFaultReported = false;
+
   /** The claim as anything outside this closure may hold it (ADR-0030). */
   const currentClaim = (): ClientClaim | undefined =>
     lease && { fencingToken: lease.fencingToken, expiresAt: lease.expiresAt };
@@ -817,7 +820,14 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       try {
         return session?.identity?.();
       } catch (error) {
-        surface(error);
+        // Reported once. A client samples this on every read that derives live
+        // state, not only per delivery, so a session that fails persistently
+        // would otherwise emit one warning per application read — and a warning
+        // handler that itself reads the account would never terminate.
+        if (!identityFaultReported) {
+          identityFaultReported = true;
+          surface(error);
+        }
         return undefined;
       }
     },
