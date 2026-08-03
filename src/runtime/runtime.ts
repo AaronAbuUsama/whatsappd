@@ -29,8 +29,9 @@ import {
   type StoredMessagePageOptions,
   type WhatsAppBackend,
   type WhatsAppClient,
-  type WhatsAppClientFrame,
   type WhatsAppDurableEvent,
+  type WhatsAppDurableFrame,
+  type WhatsAppLiveFrame,
   type WhatsAppSnapshot,
 } from "./contracts.ts";
 
@@ -171,8 +172,105 @@ export interface WhatsAppRuntime {
   snapshot(): Promise<WhatsAppSnapshot>;
   /** One chat's stored messages, newest first. Reads storage, never WhatsApp. */
   messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
-  /** Observe published frames. The client seam; applications use a client. */
-  onFrame(listener: (frame: WhatsAppClientFrame) => void): Unsubscribe;
+  /**
+   * Observe the revision-ordered channel: snapshot, patch, and closed.
+   *
+   * @remarks
+   * The client seam; applications use a client. A listener registered after
+   * this runtime has closed is handed the terminal frame and nothing else.
+   */
+  onFrame(listener: (frame: WhatsAppDurableFrame) => void): Unsubscribe;
+  /**
+   * Observe the expiring channel: presence and connection. A separate
+   * registration because these carry no revision and stop being true by wall
+   * clock, so nothing can order them against a patch (ADR-0030).
+   */
+  onLive(listener: (frame: WhatsAppLiveFrame) => void): Unsubscribe;
+}
+
+/**
+ * One registration on one channel — a record, never the callback itself.
+ *
+ * @remarks
+ * Unsubscribing and resubscribing the same function during a fanout owes both
+ * effects: the old registration ends now, the new one starts next frame. A
+ * `Set` keyed by the callback cannot tell them apart, and could not give one
+ * subscription per registration to a function registered twice (ADR-0013).
+ */
+interface Registration<Frame> {
+  readonly notify: (frame: Frame) => void;
+}
+
+/**
+ * Report an observer's failure where nothing downstream can swallow it.
+ *
+ * @remarks
+ * An observer is application code, and a failing one must be able neither to
+ * roll back a committed write, nor to disappear without evidence, nor to stop
+ * the other observers. Rethrowing asynchronously satisfies the first two and
+ * breaks the third: with no `uncaughtException` handler installed — the normal
+ * worker — the throw ends the process, so nobody receives the next frame or
+ * `closed`, which is the very isolation this is meant to provide. A warning is
+ * asynchronous, always printed, observable on `process.on("warning")`, and
+ * never fatal. `--no-warnings` silences it, as it silences every warning; that
+ * is the operator asking not to be told.
+ */
+const surface = (error: unknown): void => {
+  try {
+    process.emitWarning(
+      error instanceof Error ? error : new Error(String(error), { cause: error }),
+    );
+  } catch {
+    // Describing a failure must not become a second one escaping the fanout:
+    // `String()` throws for a null-prototype object or a hostile
+    // `Symbol.toPrimitive`, and observers that have not run yet would lose a
+    // committed frame to it.
+    process.emitWarning(new Error("an observer failed with a value that cannot be described"));
+  }
+};
+
+/**
+ * Deliver one frame to a copy of one channel's listeners.
+ *
+ * @remarks
+ * Three properties, each a primitive rather than an ordering to re-establish at
+ * every publication site (ADR-0029 rules 2–4):
+ *
+ * - membership is copied before the first delivery, so a registration made
+ *   during fanout is not visited. Iterating the live `Set` re-enters it — one
+ *   publication was measured driving 200,000 deliveries;
+ * - membership is rechecked before each call, so unsubscribing *another*
+ *   listener during fanout takes effect on the frame already in flight;
+ * - the copy each observer owns is taken outside the region guarding the call,
+ *   so a frame that cannot be cloned costs one delivery rather than every
+ *   listener, which ends the stream silently with no terminal frame.
+ */
+function deliver<Frame extends { readonly type: string }>(
+  listeners: ReadonlySet<Registration<Frame>>,
+  frame: Frame,
+): void {
+  const receiving = [...listeners];
+  for (const listener of receiving) {
+    if (!listeners.has(listener)) continue;
+    let owned: Frame;
+    try {
+      // Each observer owns its view of mutable JavaScript data. Terminal
+      // errors deliberately retain identity so callers can compare causes.
+      owned = frame.type === "closed" ? { ...frame } : structuredClone(frame);
+    } catch (error) {
+      surface(error);
+      continue;
+    }
+    try {
+      listener.notify(owned);
+    } catch (error) {
+      // Observers are downstream of a committed write, so one broken observer
+      // cannot roll it back or keep the rest from seeing it — and it stays
+      // subscribed, because an observer dropped for one bad frame never
+      // receives `closed` and simply goes quiet for ever.
+      surface(error);
+    }
+  }
 }
 
 /**
@@ -203,7 +301,8 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   const leaseTtlMs = config.leaseTtlMs ?? 30_000;
   const freshnessMs = config.freshnessMs ?? 15_000;
 
-  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
+  const durableListeners = new Set<Registration<WhatsAppDurableFrame>>();
+  const liveListeners = new Set<Registration<WhatsAppLiveFrame>>();
 
   /**
    * One runtime consumes one account once, and `stopped` latches on the way
@@ -228,21 +327,43 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   let stopping: Promise<void> | undefined;
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
-  let terminal: Extract<WhatsAppClientFrame, { type: "closed" }> | undefined;
+  let terminal: Extract<WhatsAppDurableFrame, { type: "closed" }> | undefined;
+  /** Late subscribers owed the terminal frame, and those handed it in this drain. */
+  const owedTerminal: Array<(frame: WhatsAppDurableFrame) => void> = [];
+  const handedTerminal = new Set<(frame: WhatsAppDurableFrame) => void>();
+  let replaying = false;
 
-  const publish = (frame: WhatsAppClientFrame): void => {
-    for (const listener of listeners) {
-      try {
-        // Each observer owns its view of mutable JavaScript data. Terminal
-        // errors deliberately retain identity so callers can compare causes.
-        listener(frame.type === "closed" ? { ...frame } : structuredClone(frame));
-      } catch {
-        // Observers are downstream of a committed write. One broken observer
-        // cannot roll it back or prevent the remaining observers seeing it.
-        listeners.delete(listener);
-      }
+  /**
+   * Hand the terminal frame to one subscriber that arrived after closure.
+   *
+   * @remarks
+   * Drained rather than delivered inline, and through {@link deliver} rather
+   * than beside it, so registration during a replay behaves exactly as
+   * registration during a fanout does — that seam is where every listener
+   * defect in this rewrite lived. Draining is what lets a subscriber
+   * registered by another subscriber's terminal callback still receive it;
+   * handing each callback the frame once *per drain* is what stops a
+   * subscriber that re-registers itself from being handed it for ever, while
+   * leaving two deliberate registrations of one function two deliveries and
+   * retaining no callback past the drain that served it.
+   */
+  const replayTerminal = (listener: (frame: WhatsAppDurableFrame) => void): void => {
+    if (!terminal || handedTerminal.has(listener)) return;
+    handedTerminal.add(listener);
+    owedTerminal.push(listener);
+    if (replaying) return;
+    replaying = true;
+    try {
+      for (let next = owedTerminal.shift(); next; next = owedTerminal.shift())
+        deliver(new Set([{ notify: next }]), terminal);
+    } finally {
+      replaying = false;
+      handedTerminal.clear();
     }
   };
+
+  const publishDurable = (frame: WhatsAppDurableFrame): void => deliver(durableListeners, frame);
+  const publishLive = (frame: WhatsAppLiveFrame): void => deliver(liveListeners, frame);
 
   /**
    * Persist one observation under a named claim, then publish what it changed.
@@ -265,7 +386,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       claim.fencingToken,
     );
     if (accepted.revision === accepted.fromRevision) return;
-    publish({ type: "patch", patch: accepted.patch });
+    publishDurable({ type: "patch", patch: accepted.patch });
   };
 
   /**
@@ -318,7 +439,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       // nothing a client could treat as current.
       if (!claim) return;
       const observedAt = Date.now();
-      publish({
+      publishLive({
         type: "connection",
         state: {
           status,
@@ -332,7 +453,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     },
     presence: async (presence) => {
       const observedAt = Date.now();
-      publish({ type: "presence", presence, expiresAt: observedAt + freshnessMs });
+      publishLive({ type: "presence", presence, expiresAt: observedAt + freshnessMs });
       // An ephemeral signal must not be able to take the account down. Unlike a
       // message, a dropped last-seen loses nothing that cannot be observed
       // again, so a frame arriving without a claim is let go exactly as the
@@ -442,7 +563,12 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         // release that failed halfway is published — leaving watchers suspended
         // is worse than reporting a messy stop.
         terminal = { type: "closed", ...(failure && { error: failure.error }) };
-        publish(terminal);
+        publishDurable(terminal);
+        // Nothing can be published again on either channel, and a closed
+        // runtime an application still holds would otherwise keep every
+        // observer and its captured state alive for the process's life.
+        durableListeners.clear();
+        liveListeners.clear();
       }
     })());
   }
@@ -583,11 +709,20 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     messages: (chatId, options) => backend.data.messages(accountId, chatId, options),
     onFrame(listener) {
       if (terminal) {
-        listener({ ...terminal });
+        replayTerminal(listener);
         return () => {};
       }
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      const registration = { notify: listener };
+      durableListeners.add(registration);
+      return () => durableListeners.delete(registration);
+    },
+    onLive(listener) {
+      // Nothing follows the terminal frame on this channel, so a registration
+      // made after it would be retained for ever and never called.
+      if (terminal) return () => {};
+      const registration = { notify: listener };
+      liveListeners.add(registration);
+      return () => liveListeners.delete(registration);
     },
   };
 }
@@ -609,13 +744,13 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
 
     async *watch(options) {
       const signal = options?.signal;
-      const queued: WhatsAppClientFrame[] = [];
+      const queued: WhatsAppDurableFrame[] = [];
       let wake: (() => void) | undefined;
-      let close!: (frame: Extract<WhatsAppClientFrame, { type: "closed" }>) => void;
-      const closed = new Promise<Extract<WhatsAppClientFrame, { type: "closed" }>>((resolve) => {
+      let close!: (frame: Extract<WhatsAppDurableFrame, { type: "closed" }>) => void;
+      const closed = new Promise<Extract<WhatsAppDurableFrame, { type: "closed" }>>((resolve) => {
         close = resolve;
       });
-      const push = (frame: WhatsAppClientFrame): void => {
+      const push = (frame: WhatsAppDurableFrame): void => {
         queued.push(frame);
         if (frame.type === "closed") close(frame);
         wake?.();
@@ -641,10 +776,10 @@ export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAp
       // rather than staying at the first snapshot's revision.
       let applied = -1;
       const resnapshot = async (): Promise<
-        WhatsAppSnapshot | typeof CANCELLED | Extract<WhatsAppClientFrame, { type: "closed" }>
+        WhatsAppSnapshot | typeof CANCELLED | Extract<WhatsAppDurableFrame, { type: "closed" }>
       > => {
         const alreadyClosed = queued.find(
-          (frame): frame is Extract<WhatsAppClientFrame, { type: "closed" }> =>
+          (frame): frame is Extract<WhatsAppDurableFrame, { type: "closed" }> =>
             frame.type === "closed",
         );
         if (alreadyClosed) return alreadyClosed;

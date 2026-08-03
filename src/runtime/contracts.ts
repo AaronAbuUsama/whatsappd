@@ -654,17 +654,20 @@ export interface WhatsAppClientConnectionState {
   readonly fencingToken: number;
 }
 
-/** One frame of a {@link WhatsAppClient.watch} stream. */
-export type WhatsAppClientFrame =
+/**
+ * One frame of the revision-ordered channel (ADR-0030).
+ *
+ * @remarks
+ * Every frame here is a statement about the Current Mirror at a revision, so
+ * a consumer can order them against each other and against a
+ * {@link StoredMessagePage}. That is why live state is not among them: a value
+ * with no revision cannot join a revision-ordered boundary, and requiring it to
+ * is how both retired implementations of the Client acquired a publication path
+ * outside their own transition machinery.
+ */
+export type WhatsAppDurableFrame =
   | { readonly type: "snapshot"; readonly snapshot: WhatsAppSnapshot }
   | { readonly type: "patch"; readonly patch: WhatsAppPatch }
-  | {
-      readonly type: "presence";
-      readonly presence: PresenceUpdate;
-      /** Presence is ephemeral; after this instant it means nothing. */
-      readonly expiresAt: number;
-    }
-  | { readonly type: "connection"; readonly state: WhatsAppClientConnectionState }
   | {
       /**
        * The runtime has stopped consuming this account. No frame follows it.
@@ -679,13 +682,34 @@ export type WhatsAppClientFrame =
       readonly error?: unknown;
     };
 
+/**
+ * One frame of the expiring channel: what is true *now*, until it is not.
+ *
+ * @remarks
+ * Neither carries a revision and both stop being true by wall clock, so they
+ * are delivered on their own registration (ADR-0030). ADR-0020 already
+ * separated these two kinds of fact for storage; this separates them for
+ * delivery.
+ */
+export type WhatsAppLiveFrame =
+  | {
+      readonly type: "presence";
+      readonly presence: PresenceUpdate;
+      /** Presence is ephemeral; after this instant it means nothing. */
+      readonly expiresAt: number;
+    }
+  | { readonly type: "connection"; readonly state: WhatsAppClientConnectionState };
+
+/** Every frame a runtime publishes, across both of its channels. */
+export type WhatsAppClientFrame = WhatsAppDurableFrame | WhatsAppLiveFrame;
+
 /** The backend-independent contract applications and React bindings consume. */
 export interface WhatsAppClient {
   /**
    * Watch one account: a current Snapshot Window first, then the changes that
    * follow it, each stamped with the revision it moves the mirror to.
    */
-  watch(options?: { readonly signal?: AbortSignal }): AsyncIterable<WhatsAppClientFrame>;
+  watch(options?: { readonly signal?: AbortSignal }): AsyncIterable<WhatsAppDurableFrame>;
 
   /**
    * Read one opened chat's stored messages, newest first, then older pages

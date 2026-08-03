@@ -12,8 +12,9 @@ import {
   type StoredMessagePage,
   type WhatsAppBackend,
   type WhatsAppClient,
-  type WhatsAppClientFrame,
   type WhatsAppDataEvent,
+  type WhatsAppDurableFrame,
+  type WhatsAppLiveFrame,
   type WhatsAppPatch,
   type WhatsAppSnapshot,
 } from "../src/runtime/contracts.ts";
@@ -30,6 +31,7 @@ import {
 } from "../src/runtime/runtime.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import type { InboundMessage } from "../src/model/message.ts";
+import type { PresenceUpdate } from "../src/model/presence.ts";
 import { SubscriptionHandlerError } from "../src/subscription.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 
@@ -40,6 +42,27 @@ const AT = 1_700_000_000_000;
 
 /** Let queued microtasks and one macrotask turn drain — never a timed wait. */
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * Collect what the runtime surfaced while `work` ran.
+ *
+ * @remarks
+ * `process.on("warning")` and nothing else — the same environment a worker
+ * runs in. A harness that had to install an uncaught-exception capture would
+ * be proving isolation the production path does not have.
+ */
+async function surfaced(work: () => Promise<void>): Promise<unknown[]> {
+  const warnings: unknown[] = [];
+  const collect = (warning: unknown): void => void warnings.push(warning);
+  process.on("warning", collect);
+  try {
+    await work();
+    await tick();
+  } finally {
+    process.off("warning", collect);
+  }
+  return warnings;
+}
 
 /** Keep timer-driven public behavior observable on Node even when its timer is unreferenced. */
 async function withDeadline<T>(promise: Promise<T>, ms = 1_000): Promise<T> {
@@ -106,10 +129,10 @@ const fixedLeaseStore = (fencingToken: number): AccountLeaseStore => ({
 
 /** Drain a client watch in the background so frame arrival is observable. */
 function watching(client: WhatsAppClient): {
-  frames: WhatsAppClientFrame[];
+  frames: WhatsAppDurableFrame[];
   close(): Promise<void>;
 } {
-  const frames: WhatsAppClientFrame[] = [];
+  const frames: WhatsAppDurableFrame[] = [];
   const controller = new AbortController();
   const pump = (async () => {
     for await (const frame of client.watch({ signal: controller.signal })) frames.push(frame);
@@ -123,17 +146,17 @@ function watching(client: WhatsAppClient): {
   };
 }
 
-const patchesOf = (frames: readonly WhatsAppClientFrame[]): WhatsAppPatch[] =>
+const patchesOf = (frames: readonly WhatsAppDurableFrame[]): WhatsAppPatch[] =>
   frames
     .filter(
-      (frame): frame is Extract<WhatsAppClientFrame, { type: "patch" }> => frame.type === "patch",
+      (frame): frame is Extract<WhatsAppDurableFrame, { type: "patch" }> => frame.type === "patch",
     )
     .map((frame) => frame.patch);
 
-const snapshotsOf = (frames: readonly WhatsAppClientFrame[]): WhatsAppSnapshot[] =>
+const snapshotsOf = (frames: readonly WhatsAppDurableFrame[]): WhatsAppSnapshot[] =>
   frames
     .filter(
-      (frame): frame is Extract<WhatsAppClientFrame, { type: "snapshot" }> =>
+      (frame): frame is Extract<WhatsAppDurableFrame, { type: "snapshot" }> =>
         frame.type === "snapshot",
     )
     .map((frame) => frame.snapshot);
@@ -2121,7 +2144,7 @@ test("a Client watch started after stop receives the terminal frame and ends", a
 
   const frames = await withDeadline(
     (async () => {
-      const seen: WhatsAppClientFrame[] = [];
+      const seen: WhatsAppDurableFrame[] = [];
       for await (const frame of client.watch()) seen.push(frame);
       return seen;
     })(),
@@ -2157,24 +2180,210 @@ test("runtime closure interrupts a Client snapshot already in flight", async () 
   expect(await withDeadline(first)).toEqual({ value: { type: "closed" }, done: false });
 });
 
-test("a throwing frame observer cannot block a later observer after commit", async () => {
+test("a throwing frame observer stays subscribed, and its failure is surfaced", async () => {
   const { driver, runtime } = lane("personal");
   await runtime.start();
-  let later = 0;
-  runtime.onFrame(() => {
-    throw new Error("observer failed");
+  const broken = new Error("observer failed");
+  const brokenSaw: string[] = [];
+  const healthySaw: string[] = [];
+  const warnings = await surfaced(async () => {
+    runtime.onFrame((frame) => {
+      brokenSaw.push(frame.type);
+      throw broken;
+    });
+    runtime.onFrame((frame) => {
+      healthySaw.push(frame.type);
+    });
+
+    await driver.emit({ type: "message", message: hello() });
+    await driver.emit({ type: "message", message: hello("m2", "Again") });
+    // Teardown stamps the disconnection, so a third patch precedes the
+    // terminal frame.
+    await runtime.stop();
   });
-  runtime.onFrame((frame) => {
-    if (frame.type === "patch") later += 1;
+
+  expect((await runtime.messages(PERSON)).messages.map((message) => message.messageId)).toEqual([
+    "m2",
+    "m1",
+  ]);
+  expect(healthySaw).toEqual(["patch", "patch", "patch", "closed"]);
+  // Still subscribed after failing: it saw every later frame including the
+  // terminal one, which a silently unsubscribed observer never receives — and
+  // this process is still alive to check, which a rethrow would not leave it.
+  expect(brokenSaw).toEqual(healthySaw);
+  expect(warnings.length).toBe(4);
+  expect(warnings.every((error) => error === broken)).toBe(true);
+});
+
+test("a frame observer that resubscribes during fanout is not re-visited", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+  let deliveries = 0;
+  let off = (): void => {};
+  const churn = (): void => {
+    deliveries += 1;
+    // Bounded so a runtime that re-visits the live registry finishes and
+    // fails on the count rather than hanging the suite.
+    if (deliveries > 1_000) return;
+    off();
+    off = runtime.onFrame(churn);
+  };
+  off = runtime.onFrame(churn);
+
+  await driver.emit({ type: "message", message: hello() });
+
+  expect(deliveries).toBe(1);
+  off();
+  await runtime.stop();
+});
+
+test("re-registering an observer during fanout defers it to the next frame", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+  const seen: string[] = [];
+  const observer = (frame: WhatsAppDurableFrame): void => void seen.push(frame.type);
+  let off = (): void => {};
+  let churned = false;
+  runtime.onFrame(() => {
+    if (churned) return;
+    churned = true;
+    // The *same callback*, unsubscribed and subscribed again: the old
+    // registration ends now, the new one starts next frame.
+    off();
+    off = runtime.onFrame(observer);
+  });
+  off = runtime.onFrame(observer);
+
+  await driver.emit({ type: "message", message: hello() });
+  expect(seen).toEqual([]);
+  await driver.emit({ type: "message", message: hello("m2", "Again") });
+
+  // Exactly one delivery — one registration, not two and not none.
+  expect(seen).toEqual(["patch"]);
+  await runtime.stop();
+});
+
+test("unsubscribing another observer during fanout drops it from the frame in flight", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+  let cancelled = 0;
+  let dropped = 0;
+  let off = (): void => {};
+  // Registered first, so the cancellation lands while the frame is still being
+  // delivered rather than before it starts.
+  runtime.onFrame(() => {
+    cancelled += 1;
+    off();
+  });
+  off = runtime.onFrame(() => {
+    dropped += 1;
   });
 
   await driver.emit({ type: "message", message: hello() });
 
-  expect((await runtime.messages(PERSON)).messages.map((message) => message.messageId)).toEqual([
-    "m1",
-  ]);
-  expect(later).toBe(1);
+  // Both numbers, so a fanout that never ran fails here instead of reading as
+  // a successful cancellation.
+  expect([cancelled, dropped]).toEqual([1, 0]);
   await runtime.stop();
+});
+
+test("an observer that resubscribes from the terminal frame is not replayed for ever", async () => {
+  const { runtime } = lane("personal");
+  await runtime.start();
+  let replays = 0;
+  runtime.onFrame(function resubscribe(frame) {
+    if (frame.type !== "closed") return;
+    replays += 1;
+    // Registering after the stream ended is what replays the terminal frame,
+    // so an observer that does it from inside that replay would recurse.
+    runtime.onFrame(resubscribe);
+  });
+
+  await runtime.stop();
+
+  // One delivery for the frame itself, one for the late registration it made.
+  // A third would be a recursion that only the stack depth bounds.
+  expect(replays).toBe(2);
+});
+
+test("an observer registered from inside a terminal replay still receives it", async () => {
+  const { runtime } = lane("personal");
+  await runtime.start();
+  await runtime.stop();
+
+  const seen: string[] = [];
+  // Registering late replays the terminal frame — and a subscriber that
+  // another subscriber registers while handling it is owed one too.
+  runtime.onFrame((frame) => {
+    seen.push(`first:${frame.type}`);
+    runtime.onFrame((later) => void seen.push(`second:${later.type}`));
+  });
+
+  expect(seen).toEqual(["first:closed", "second:closed"]);
+});
+
+test("a frame that cannot be cloned costs one delivery, not every observer", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+  const durable: string[] = [];
+  const live: string[] = [];
+  const warnings = await surfaced(async () => {
+    runtime.onFrame((frame) => void durable.push(frame.type));
+    runtime.onLive((frame) => void live.push(frame.type));
+
+    // A live payload carrying something `structuredClone` refuses. Nothing can
+    // own a copy of it, so no observer receives this frame.
+    await driver.emit({
+      type: "presence",
+      presence: { chatId: PERSON, kind: "available", at: AT, seen: () => {} } as PresenceUpdate,
+    });
+  });
+  expect(live).toEqual([]);
+  expect(warnings.map((error) => (error as Error).name)).toEqual(["DataCloneError"]);
+
+  // Both observers are still registered: the next frame on either channel
+  // reaches them, and the terminal frame does too.
+  await driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+  await driver.emit({ type: "message", message: hello() });
+  await runtime.stop();
+
+  expect(live).toEqual(["presence"]);
+  expect(durable).toEqual(["patch", "patch", "closed"]);
+});
+
+test("live and durable frames are delivered on separate registrations", async () => {
+  const { driver, runtime, client } = lane("personal", { freshnessMs: 5_000 });
+  await runtime.start();
+  const durable: string[] = [];
+  const live: string[] = [];
+  runtime.onFrame((frame) => void durable.push(frame.type));
+  runtime.onLive((frame) => void live.push(frame.type));
+  const seen = watching(client);
+  await tick();
+
+  // A presence observation updates a contact, never invents one.
+  await driver.emit({ type: "contact", contact: { id: PERSON, nativeIds: [PERSON] } });
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  await driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+  await tick();
+  await runtime.stop();
+  await seen.close();
+
+  // The revision-ordered channel carries nothing that expires by wall clock:
+  // the contact, the connection instant, the last-seen instant, and the
+  // disconnection teardown stamps, then the terminal frame.
+  expect(durable).toEqual(["patch", "patch", "patch", "patch", "closed"]);
+  // The expiring channel carries nothing that carries a revision.
+  expect(live).toEqual(["connection", "presence"]);
+  // The pull loop the Client is built on follows the durable channel alone.
+  expect(seen.frames.map((frame) => frame.type)).toEqual([
+    "snapshot",
+    "patch",
+    "patch",
+    "patch",
+    "patch",
+    "closed",
+  ]);
 });
 
 test("closed-frame wrappers are isolated while preserving the failure identity", async () => {
@@ -2196,7 +2405,7 @@ test("closed-frame wrappers are isolated while preserving the failure identity",
     mutable.type = "patch";
     delete mutable.error;
   });
-  let current: WhatsAppClientFrame | undefined;
+  let current: WhatsAppDurableFrame | undefined;
   runtime.onFrame((frame) => {
     current = frame;
   });
@@ -2205,7 +2414,7 @@ test("closed-frame wrappers are isolated while preserving the failure identity",
   await tick();
 
   expect(current).toEqual({ type: "closed", error: died });
-  let late: WhatsAppClientFrame | undefined;
+  let late: WhatsAppDurableFrame | undefined;
   runtime.onFrame((frame) => {
     late = frame;
   });
@@ -2236,7 +2445,7 @@ test("losing the account lease stops the runtime without evicting its new holder
   // while the runtime's deliberately-unreferenced heartbeat is still due.
   const frames = await withDeadline(
     (async () => {
-      const seen: WhatsAppClientFrame[] = [];
+      const seen: WhatsAppDurableFrame[] = [];
       for await (const frame of client.watch()) seen.push(frame);
       return seen;
     })(),
@@ -2297,7 +2506,7 @@ test("a lease backend outage closes the Client and is reported by stop", async (
   await runtime.start();
   const terminal = await withDeadline(
     (async () => {
-      let last: WhatsAppClientFrame | undefined;
+      let last: WhatsAppDurableFrame | undefined;
       for await (const frame of client.watch()) last = frame;
       return last;
     })(),
@@ -2340,7 +2549,7 @@ test("a stop during an automatic teardown joins it instead of racing it", async 
 });
 
 test("aborting a watch during a hung snapshot read releases its subscription", async () => {
-  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
+  const listeners = new Set<(frame: WhatsAppDurableFrame) => void>();
   const runtime: WhatsAppRuntime = {
     accountId: "personal",
     start: async () => {},
@@ -2351,6 +2560,7 @@ test("aborting a watch during a hung snapshot read releases its subscription", a
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onLive: () => () => {},
   };
   const controller = new AbortController();
   const pump = (async () => {
@@ -2373,7 +2583,7 @@ test("aborting a watch during a hung snapshot read releases its subscription", a
 
 test("a client applies only contiguous patches and re-snapshots after a gap", async () => {
   let current: WhatsAppSnapshot = empty("personal");
-  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
+  const listeners = new Set<(frame: WhatsAppDurableFrame) => void>();
   const runtime: WhatsAppRuntime = {
     accountId: "personal",
     start: async () => {},
@@ -2384,6 +2594,7 @@ test("a client applies only contiguous patches and re-snapshots after a gap", as
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onLive: () => () => {},
   };
   const publish = (fromRevision: number, revision: number): void => {
     for (const listener of listeners)
@@ -2415,6 +2626,8 @@ test("connection and presence expire and never become stored truth", async () =>
   const { backend, driver, runtime, client } = lane("personal", { freshnessMs: 5_000 });
   await runtime.start();
   const seen = watching(client);
+  const live: WhatsAppLiveFrame[] = [];
+  runtime.onLive((frame) => void live.push(frame));
   await tick();
   await driver.emit({ type: "message", message: hello() });
 
@@ -2425,12 +2638,12 @@ test("connection and presence expire and never become stored truth", async () =>
   await driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
   await tick();
 
-  const connection = seen.frames.find((frame) => frame.type === "connection");
+  const connection = live.find((frame) => frame.type === "connection");
   assert.ok(connection?.type === "connection");
   expect(connection.state.expiresAt - connection.state.observedAt).toBe(5_000);
   expect(connection.state.fencingToken > 0).toBe(true);
 
-  const presence = seen.frames.find((frame) => frame.type === "presence");
+  const presence = live.find((frame) => frame.type === "presence");
   assert.ok(presence?.type === "presence");
   expect(presence.expiresAt > Date.now()).toBe(true);
 
@@ -2954,7 +3167,7 @@ test("a backdated message below an open cursor reconciles by identity on both su
 
 test("a stale update is ignored, a future base re-snapshots, and pages read through both", async () => {
   const data = memoryDataStore();
-  const listeners = new Set<(frame: WhatsAppClientFrame) => void>();
+  const listeners = new Set<(frame: WhatsAppDurableFrame) => void>();
   const runtime: WhatsAppRuntime = {
     accountId: "personal",
     start: async () => {},
@@ -2965,6 +3178,7 @@ test("a stale update is ignored, a future base re-snapshots, and pages read thro
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    onLive: () => () => {},
   };
   // Published on the same seam the runtime publishes on, so the client cannot
   // tell these apart from a live runtime's own updates.
