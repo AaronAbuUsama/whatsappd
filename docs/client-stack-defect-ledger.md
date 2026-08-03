@@ -172,6 +172,13 @@ that does not, and a read that answers in `nativeIds` order rather than newest.
 **Inherited obligation.** Layer 2's opened-conversation presence uses this
 primitive rather than its own map.
 
+**Discharged at #106 by absence, not by compliance.** There is no
+conversation surface in the `messages` namespace, so there is no second presence
+map and nothing for the obligation to bind to — `contacts.presence(nativeId)`
+remains the only presence read in the Client. Recorded rather than dropped
+silently, because "no instance" and "obligation met" are different claims and a
+later layer that adds a per-chat presence surface inherits this entry unchanged.
+
 ### C4 — ownership defined by API visibility rather than memory provenance
 
 **Narrowed by** `own()` = `structuredClone` + deep freeze, now called by the

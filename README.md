@@ -183,6 +183,22 @@ identity-based upsert leaves one message. The cursor itself prevents skips or
 duplicates _between stored pages_. An exhausted cursor means nothing older is
 **stored** — never that WhatsApp has no more.
 
+The friendly Client does that merge for you, per chat, and what it retains grows
+with what the application **read**: reading a chat creates its entry, and from
+that moment that chat accumulates its live traffic whether or not anything pages
+it again. A chat never read retains nothing, and a live message for it is
+dropped rather than buffered. There is no eviction policy yet, so a long-lived
+process that reads every chat retains every chat.
+
+Reconciling a stored page against the live stream leaves one visible transient.
+A page read returns the mirror's state at the moment it ran, which can be ahead
+of the changes the Client has applied — and a page never overwrites a message
+the Client already holds, only adds ones it does not. So a message edited just
+before a page read can briefly show its older text, until the patch carrying
+that edit arrives. It always does: the Client receives every change through the
+revision the page was read at, so the last write is the newest. The window is
+the Client's own lag behind the mirror, and nothing stays wrong once it closes.
+
 Credentials, WhatsApp data, the account lease, and media bytes are four separate
 capabilities. `memoryBackend()` groups in-memory implementations of all four;
 each one — `memoryDataStore()`, `memoryLeaseStore()`, `memoryMediaStore()` — can

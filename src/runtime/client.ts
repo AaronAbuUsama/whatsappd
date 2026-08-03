@@ -27,6 +27,9 @@ import type {
   ChatRecord,
   ContactRecord,
   GroupRecord,
+  MessageRecord,
+  StoredMessageCursor,
+  StoredMessagePage,
   WhatsAppDurableFrame,
   WhatsAppLiveFrame,
   WhatsAppPatch,
@@ -151,9 +154,86 @@ function current<T>(observation: Observation<T> | undefined, from: Derivation): 
  * a fresh snapshot affected — so a namespace added to the union alone would
  * silently stop recovering after a dropped revision. Derived, it cannot happen.
  */
-const NAMESPACES = ["account", "chats", "contacts", "groups"] as const;
+const NAMESPACES = ["account", "chats", "contacts", "groups", "messages"] as const;
 
 type Namespace = (typeof NAMESPACES)[number];
+
+/**
+ * One chat's retained messages, as the Client holds them.
+ *
+ * @remarks
+ * Declared here beside {@link ClientAccountState} rather than in
+ * `contracts.ts`: `tests/packed-imports.ts` asserts the Client's types are
+ * absent from the packed declarations, and `contracts.ts` is reachable from the
+ * root entry while this module is not.
+ */
+export interface ClientChatMessages {
+  readonly chatId: string;
+  /**
+   * Newest first, ties broken by *descending* identifier.
+   *
+   * @remarks
+   * The tie-break matches both stores' page order — `ORDER BY timestamp DESC,
+   * message_id DESC` at `libsql.ts:1308`, `newestFirst` at `memory.ts:57`. The
+   * ascending tie-break `chats.list()` uses is wrong here: it would disagree
+   * with the page boundary at every timestamp collision, so `nextBefore` — the
+   * last row in store order — would not be the last row in this order.
+   */
+  readonly messages: readonly MessageRecord[];
+  /**
+   * Whether the local mirror can still go further back.
+   *
+   * @remarks
+   * `"exhausted"` means only that no older row is *stored*. It never means the
+   * phone has no older history, which is a separate request (ADR-0010).
+   */
+  readonly older: "stored" | "loading" | "exhausted";
+  /** The last read that failed. Cleared by the next success. */
+  readonly error?: unknown;
+}
+
+/**
+ * One chat's retained messages as this Client actually stores them.
+ *
+ * @remarks
+ * At module scope so {@link Tx} can name it, and because the entry object's
+ * *identity* is what orders a page read against a revision gap: `replace()`
+ * clears the map, so a page taken at the pre-gap revision finds a different
+ * object — or none — and commits nothing. A number would have to say which
+ * revision the page belonged to, and `StoredMessagePage.revision` is the
+ * mirror's revision rather than a statement about the rows it returned
+ * (`contracts.ts:337-343`).
+ */
+interface Retained {
+  readonly chatId: string;
+  /** Keyed by messageId. Every value has been through {@link own}. */
+  readonly byId: Map<string, MessageRecord>;
+  /** Where the next older page starts. Absent before the first read AND at the end. */
+  before?: StoredMessageCursor;
+  /** Which of those two `before === undefined` means, plus whether a read is running. */
+  older: "stored" | "loading" | "exhausted";
+  /**
+   * The last read that failed, boxed and stored BY IDENTITY.
+   *
+   * @remarks
+   * Never `own()`ed. Ledger class C4 proves `structuredClone` throws
+   * `DOMException` on an error carrying a function, and that throw would happen
+   * inside `commit` — costing the whole transition for a failure already
+   * observed. Boxed rather than held bare, and spread into the view exactly as
+   * `closure` is, so a failure whose cause *is* `undefined` still reports the
+   * key.
+   */
+  failure?: { readonly error: unknown };
+  /**
+   * This chat's frozen view, dropped by the writer that changed THIS chat.
+   *
+   * @remarks
+   * Per chat rather than through `touch("messages")`, which is namespace-wide:
+   * clearing there would drop every chat's view on any messages transition and
+   * defeat the referential stability a `useSyncExternalStore` binding needs.
+   */
+  view?: ClientChatMessages;
+}
 
 /**
  * One subscription — a record, never the callback itself.
@@ -186,6 +266,16 @@ interface Tx {
   apply(patch: WhatsAppPatch): void;
   /** Retain one live observation under the claim it was made under. */
   observe(frame: WhatsAppLiveFrame, claim: ClientClaim): void;
+  /**
+   * Start, land or fail one chat's page read.
+   *
+   * @remarks
+   * `undefined` marks the read as started; a page lands it; an `{ error }` box
+   * reports the failure that ended it. One member rather than three, so a chat's
+   * paging state moves only here, and every one of them re-checks that the entry
+   * it was started against is still the entry the map holds.
+   */
+  page(entry: Retained, result?: StoredMessagePage | { readonly error: unknown }): void;
   /** Record that the Runtime has stopped consuming this account. */
   close(frame: Extract<WhatsAppDurableFrame, { type: "closed" }>): void;
 }
@@ -302,6 +392,52 @@ export interface WhatsAppClientCore {
     list(): readonly GroupRecord[];
   };
   /**
+   * One chat's saved messages, its live upserts, and how far back it can go.
+   *
+   * @remarks
+   * Nothing here is opened, owned or closed: a chat is read by id and extended
+   * backwards by id. The subscription is namespace-wide, like every other, so a
+   * listener watching one chat wakes when any chat changes — and re-reads an
+   * identical frozen view, which a React consumer bails out of without
+   * rendering.
+   */
+  readonly messages: ClientNamespace & {
+    /**
+     * What is held for one chat. Never touches storage.
+     *
+     * @remarks
+     * Creates an empty entry when none exists. That is a mutation on a read
+     * path, which is unusual here and permitted because it marks no namespace,
+     * notifies nobody and cannot split a delivery — and required, because a
+     * `useSyncExternalStore` binding on a chat nobody has paged must be handed
+     * a stable object or it re-renders for ever.
+     *
+     * From that moment the chat accumulates its live traffic, so what is
+     * retained grows with the chats an application has read rather than with
+     * the account's traffic. An eviction policy is #121.
+     */
+    get(chatId: string): ClientChatMessages;
+    /**
+     * Read one page further back than what is held.
+     *
+     * @remarks
+     * With nothing held that is the newest page, so this is also how a chat is
+     * first filled. Returns nothing: the result lands as an ordinary transition
+     * and the caller re-reads, exactly as {@link ClientNamespace.subscribe}
+     * already works. Single-flight per chat, and after a failure calling it
+     * again *is* the retry. The page size is the store default and is not a
+     * parameter — an application wanting a hundred calls this four times.
+     *
+     * A no-op once this Client has stopped following, which covers both
+     * {@link WhatsAppClientCore.close} and a durable-follow failure. That is
+     * **not** the same condition as `account.get().closed`: a deliberate
+     * Runtime `closed` frame leaves this Client following, so paging still
+     * works against storage after Runtime closure — correct under ADR-0010,
+     * because a stored page never contacts WhatsApp.
+     */
+    older(chatId: string): void;
+  };
+  /**
    * Release this Client's subscriptions and stop following the Runtime.
    *
    * @remarks
@@ -345,6 +481,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   /** Native PN/LID address to the contact record that owns it. */
   const aliases = new Map<string, string>();
   const groups = new Map<string, GroupRecord>();
+  /** Each chat an application has read, and what is held for it. */
+  const retained = new Map<string, Retained>();
   let connection: Observation<Status> | undefined;
   let closure: { readonly error?: unknown } | undefined;
 
@@ -364,6 +502,16 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     chats?: readonly ChatRecord[];
     contacts?: readonly ContactRecord[];
     groups?: readonly GroupRecord[];
+    /**
+     * Never held: messages memoize per chat inside {@link Retained}, because a
+     * namespace-wide cache would be dropped by any chat's traffic.
+     *
+     * @remarks
+     * Declared rather than omitted so `touch`'s keyed `delete` still type-checks
+     * across every non-`account` namespace. A second `if` there would be exactly
+     * the per-namespace branch the comment above it exists to forbid.
+     */
+    messages?: never;
   } = {};
 
   /** This Client's copy of whatever identity the session currently reports. */
@@ -510,6 +658,49 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   })();
 
   /**
+   * This chat's entry, created empty if it has none.
+   *
+   * @remarks
+   * The one mutation outside `commit`, and it is deliberate: it marks no
+   * namespace, notifies nobody and cannot split a delivery, because an entry
+   * nothing has been put into yet reads exactly as no entry would. What it buys
+   * is that `get()` on a never-paged chat is referentially stable, and that
+   * `older()` has somewhere for the patches arriving *during* its read to land
+   * — without which the drop rule would discard exactly the changes that repair
+   * the page it is about to commit.
+   */
+  const entryFor = (chatId: string): Retained => {
+    const held = retained.get(chatId);
+    if (held) return held;
+    const fresh: Retained = { chatId, byId: new Map(), older: "stored" };
+    retained.set(chatId, fresh);
+    return fresh;
+  };
+
+  /**
+   * One chat's frozen view, rebuilt only when that chat changed.
+   *
+   * @remarks
+   * Frozen shallowly: every member of `byId` was deep-frozen by `own()` on the
+   * way in, and `failure` is spread by identity rather than copied.
+   */
+  const viewOf = (entry: Retained): ClientChatMessages =>
+    (entry.view ??= Object.freeze({
+      chatId: entry.chatId,
+      messages: Object.freeze(
+        [...entry.byId.values()].sort(
+          // Note the argument order: `b, a` is descending, matching both
+          // stores' page order rather than `chats.list()`'s ascending tie.
+          (a, b) => b.timestamp - a.timestamp || compareId(b.messageId, a.messageId),
+        ),
+      ),
+      older: entry.older,
+      // Spread rather than tested, so a read that failed with `undefined` still
+      // reports the key — the same shape `closure` uses below.
+      ...entry.failure,
+    }));
+
+  /**
    * Mutate every value one transition affects, then notify once.
    *
    * @remarks
@@ -564,6 +755,63 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         aliases.set(nativeId, contactId);
         touch("contacts");
       },
+      /**
+       * Store one message, if the application ever asked for its chat.
+       *
+       * @remarks
+       * A message for a chat with no entry is dropped. Without that, what is
+       * held would grow with the account's *traffic* rather than with what the
+       * application read, and a busy account would retain every chat it has
+       * never shown. The rows are still in the mirror, so reading the chat
+       * later pages them back.
+       *
+       * No fill rule here, deliberately: a patch is the newer statement about
+       * an id by construction, and refusing one because a page had already put
+       * that id in the buffer is exactly the stranding the retired per-entry
+       * watermark produced.
+       */
+      message: (message: MessageRecord): void => {
+        const entry = retained.get(message.chatId);
+        if (!entry) return;
+        entry.byId.set(message.messageId, own(message));
+        entry.view = undefined;
+        touch("messages");
+      },
+      /**
+       * Start, land or fail one chat's page read.
+       *
+       * @remarks
+       * Every path re-checks entry identity first. `replace()` clears
+       * `retained`, so a page taken at the pre-gap revision finds a different
+       * object here and commits nothing rather than layering stale rows onto
+       * fresh state.
+       */
+      page: (entry: Retained, result?: StoredMessagePage | { readonly error: unknown }): void => {
+        if (retained.get(entry.chatId) !== entry) return;
+        if (!result) entry.older = "loading";
+        else if ("error" in result) {
+          // What was already held, and where the next page starts, both
+          // survive: a failure is not evidence about the mirror's contents.
+          // Back to `"stored"` because calling `older()` again is the retry.
+          entry.failure = result;
+          entry.older = "stored";
+        } else {
+          entry.failure = undefined;
+          // The fill rule: a page may only *insert*. A read in flight can then
+          // never be wrong about an id the buffer already holds — only
+          // insufficient — so a live upsert that landed while it was running
+          // is never overwritten by the older copy it was reading.
+          for (const message of result.messages)
+            if (!entry.byId.has(message.messageId)) entry.byId.set(message.messageId, own(message));
+          entry.before = result.nextBefore;
+          // `nextBefore` is present only when an older stored row really
+          // exists, so its absence is the end of the mirror — and never a
+          // statement about WhatsApp (ADR-0010).
+          entry.older = result.nextBefore ? "stored" : "exhausted";
+        }
+        entry.view = undefined;
+        touch("messages");
+      },
       connection: (observation: Observation<Status>): void => {
         connection = observation;
         touch("account");
@@ -607,6 +855,12 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       contacts.clear();
       aliases.clear();
       groups.clear();
+      // A remembered line, exactly like the four above it: the loop below
+      // *notifies*, it does not clear. A snapshot carries no messages
+      // (ADR-0010), so a chat that kept its buffer across a gap would hold rows
+      // from a revision this Client no longer has, behind a cursor pointing
+      // into the middle of a mirror it no longer holds the front of.
+      retained.clear();
       for (const namespace of NAMESPACES) touch(namespace);
     };
 
@@ -637,9 +891,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
               put.group(upsert.group);
               break;
             case "message":
-              // A message belongs to an opened conversation, which this layer
-              // does not own. Everything it changed about the state that *is*
-              // here — the chat's newest activity — arrives as its own upsert.
+              put.message(upsert.message);
               break;
           }
         }
@@ -682,6 +934,10 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
           expiresAt: frame.expiresAt,
           claim,
         });
+      },
+
+      page(entry, result) {
+        put.page(entry, result);
       },
 
       close(frame) {
@@ -788,6 +1044,39 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         (ordered.groups ??= Object.freeze(
           [...groups.values()].sort((a, b) => compareId(a.groupId, b.groupId)),
         )),
+    },
+
+    messages: {
+      subscribe: subscribeTo("messages"),
+      get: (chatId) => viewOf(entryFor(chatId)),
+      older(chatId) {
+        // Nothing to page against, and nothing that could ever announce the
+        // result: a Client that has stopped following makes no further
+        // delivery. Checked before the entry is created, so a call after
+        // `close()` does not even allocate.
+        if (!following) return;
+        const entry = entryFor(chatId);
+        // The single-flight guard and the end of the mirror are the same test,
+        // because both mean "this call has no page to fetch". There is no
+        // in-flight promise to hold: `older()` returns `void` and `close()`
+        // deliberately does not join a page read, so nothing could await one.
+        if (entry.older !== "stored") return;
+        commit((tx) => tx.page(entry));
+        void (async () => {
+          try {
+            const page = await source.read((view) =>
+              view.messages(chatId, entry.before && { before: entry.before }),
+            );
+            // Re-checked here as well as inside the writer: a Client that
+            // stopped following mid-read must commit nothing and notify nobody,
+            // and `commit` would otherwise announce a transition after the last
+            // delivery this Client will ever make.
+            if (following) commit((tx) => tx.page(entry, page));
+          } catch (error) {
+            if (following) commit((tx) => tx.page(entry, { error }));
+          }
+        })();
+      },
     },
 
     close: () => stop(),
