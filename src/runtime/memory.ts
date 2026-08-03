@@ -9,6 +9,7 @@
  *
  * @packageDocumentation
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { memoryStore } from "../stores/memory.ts";
 import { immutableMediaRef } from "./media.ts";
 import { projectCurrentMirror } from "./projection.ts";
@@ -42,6 +43,9 @@ interface AccountMirror {
   messages: Map<string, MessageRecord>;
   batches: AcceptedWhatsAppBatch[];
 }
+
+/** The mirrors an open {@link WhatsAppDataStore.read} has already pinned, by account. */
+const openReads = new AsyncLocalStorage<Map<string, AccountMirror>>();
 
 const messageKey = (chatId: string, messageId: string): string => `${chatId}\0${messageId}`;
 
@@ -116,6 +120,14 @@ export function memoryDataStore(): WhatsAppDataStore {
     messages: new Map(mirror.messages),
   });
 
+  const pinnedIn = (opened: Map<string, AccountMirror>, accountId: string): AccountMirror => {
+    const existing = opened.get(accountId);
+    if (existing) return existing;
+    const created = pin(mirrorOf(accountId));
+    opened.set(accountId, created);
+    return created;
+  };
+
   const view = (accountId: string, mirror: AccountMirror): MirrorView => ({
     async snapshot() {
       return copy({
@@ -161,11 +173,17 @@ export function memoryDataStore(): WhatsAppDataStore {
   });
 
   const read: WhatsAppDataStore["read"] = async (accountId, fn) => {
+    // A read reached from inside another one joins it, so every answer within
+    // one `fn` is at one revision however it was reached — a second pin taken
+    // later would answer at a newer one.
+    const joined = openReads.getStore();
+    if (joined) return fn(view(accountId, pinnedIn(joined, accountId)));
     // Every acceptance already offered is applied first, as a direct read would
     // wait for it — then the mirror is pinned, so nothing offered afterwards
     // can reach any of the answers `fn` gets.
     await operations;
-    return fn(view(accountId, pin(mirrorOf(accountId))));
+    const opened = new Map<string, AccountMirror>();
+    return openReads.run(opened, () => fn(view(accountId, pinnedIn(opened, accountId))));
   };
 
   return {

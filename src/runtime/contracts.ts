@@ -450,8 +450,10 @@ export interface WhatsAppDataStore {
    * against a live write stream is unbounded and livelock-prone (ADR-0030).
    *
    * This exposes the transaction boundary both implementations already have
-   * internally rather than adding a capability. `view` is the read seam for the
-   * duration of `fn`: the store's own methods open a second, later transaction.
+   * internally rather than adding a capability. Anything reached from inside
+   * `fn` joins the open read rather than starting a second one — including a
+   * nested `read()` and the two conveniences below — so every answer within
+   * one `fn` describes one revision however it was reached.
    */
   read<T>(accountId: string, fn: (view: MirrorView) => Promise<T>): Promise<T>;
 

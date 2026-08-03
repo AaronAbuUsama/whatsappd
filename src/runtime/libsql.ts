@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Client, Row, Transaction } from "@libsql/client";
 import type { ContactUpdate } from "../model/contact.ts";
 import type { GroupUpdate } from "../model/group.ts";
@@ -156,6 +157,17 @@ async function migrate(client: Client): Promise<void> {
     transaction.close();
   }
 }
+
+/**
+ * The read transaction the current async context is already inside, if any.
+ *
+ * @remarks
+ * Module-scoped so it distinguishes *nested* from merely concurrent: two
+ * `read()` calls racing each other each get their own context, while anything
+ * reached from inside one — including `snapshot()` and `messages()`, which are
+ * conveniences over `read()` — finds the open transaction.
+ */
+const openReads = new AsyncLocalStorage<Transaction>();
 
 async function transact<T>(
   client: LazyLibsqlClient,
@@ -1300,8 +1312,18 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
     };
   };
 
-  const read: WhatsAppDataStore["read"] = (accountId, fn) =>
-    transact(client, "read", (transaction) => fn(view(transaction, accountId)));
+  const read: WhatsAppDataStore["read"] = (accountId, fn) => {
+    // A read reached from inside another one joins it instead of opening a
+    // second transaction. Local clients in this process share one operation
+    // queue, so the inner transaction would queue behind the outer one that is
+    // waiting on this very callback — a deadlock, not a slower read. Joining
+    // also answers both at one revision, which is what `read()` promises.
+    const joined = openReads.getStore();
+    if (joined) return fn(view(joined, accountId));
+    return transact(client, "read", (transaction) =>
+      openReads.run(transaction, () => fn(view(transaction, accountId))),
+    );
+  };
 
   return {
     async accept(accountId, events, fencingToken) {
