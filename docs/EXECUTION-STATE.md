@@ -208,27 +208,37 @@ exact head after the documented handoff gate, targets that predecessor while
 stacked, and never merges before it. #106–#112 are fully specified for agents
 and #113 is a human release operation.
 
-#117 goes first because `pnpm proof:pack` appears in the required-validation
-list of every node below it and can currently pass having observed a `dist/`
-built before the change under test — a false green in seven gates at once.
+#117 went first because `pnpm proof:pack` appears in the required-validation
+list of every node below it and could pass having observed a `dist/` built
+before the change under test — a false green in seven gates at once. It now
+builds before packing and runs in CI. Its residue is recorded under C6 in
+`docs/client-stack-defect-ledger.md`: bare `pnpm pack` is still stale-prone,
+`release.yml` publishes a tarball the packed proof never inspected, and the
+proof's positive control catches an empty `dist/` but not a wrong one.
 
 #107 is worth more than its position suggests. It is the node that makes
-`createWhatsAppClient` reachable from the package root: until it lands, an
-application consuming this repository gets the raw frame surface at
-`src/index.ts:55-106` and has to deep-import for the friendly Client. The
-OpenTUI application that will later produce #110's bindings is blocked on
-exactly that, and on #108 for sends.
+`createWhatsAppClient` reachable at all. The package exports exactly `.`,
+`./testing` and `./package.json` (`package.json:29-33`), and
+`tests/packed-imports.ts:137-139` asserts every other subpath rejects with
+`ERR_PACKAGE_PATH_NOT_EXPORTED` — so an installed consumer cannot deep-import
+its way to the friendly Client. It gets the raw frame surface at
+`src/index.ts:55-106` or nothing. The OpenTUI application that will later
+produce #110's bindings is blocked on exactly that, and on #108 for sends.
 
-#118 was absorbed into #106 rather than tracked beside it, because an
-obligation living in a sibling issue an executor may not open is the artifact
-that failed nineteen times in the postmortem.
+#118 was absorbed into #106 rather than tracked beside it. The reasoning is
+`docs/issue-71-postmortem.md:79` — 19 of 28 findings were "same class, new
+site", recurring after a fix — together with C10 in the defect ledger, which
+draws the conclusion those recurrences support: an obligation is missed when
+the correct path costs more to type than the incorrect one, and a firmer
+sentence in a document never changes that. An obligation in a sibling issue an
+executor may not open is the most expensive path of all.
 
 Post-0.3 and research lanes do not block that spine:
 
 ```text
 #50 real Android history research ──┐
 #113 published 0.3 ─────────────────┴─→ #25 automatic history
-#113 ─→ #110 extract @whatsappd/react from the proven OpenTUI consumer
+#108 ─→ #110 extract @whatsappd/react once a real OpenTUI consumer is stable
 #113 ─→ #72 restartable media jobs
 #113 ─→ #73 … #80 domain expansion
 #113 ─→ #81 Postgres ─┐

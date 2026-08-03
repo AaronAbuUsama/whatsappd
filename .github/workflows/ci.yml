@@ -42,6 +42,8 @@ jobs:
       - run: pnpm build
       # `pnpm pack` archives whatever `dist/` already holds, so this proof has
       # to build first or it inspects an artifact older than the change under
-      # test. The `proof:pack` script owns that build; this step does not
-      # depend on the one above having run.
+      # test. The `proof:pack` script owns that build, which is why it does not
+      # depend on the step above -- and why the step above stays: a broken
+      # build should fail as a broken build, not as a packed-proof failure two
+      # steps later.
       - run: pnpm proof:pack
