@@ -2,6 +2,11 @@
 status: accepted
 ---
 
+> Extended by ADR-0028 and ADR-0030. This decision separates the two kinds of
+> fact for storage; ADR-0030 separates them for delivery, and ADR-0028 specifies
+> how a client represents a still-current status — derived from the observation
+> and the current instant rather than committed and maintained by timers.
+
 # Observed instants are durable, the statuses they came from are not
 
 ADR-0014 states that presence and connection state "are not appended because

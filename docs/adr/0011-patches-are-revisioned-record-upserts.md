@@ -2,6 +2,12 @@
 status: accepted
 ---
 
+> Amended by ADR-0030: a patch also carries the PN/LID aliases the projection
+> computed, and a delete names the native ids it frees. Without them a consumer
+> maintaining state from patches cannot keep Address Resolution coherent. The
+> `fromRevision`/`revision` pair, exact-base application, and gap-forces-snapshot
+> below stand unchanged.
+
 # Patches are revisioned record upserts
 
 A patch carries normalized mirror-record upserts and deletes plus
