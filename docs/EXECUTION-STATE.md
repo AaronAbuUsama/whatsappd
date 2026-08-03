@@ -1,10 +1,10 @@
 # Execution state — WhatsApp application substrate
 
-Last updated: 2026-08-02. The capability catalogue merged at
-`d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the executable
-graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. The owner subsequently removed
-redundant #63/#39 storage-composition work. #64 and #70 are merged; #71 is the
-current implementation frontier.
+Last updated: 2026-08-03. The capability catalogue merged at
+`d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the first executable
+graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. After #64/#70 and substrate
+#96–#98 landed, the owner replaced the underspecified #71/#22/#23/#30/#40/#41
+spine with the executable stack #105–#113. #105 is the current frontier.
 
 ## Where everything lives
 
@@ -69,6 +69,9 @@ the planned and current product surface without governing it.
 | Observed instants are durable; live statuses are not                                         | 0020           |
 | Session failures rank subscriber, teardown, then ordinary run                                | 0021           |
 | Delivered PN/LID equivalence may consolidate redundant current contacts                      | 0022           |
+| Live state is derived from an observation and sampled instant                                | 0028           |
+| Client commits once, then delivers through one listener primitive                            | 0029           |
+| Coherent reads come from the substrate through a module-private Runtime source               | 0030           |
 
 ## Semantics that must not be collapsed
 
@@ -144,8 +147,9 @@ WhatsApp messages”, or report a delivered count tied to the request.
 - #64 closed the remaining synchronous custom-session teardown boundary in
   PR #86.
 - #70 completed normalized message/update projection in PR #88; accepted
-  updates remain retained and page by source `seq`. #71 owns the friendly
-  Client.
+  updates remain retained and page by source `seq`. #96–#98 supply joint reads,
+  split durable/live delivery and alias deltas. #105–#107 own the friendly
+  Client stack.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - `fileStore()` remains the credential-only option for the independently usable
@@ -157,30 +161,46 @@ WhatsApp messages”, or report a delivered count tied to the request.
 
 ## Next step
 
-The owner locked Postgres, S3-compatible media, and dependent browser delivery
-to post-0.3. #63 and #39 were later removed as redundant because the shipped
-libSQL and filesystem-media composition needs no additional mechanism:
+The owner locked Postgres, S3-compatible media and dependent browser delivery
+to post-0.3. #63 and #39 were removed as redundant because libSQL plus injected
+filesystem media already supplies the local durable composition.
+
+The replacement 0.3 graph is:
 
 ```text
-✓ #64 Runtime teardown ───────────────────┐
-                                         ↓
-✓ #70 projection → #71 Client → #22 operations → #23 pairing/unlink
-                                                  ↓
-                              #30 React/OpenTUI → #40 → #41
+completed substrate: #64  #70  #96  #97  #98
+
+#105 Client core
+  ↓
+#106 conversations and lifetimes
+  ↓
+#107 public/packed Client cut
+  ↓
+#108 durable operations
+  ↓
+#109 pairing and unlink
+  ├──────────────→ #110 React + OpenTUI ──┐
+  └──────────────→ #111 real-account P4 ──┤
+                                          ↓
+                                  #112 release candidate
+                                          ↓
+                                  #113 publish 0.3.0
 ```
 
-#23 has two direct blockers (#22 and the now-merged #64); #22 remains blocked
-by #71. With #70 merged, the executable frontier is **#71**.
+#105–#110 form the ordered implementation stack. Each PR names and targets its
+predecessor while stacked, then merges bottom-up. #110 and #111 may proceed in
+parallel after #109; #112 is their convergence gate. Only **#105** is currently
+labelled `ready-for-agent`.
 
 Post-0.3 and research lanes do not block that spine:
 
 ```text
-#50 real Android history research ─┐
-#41 published 0.3 ─────────────────┴─→ #25 automatic history
-#41 ─→ #72 restartable media jobs
-#41 ─→ #73 … #80 domain expansion
-#41 ─→ #81 Postgres ─┐
-#41 ─→ #82 S3 ───────┴─→ #83 browser delivery → #84 browser proof
+#50 real Android history research ──┐
+#113 published 0.3 ─────────────────┴─→ #25 automatic history
+#113 ─→ #72 restartable media jobs
+#113 ─→ #73 … #80 domain expansion
+#113 ─→ #81 Postgres ─┐
+#113 ─→ #82 S3 ───────┴─→ #83 browser delivery → #84 browser proof
 ```
 
 PocketBase (#26–#32) and Convex (#33–#37) remain deferred until a concrete

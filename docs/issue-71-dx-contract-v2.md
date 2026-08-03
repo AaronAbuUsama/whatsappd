@@ -197,7 +197,7 @@ Expose the connected account identity from the underlying Session only while kno
 - reconciles a message that appeared live and in the page into one record;
 - keeps a live backdated insertion in its correct order;
 - on failure leaves the previous messages/cursor intact, records `error`, and permits an explicit later retry;
-- never contacts WhatsApp. #22 adds the separate manual phone-history operation.
+- never contacts WhatsApp. #108 adds the separate manual phone-history operation.
 
 When the Client detects a revision gap, each open conversation re-reads its loaded window from newest storage before publishing replacement state. Request `max(pageSize, currentlyLoadedCount)` records, replace the saved/live collection by identity, and retain no stale message that the fresh read no longer returns. This is the message-window equivalent of snapshot replacement.
 

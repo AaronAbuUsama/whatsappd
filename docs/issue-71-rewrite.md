@@ -1,3 +1,9 @@
+# Historical Client design record
+
+> Issue #71 is closed as superseded. Execution now lives in #105, #106 and
+> #107. This document remains a contract/history reference only; agents must not
+> execute its old slice table or numeric diff budget.
+
 ## Parent
 
 #68, #15
@@ -71,9 +77,9 @@ which were the same defect class recurring at a new site.
   this issue is executed under. **Start here.**
 - `docs/issue-71-postmortem.md` — the full investigation, ten sections.
 - ADR-0028, ADR-0029, ADR-0030 — the decisions themselves, normative.
-- `docs/agents/frontier-execution.md` — the reviewable-unit budget, what a
-  restart after diagnosis must produce, and why this specification does not move
-  during a lane.
+- `docs/agents/frontier-execution.md` — the stacked-PR and four-round review
+  protocol, what a restart after diagnosis must produce, and why a specification
+  does not move during a lane.
 
 Four conclusions from the investigation change this issue:
 
@@ -339,7 +345,7 @@ source; applications do not reach into Session.
 - keeps a live backdated insertion in its correct order;
 - on failure leaves the previous messages and cursor intact, records `error`,
   and permits an explicit later retry;
-- never contacts WhatsApp. #22 adds the separate manual phone-history operation.
+- never contacts WhatsApp. #108 adds the separate manual phone-history operation.
 
 When the Client detects a revision gap, each open window re-reads from newest
 storage before publishing replacement state. Request
@@ -388,24 +394,21 @@ None names a specific past defect.
 - [ ] Root and packed declarations expose the friendly Client and no raw-frame
       Client interface.
 
-## Implementation slices
+## Current implementation stack
 
-Each slice is a separate PR that merges on its own. **No slice exceeds 400
-changed lines.** A slice over budget is split, not reviewed. There is no
-requirement that any particular slice carry forward earlier code, and no
-implementation may import the retired PR #93/#94 `client.ts`.
+The executable replacement is split by responsibility, with no numeric line
+limit:
 
-| #   | Slice                              | Contains                                                                                                                                             | Budget |
-| --- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| c1  | Publication primitive + namespaces | non-`async` `commit()`, the pull loop, one notification point, the five listener rules, `account`/`chats`/`contacts`/`groups`. **No conversations.** | ~250   |
-| c2  | Opened conversations               | shared window, handles, joint read at one revision, live upsert merge, ordering                                                                      | ~150   |
-| c3  | Paging                             | `loadOlder()`, single-flight join, cursor exhaustion, failure and explicit retry                                                                     | ~100   |
-| c4  | Revision gaps                      | global replacement, per-window re-read, no stale retention                                                                                           | ~80    |
-| c5  | Lifetimes                          | `close()`, `AbortSignal`, use-after-close typed errors, handle refcounting                                                                           | ~60    |
-| c6  | Hard cut                           | root and packed export surface, documentation                                                                                                        | ~40    |
+| Issue | Responsibility                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------------ |
+| #105  | private Runtime source, reused pull loop, hydrated core namespaces and one publication primitive |
+| #106  | shared conversation windows, coherent open, paging, gap recovery and lifetimes                   |
+| #107  | package-root hard cut, README and packed-consumer proof                                          |
 
-c1's shape must survive c2–c5; that is the one integration risk and it is why c1
-is reviewed alone before conversations exist.
+Each PR targets its predecessor while stacked and merges bottom-up. A boundary
+is changed only when the mechanism cannot remain coherent or independently
+provable—not to satisfy a line count. No implementation may import the retired
+PR #93/#94 `client.ts`.
 
 ## Testing decisions
 

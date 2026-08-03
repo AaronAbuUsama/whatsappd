@@ -44,6 +44,45 @@ remain as one-line conveniences over it. This is an exposure of existing
 behaviour rather than a new capability: both implementations already wrap their
 reads in exactly this boundary.
 
+## The Client reaches that transaction through a private Runtime source
+
+The public factory remains `createWhatsAppClient(runtime)`: passing a Backend as
+a second public argument would expose infrastructure ownership to application
+state, while adding `read()` to `WhatsAppRuntime` would turn an internal
+coherence need into a general Runtime query API.
+
+The concrete Runtime implementation therefore registers one module-private
+source for the Client:
+
+```ts
+type ClientRuntimeSource = {
+  frames(signal?: AbortSignal): AsyncIterable<WhatsAppDurableFrame>;
+  onLive(
+    listener: (
+      frame: WhatsAppLiveFrame,
+      claim: { fencingToken: number; expiresAt: number },
+    ) => void,
+  ): Unsubscribe;
+  read<T>(fn: (view: MirrorView) => Promise<T>): Promise<T>;
+  identity(): WaIdentity | undefined;
+  currentClaim(): { fencingToken: number; expiresAt: number } | undefined;
+};
+
+const clientSourceFor = new WeakMap<WhatsAppRuntime, ClientRuntimeSource>();
+```
+
+`createWhatsAppRuntime()` captures its Backend, Session identity, account claim
+and the existing durable pull loop in that source. `createWhatsAppClient()`
+accepts only a Runtime created by this module and looks up the source. No public
+Runtime read method, Backend parameter, generic source Adapter or second durable
+frame loop is introduced.
+
+This also keeps live observations tied to the claim that produced them: a Client
+accepts one only while its fencing token is still current and the observation
+and claim have not expired. Durable coherence comes from the Data Store read
+transaction; live freshness comes from the current Runtime claim. Neither is
+reconstructed by comparing independent application reads.
+
 ## Live and durable do not share one ordered channel
 
 `WhatsAppClientFrame` places `presence` and `connection` — which carry no
