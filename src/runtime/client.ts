@@ -100,8 +100,19 @@ const NAMESPACES: readonly Namespace[] = ["account", "chats", "contacts", "group
  * Registering one function twice owes two deliveries, and unsubscribing then
  * resubscribing it during a fanout owes both effects. A `Set` keyed by the
  * callback can express neither (ADR-0013).
+ *
+ * Every namespace's subscriptions share one set, tagged rather than separated,
+ * and that is what makes rules 2 and 3 hold *between* namespaces as well as
+ * within one. A transition commonly affects several — one conversation-sync
+ * batch reaches chats, contacts and groups — and with a set each, membership
+ * would be copied once per namespace: a listener reached early could then add a
+ * listener to a namespace the same delivery had not got to yet, and that
+ * listener would run inside the transition it was supposed to start after. One
+ * set makes the copy delivery-wide by construction instead of by remembering to
+ * take it in the right place.
  */
 interface Registration {
+  readonly namespace: Namespace;
   readonly notify: () => void;
 }
 
@@ -253,12 +264,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   const presence = new Map<string, Observation<PresenceKind>>();
   let closure: { readonly error?: unknown } | undefined;
 
-  const listeners: Record<Namespace, Set<Registration>> = {
-    account: new Set(),
-    chats: new Set(),
-    contacts: new Set(),
-    groups: new Set(),
-  };
+  const listeners = new Set<Registration>();
 
   /**
    * Each namespace's ordered read, rebuilt when a transition changed it.
@@ -418,8 +424,13 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     const outer = deliveryInstant;
     deliveryInstant = Date.now();
     try {
-      for (const namespace of touched)
-        fanout(listeners[namespace], (listener) => listener.notify());
+      // One fanout for the whole transition rather than one per namespace: the
+      // membership copy has to span every namespace this transition affected,
+      // or a listener reached under the first could still add or remove one
+      // under the second.
+      fanout(listeners, (listener) => {
+        if (touched.has(listener.namespace)) listener.notify();
+      });
     } finally {
       deliveryInstant = outer;
     }
@@ -430,10 +441,10 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     (listener: () => void, options?: ClientSubscribeOptions): Unsubscribe => {
       const signal = options?.signal;
       if (signal?.aborted) return () => {};
-      const registration: Registration = { notify: listener };
-      listeners[namespace].add(registration);
+      const registration: Registration = { namespace, notify: listener };
+      listeners.add(registration);
       const off = (): void => {
-        listeners[namespace].delete(registration);
+        listeners.delete(registration);
         signal?.removeEventListener("abort", off);
       };
       signal?.addEventListener("abort", off, { once: true });
@@ -520,7 +531,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       following.abort();
       offLive();
       await pump;
-      for (const namespace of NAMESPACES) listeners[namespace].clear();
+      listeners.clear();
     })());
 
   try {

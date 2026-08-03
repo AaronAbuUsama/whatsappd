@@ -387,6 +387,68 @@ test("listener rules hold across subscribe, unsubscribe and throw during fanout"
   }
 });
 
+test("the listener rules hold across namespaces, not just within one", async () => {
+  const worker = await lane();
+  try {
+    const calls: Record<string, number> = { chats: 0, lateGroup: 0, doomedGroup: 0, groups: 0 };
+    let offLateGroup: (() => void) | undefined;
+    let offDoomedGroup: (() => void) | undefined;
+
+    // Membership is snapshotted for the whole delivery, not per namespace: a
+    // listener reached early must not be able to add one to a namespace this
+    // same transition is about to reach, nor keep a doomed one alive there.
+    const offChats = worker.client.chats.subscribe(() => {
+      calls.chats = (calls.chats ?? 0) + 1;
+      offDoomedGroup?.();
+      offLateGroup = worker.client.groups.subscribe(() => {
+        calls.lateGroup = (calls.lateGroup ?? 0) + 1;
+      });
+    });
+    offDoomedGroup = worker.client.groups.subscribe(() => {
+      calls.doomedGroup = (calls.doomedGroup ?? 0) + 1;
+    });
+    const offGroups = worker.client.groups.subscribe(() => {
+      calls.groups = (calls.groups ?? 0) + 1;
+    });
+
+    // One conversation-sync batch touches chats and groups together, so both
+    // namespaces are delivered inside one transition.
+    await worker.driver.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+        chats: [{ id: ROOM, isGroup: true, subject: "Room", lastMessageAt: AT }],
+        contacts: [],
+        messages: [],
+      },
+    });
+    await tick();
+
+    expect(calls.chats).toBe(1);
+    expect(calls.groups).toBe(1);
+    // Subscribed during this delivery, to a namespace it had not reached yet.
+    expect(calls.lateGroup).toBe(0);
+    // Unsubscribed during this delivery, from a namespace it had not reached.
+    expect(calls.doomedGroup).toBe(0);
+
+    await worker.driver.emit({
+      type: "group",
+      group: { kind: "metadata", id: ROOM, subject: "Renamed", at: AT + 1 },
+    });
+    await tick();
+
+    expect(calls.lateGroup).toBe(1);
+    expect(calls.doomedGroup).toBe(0);
+    expect(calls.groups).toBe(2);
+
+    offChats();
+    offGroups();
+    offLateGroup?.();
+  } finally {
+    await worker.stop();
+  }
+});
+
 test("a subscription is released by its abort signal", async () => {
   const worker = await lane();
   try {
