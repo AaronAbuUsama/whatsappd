@@ -428,10 +428,19 @@ before issuing its read, and a tracer fails red if that moves. Per-message-id
 revisions would not have helped: a dropped patch has no entry to record a
 revision in.
 
-**Mutation audit at the round-1 fix head.** Twelve mutations derived from the
+**Mutation audit at the round-1 fix head.** Thirteen mutations derived from the
 diff's decision points rather than from the author's model of it, each written,
 compiled and run: fill rule removed, `touch("messages")` removed, entry-identity
 guard removed, both `own()` calls removed separately, drop rule removed,
 `retained.clear()` removed, ascending tie-break, `localeCompare` tie-break,
-nested-commit basis re-sampled, and both `following` guards in `older()`. All
-twelve fail red. Before round 1 the first five and the last two did not.
+nested-commit basis re-sampled, both `following` guards in `older()`, and
+`endFollowing` ending following without ending the reads in flight. All thirteen
+fail red. Before round 1, seven of them did not.
+
+**One methodological correction, because it is the kind of thing this file
+exists to catch.** The first pass of that audit applied mutations _by line
+number_ while the diff was still moving, so two of them silently landed on the
+wrong lines and reported a green suite as evidence of an unfalsifiable `own()`.
+Re-run against matched content, both fail red. A mutation audit that cannot say
+it mutated what it meant to is C6 wearing a lab coat — the audit needs the same
+"did this actually observe anything" check it is applied to.
