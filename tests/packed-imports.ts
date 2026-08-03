@@ -52,6 +52,31 @@ try {
   ]) {
     assert.equal(new RegExp(`\\b${removed}\\b`).test(declarations), false);
   }
+  // The runtime-to-client source is an internal Module, not a public Adapter:
+  // its joint read, its account claim and its identity sample are how the
+  // friendly client reaches the Data Store transaction without a Backend
+  // parameter or a public `runtime.read()` (ADR-0030). None of it, and no part
+  // of the client core this stack layer builds on it, is a published contract
+  // yet. `RuntimeSession.identity` is deliberately not in this list: an
+  // application supplies its own session, so that capability has to be
+  // declarable.
+  for (const modulePrivate of [
+    "ClientRuntimeSource",
+    "clientSourceFor",
+    "ClientClaim",
+    "currentClaim",
+    "createWhatsAppClient",
+    "WhatsAppClientCore",
+    "ClientAccountState",
+    "ClientNamespace",
+    "fanout",
+  ]) {
+    assert.equal(
+      new RegExp(`\\b${modulePrivate}\\b`).test(declarations),
+      false,
+      `${modulePrivate} must not reach the packed declarations`,
+    );
+  }
   for (const retiredVocabulary of [
     /\bcallbacks?\b/i,
     /\b(?:event|inbound|contacts?|presence|groups?|connection|own)\W+streams?\b/i,
@@ -93,7 +118,7 @@ try {
       });
       assert.equal(typeof backend.close, "function");
       await backend.close();
-      for (const removed of ["createChannelAdapter", "bindTools"]) {
+      for (const removed of ["createChannelAdapter", "bindTools", "createWhatsAppClient"]) {
         assert.equal(removed in root, false);
       }
       for (const subpath of ["adapters/eve", "channel", "sidecar", "stores/libsql", "stores/memory", "tools"]) {
