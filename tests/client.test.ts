@@ -929,32 +929,29 @@ test("two listeners in one delivery read one account state, not two", async () =
   }
 });
 
-test("account state keeps one identity while it says the same thing", async () => {
-  // A binding re-reads on every notification and compares with `Object.is`, so
-  // a fresh object per call is an infinite render loop rather than a nicety.
-  const worker = await lane({ identity: { jid: "15551230000:7@s.whatsapp.net" } });
+test("the identity copy is reused although the session builds a fresh one per call", async () => {
+  // The live session constructs its identity from the socket on every call, so
+  // the deterministic one does too. A copy kept against the session's *object*
+  // would miss every time — deep-cloning on the read path listeners run on,
+  // while passing a test whose double happened to return a stable reference.
+  const worker = await lane({ identity: { jid: "15551230000:7@s.whatsapp.net", pushName: "Me" } });
   try {
-    const first = worker.client.account.get();
-    expect(worker.client.account.get()).toBe(first);
-    // Including the deep-owned identity, which must not be re-copied per read.
-    expect(worker.client.account.get().identity).toBe(first.identity);
+    const raw = worker.driver.session.identity?.();
+    expect(raw).not.toBe(worker.driver.session.identity?.());
 
-    // A transition that changes what it says returns something new…
-    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
-    await tick();
-    const online = worker.client.account.get();
-    expect(online).not.toBe(first);
-    expect(online.connection?.phase).toBe("online");
-    // …and settles again.
-    expect(worker.client.account.get()).toBe(online);
+    const first = worker.client.account.get().identity;
+    expect(first?.jid).toBe("15551230000:7@s.whatsapp.net");
+    // One copy, reused: compared by what it says, not by which object said it.
+    expect(worker.client.account.get().identity).toBe(first);
+    expect(worker.client.account.get().identity).toBe(first);
+    // …and still owned, so a reader cannot reach into Client state through it.
+    assert.throws(() => {
+      (first as { pushName?: string }).pushName = "Renamed by a reader";
+    }, TypeError);
 
-    // A transition in another namespace leaves it alone.
-    await worker.driver.emit({
-      type: "message",
-      message: textMessage({ id: "m1", chatId: PERSON, text: "hi", timestamp: AT }),
-    });
-    await tick();
-    expect(worker.client.account.get()).toBe(online);
+    // The account view itself is deliberately fresh per read — it derives from
+    // the clock, and caching a snapshot belongs to the binding (ADR-0023).
+    expect(worker.client.account.get()).not.toBe(worker.client.account.get());
   } finally {
     await worker.stop();
   }
@@ -1029,6 +1026,74 @@ test("a live observation with no claim behind it is never reported", async () =>
     expect(notified).toBe(0);
   } finally {
     await worker.client.close();
+  }
+});
+
+test("a listener that closes the client cannot split its own delivery either", async () => {
+  // The sibling of stopping the Runtime mid-fanout: closing the Client also
+  // ends its live truth, so whether it is in the delivery's basis decides
+  // whether the listeners after it see the same transition or a different one.
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    const views: string[] = [];
+    const read = (): string =>
+      [
+        worker.client.account.get().connection?.phase ?? "none",
+        worker.client.contacts.presence(PERSON) ?? "none",
+      ].join("/");
+
+    worker.client.contacts.subscribe(() => views.push(read()));
+    worker.client.contacts.subscribe(() => {
+      views.push(read());
+      void worker.client.close();
+    });
+    worker.client.contacts.subscribe(() => views.push(read()));
+
+    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+    await tick();
+
+    expect(views.length).toBe(3);
+    expect(new Set(views).size).toBe(1);
+    expect(views[0]).toBe("online/typing");
+    // Afterwards the close has taken effect and live truth is gone.
+    expect(worker.client.contacts.presence(PERSON)).toBe(undefined);
+  } finally {
+    await worker.runtime.stop().catch(() => {});
+  }
+});
+
+test("an unavailable naming one native form ends the observation made under another", async () => {
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    await worker.driver.emit({
+      type: "contact",
+      contact: { id: PERSON, nativeIds: [PERSON, PERSON_LID] },
+    });
+    // Observed present under the PN form…
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+    await tick();
+    expect(worker.client.contacts.presence(PERSON)).toBe("typing");
+    expect(worker.client.contacts.presence(PERSON_LID)).toBe("typing");
+
+    let notified = 0;
+    worker.client.contacts.subscribe(() => void (notified += 1));
+
+    // …and gone under the LID form. One peer, so both reads must end, and the
+    // application has to be told: a read that spans a contact's forms while a
+    // removal keys only the delivered address answers `typing` for a peer
+    // WhatsApp has just said is away.
+    await worker.driver.emit({
+      type: "presence",
+      presence: { chatId: PERSON_LID, kind: "unavailable" },
+    });
+    await tick();
+
+    expect(worker.client.contacts.presence(PERSON)).toBe(undefined);
+    expect(worker.client.contacts.presence(PERSON_LID)).toBe(undefined);
+    expect(notified).toBe(1);
+  } finally {
+    await worker.stop();
   }
 });
 
@@ -1244,17 +1309,34 @@ test("a failure that ends following is reported as account state, not only a war
       },
     },
   };
-  const worker = await lane({ backend });
+  const worker = await lane({ backend, freshnessMs: 600_000 });
   try {
     await worker.driver.emit({
       type: "contact",
       contact: { id: PERSON, nativeIds: [PERSON], displayName: "Person" },
     });
+    // Live observations retained *before* the failure, so the terminal delivery
+    // has something it could wrongly still report.
+    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
     await tick();
     expect(worker.client.account.get().closed).toBe(false);
+    expect(worker.client.account.get().connection?.phase).toBe("online");
 
     let notified = 0;
-    worker.client.account.subscribe(() => void (notified += 1));
+    // What the last delivery this client ever makes actually said.
+    const terminal: Array<{ closed: boolean; connection?: string; presence?: string }> = [];
+    worker.client.account.subscribe(() => {
+      notified += 1;
+      const account = worker.client.account.get();
+      terminal.push({
+        closed: account.closed,
+        ...(account.connection && { connection: account.connection.phase }),
+        ...(worker.client.contacts.presence(PERSON) && {
+          presence: worker.client.contacts.presence(PERSON),
+        }),
+      });
+    });
 
     // Skip a revision so the reused pull loop must re-snapshot, and make that
     // read fail.
@@ -1274,6 +1356,12 @@ test("a failure that ends following is reported as account state, not only a war
     // Handed out by identity, so a caller can compare it with the cause it holds.
     expect(worker.client.account.get().error).toBe(failure);
     expect(notified > 0).toBe(true);
+
+    // The terminal delivery is the last one there will ever be, so it must not
+    // be the one that reports a live connection the next read drops — there is
+    // nobody left to correct it. Detaching before committing the closure, not
+    // after, is what makes that true.
+    expect(terminal[terminal.length - 1]).toEqual({ closed: true });
 
     // The live channel is released with it: a client that cannot follow durable
     // state must not keep answering as though its live state were current.

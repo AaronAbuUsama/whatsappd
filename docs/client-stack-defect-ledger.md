@@ -6,9 +6,21 @@ does not reset. It exists because PR #94's ledger reset hid that #93 and #94
 were one review loop relabelled as two attempts
 (`docs/issue-71-postmortem.md` §1).
 
-Opened at #105 / PR #116. A class is closed only when a _value-level primitive_
-makes it unreachable by construction — an ordering rule re-established by hand
-at each site is what recurred nineteen times across the retired work.
+Opened at #105 / PR #116, **at round 2 rather than before round 1** — the
+protocol asks for it before review is requested, and rounds 1 and 2 were
+requested against `4ecd58f`/`cfd8bc5` and `c57714f` before this file existed.
+No history was lost, because this is the stack's first PR and there was nothing
+prior to inherit, but the receipt is late and the record should say so rather
+than read as though it had always been here.
+
+Classes are numbered after `docs/issue-71-postmortem.md` §3, which is why the
+numbering is not contiguous: **C7 (docs audited by string, not by surface) has
+no instance in this stack** and is retained as a number so a reader can match
+these against the postmortem's table.
+
+A class is closed only when a _value-level primitive_ makes it unreachable by
+construction — an ordering rule re-established by hand at each site is what
+recurred nineteen times across the retired work.
 
 ## Classes
 
@@ -37,14 +49,31 @@ _from the same transition_. That is ADR-0028's contradiction re-instantiated on
 a different axis: the ADR names the instant because the clock was the axis
 issue #71 argued about, but its requirement is general.
 
-**Root cause of the recurrence**: the fix satisfied the ADR's example rather
-than its property. **Fixed at the layer that decides it** — the delivery-scoped
-value is now the whole derivation basis (`Derivation = { at, claim, identity }`),
-sampled once per delivery.
+**Root cause of the first recurrence**: the fix satisfied the ADR's example
+rather than its property. The delivery-scoped value became the whole basis —
+`Derivation = { at, claim, identity }`, sampled once.
 
-**Inherited obligation.** Anything a read derives from that can change without a
-transition belongs in `Derivation`, not sampled at the read. Adding a field to
-what reads consult means adding it there.
+**Recurred a second time, at review round 2, and that is the entry that
+matters.** The round-1 fix introduced `detached`, a flag written outside
+`commit` and read by `current()` — so a listener calling `client.close()`
+mid-fanout again gave later listeners a different connection and presence from
+the same transition. Three sites, one class.
+
+The reason it kept recurring is that `Derivation` was **a discipline wearing a
+primitive's clothes**. `current()` was defined inside the factory closure, so
+reaching a stray variable was _easier_ than the correct path of adding a field
+to `Derivation` and `sample()`. The default was wrong and the compiler was
+silent — the "commit before notify" shape, not the `compareId` shape.
+
+**Closed by construction at round 2**: `current()` and `Derivation` moved to
+module scope, closed over nothing. The function now physically cannot consult
+anything but its two parameters, so reaching a new input _requires_ adding it to
+`Derivation`, which is the one place it can be sampled once per delivery.
+`following` (was `detached`) is a field there like any other.
+
+**Inherited obligation.** Keep `current()` at module scope. The moment it moves
+inside the closure, or a live read is written that does not route through it,
+the class is open again.
 
 ### C3 — recovery or termination as a detached task rather than a Client state
 
@@ -56,6 +85,26 @@ never change again while reporting itself live — the exact condition Runtime
 Closure exists to make impossible (`CONTEXT.md`), one layer up.
 
 **Inherited obligation.** Every path that can end following ends it _visibly_.
+
+### C9 — one fact answered two ways at two seams
+
+New in this stack; the postmortem has no number for it.
+
+A presence is keyed by the address WhatsApp used, while a contact is one peer
+under several native forms. The **read** was taught to span a contact's forms
+and the **removal** was left keying the delivered address alone, so an
+`unavailable` naming a consolidated contact's LID removed nothing and both
+forms went on reporting `typing` with nothing able to end it. That is the same
+class as the original defect — the live and durable halves of one fact
+disagreeing — closed on one path and left open on its sibling.
+
+**Closed by** `formsOf(nativeId)`: one function returning every address that
+speaks for a subject, with the read and the removal both routed through it.
+"Resolve the subject the same way on both paths" is an instruction; one function
+they both call is the primitive.
+
+**Inherited obligation.** Any new presence-shaped read or write goes through
+`formsOf`. Layer 2's opened-conversation presence is the next such site.
 
 ### C4 — ownership defined by API visibility rather than memory provenance
 
@@ -88,10 +137,16 @@ construction.
   design, so it was blind exactly where the design was. Round 2 derived them
   from the code's decision points instead, and killed 39 of 46 where the first
   set killed 20 of 25.
+- **A test double that diverges from the adapter it stands in for is this class
+  too.** `createTestWhatsAppSession` returned a stable identity object while the
+  live session (`src/baileys/socket.ts`) builds a fresh one per call, so a cache
+  keyed on object identity passed its test and was inert in production. The
+  double now allocates per call, and the test fails red against the real shape.
 
 **Inherited obligation.** Derive mutations from decision points, not intuition.
 Keep the harness out of the PR (issue #52's lesson: a harness in the diff
-generates unbounded findings).
+generates unbounded findings). When a double stands in for an adapter, match the
+adapter on the axis under test — especially object identity.
 
 ### C8 — ordering determinism
 
@@ -105,12 +160,29 @@ primitive that never recurred.
 Recorded so a later layer does not mistake them for missing tests. Each becomes
 provable only if the substrate changes.
 
-| Property                                           | Why no test can fail red                                                                                                                                                                        |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `replace()` clears chats / groups / aliases        | Only contacts have a delete producer (`MirrorDelete` is contact-only by type, ADR-0019/0022), and alias rows are insert-only in both stores. Nothing else can ever _disappear_ from a snapshot. |
-| Freed native ids are dropped from the alias map    | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                   |
-| The delivery basis is restored rather than cleared | Save/restore is defensive against a nested `commit`, which no public path can currently produce.                                                                                                |
-| `close()` clears listeners; `close()` is memoized  | After `detached` is set and the pump has ended, no commit follows, so neither is behaviourally observable. Both are hygiene.                                                                    |
+| Property                                                    | Why no test can fail red                                                                                                                                                                                                                   |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `replace()` clears chats / groups / aliases                 | Only contacts have a delete producer (`MirrorDelete` is contact-only by type, ADR-0019/0022), and alias rows are insert-only in both stores. Nothing else can ever _disappear_ from a snapshot.                                            |
+| Freed native ids are dropped from the alias map             | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                                                              |
+| The delivery basis is restored rather than cleared          | Save/restore is defensive against a nested `commit`, which no public path can currently produce.                                                                                                                                           |
+| `close()` releases each registration; `close()` is memoized | After `following` is false and the pump has ended, no commit follows, so neither is behaviourally observable. Releasing each registration detaches caller-supplied abort signals; the memo makes concurrent closes join. Both are hygiene. |
+
+## Decisions taken here that a later layer may want to revisit
+
+- **`account.get()` returns a fresh view per read.** It derives from the clock,
+  so it cannot be memoized against a transition. A referentially-stable snapshot
+  is what `useSyncExternalStore` needs, and ADR-0023 assigns selectors and hooks
+  to `@whatsappd/react`; React is a declared non-goal of #105. An attempt at it
+  here was removed as speculative — and it was also inert, because it keyed on
+  the session's object identity. Layer 3 should decide where the cache lives.
+- **`closed` deliberately conflates a stopped Runtime with a failed follow.**
+  Both mean "this Client is finished, make another one", and recreating is
+  correct for either, so an application need not branch. If a later layer needs
+  to distinguish them, add a cause to the closure record rather than a second
+  boolean.
+- **Presence ties break on the contact's own `nativeIds` order.** Two forms of
+  one peer each holding a current observation is WhatsApp contradicting itself;
+  `Observation` keeps no `observedAt`, so there is nothing to prefer by.
 
 ## Substrate issues observed but out of scope
 

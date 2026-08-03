@@ -136,7 +136,11 @@ export function createTestWhatsAppSession(
       subscribe: (handlers, subscribeOptions) => dispatcher.subscribe(handlers, subscribeOptions),
       send,
       start: () => life,
-      identity: () => identity,
+      // A fresh object per call, because the live session builds one from the
+      // socket every time (`src/baileys/socket.ts`). Returning a stable
+      // reference here would let a consumer cache identity by reference, pass
+      // its own test, and re-copy on every read in production.
+      identity: () => identity && { ...identity },
       async stop() {
         // The real session reads its identity through the socket, so stopping
         // takes it away rather than leaving a stale one attached.
