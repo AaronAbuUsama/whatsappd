@@ -205,6 +205,11 @@ at is durable, so `lastSeenAt` on a contact and `lastConnectedAt` /
 `lastDisconnectedAt` on the account survive a restart as history — a timestamp
 never claims anyone is online now.
 
+They are also delivered on their own registration. `watch()` and
+`runtime.onFrame()` carry the revision-ordered frames — snapshot, patch, and
+closed — while `runtime.onLive()` carries presence and connection, which carry
+no revision and so cannot be ordered against a patch (ADR-0030).
+
 A watch ends with a `closed` frame when the runtime stops consuming the account.
 It carries the `error` when the session died on its own, and none when it was
 stopped deliberately — so a runtime that failed is never mistaken for a quiet

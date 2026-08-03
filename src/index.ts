@@ -98,6 +98,8 @@ export type {
   WhatsAppDataEvent,
   WhatsAppDataStore,
   WhatsAppDurableEvent,
+  WhatsAppDurableFrame,
+  WhatsAppLiveFrame,
   WhatsAppPatch,
   WhatsAppSnapshot,
 } from "./runtime/contracts.ts";
