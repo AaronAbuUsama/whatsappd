@@ -54,10 +54,26 @@ changed is that the bypass is now _greppable_ — a bare `chats.set(` with no
 
 **Inherited obligation.** Layers 2 and 3 add no second publication path. Every
 new mutation goes through a writer inside `commit`; `fanout` is called from
-exactly one site. Conversation state belongs in the factory beside the other
-cells with its own writers — **not** in per-`open()` locals with their own
-notification list, which is the retired design (`docs/issue-71-postmortem.md`
-§2) and which compiles clean against this head today.
+exactly one site.
+
+**The layer-2 half of that obligation was discharged by design rather than by
+discipline, on 2026-08-03.** This entry used to end by saying conversation state
+belongs in the factory beside the other cells and **not** in per-`open()` locals
+with their own notification list — the retired design
+(`docs/issue-71-postmortem.md` §2) which compiled clean against this head. That
+sentence was an instruction, and C10 predicts instructions lose whenever the
+wrong path is cheaper to type.
+
+A four-way design exercise on #106 replaced the conversation handle with a fifth
+namespace. **There is no `open()`, so there is no per-conversation call scope in
+which to declare that variable.** The retired design stopped being the cheaper
+path and became an unavailable one. That is the shape this file keeps asking for
+and rarely gets: not a firmer sentence, but the removal of the thing the sentence
+was guarding.
+
+The residue is unchanged and still named — the raw `Map`s remain in factory
+scope, so a determined edit can still bypass the writers. What is closed is the
+specific recurrence that killed PRs #93 and #94.
 
 ### C2 — decaying state whose currency depends on a scheduler
 
