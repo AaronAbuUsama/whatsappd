@@ -328,7 +328,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
   let terminal: Extract<WhatsAppDurableFrame, { type: "closed" }> | undefined;
-  /** Late subscribers owed the terminal frame, and those already handed it. */
+  /** Late subscribers owed the terminal frame, and those handed it in this drain. */
   const owedTerminal: Array<(frame: WhatsAppDurableFrame) => void> = [];
   const handedTerminal = new Set<(frame: WhatsAppDurableFrame) => void>();
   let replaying = false;
@@ -342,8 +342,10 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * registration during a fanout does — that seam is where every listener
    * defect in this rewrite lived. Draining is what lets a subscriber
    * registered by another subscriber's terminal callback still receive it;
-   * handing each callback the frame once is what stops a subscriber that
-   * re-registers *itself* from being handed it for ever.
+   * handing each callback the frame once *per drain* is what stops a
+   * subscriber that re-registers itself from being handed it for ever, while
+   * leaving two deliberate registrations of one function two deliveries and
+   * retaining no callback past the drain that served it.
    */
   const replayTerminal = (listener: (frame: WhatsAppDurableFrame) => void): void => {
     if (!terminal || handedTerminal.has(listener)) return;
@@ -356,6 +358,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         deliver(new Set([{ notify: next }]), terminal);
     } finally {
       replaying = false;
+      handedTerminal.clear();
     }
   };
 
