@@ -155,6 +155,14 @@ await runtime.stop(); // releases the account; does not close a shared backend
 await backend.close(); // the application owns the libSQL client's lifetime
 ```
 
+A local `file:` database is opened in WAL, so `whatsapp.db-wal` and
+`whatsapp.db-shm` sit beside it — move, copy, or delete the three together. WAL
+is what lets `read()` hold its transaction open without blocking writers, and
+the `-wal` file carries whatever commits land while a long read is open until
+that read finishes. A filesystem with no shared memory — many network mounts —
+keeps the rollback journal instead, where one open read blocks every writer on
+the file until it commits.
+
 Images, videos, audio and voice notes, documents, and stickers are downloaded
 while the live WhatsApp handle is usable. `fileMediaStore()` writes their bytes
 as private immutable local objects; libSQL stores only the message's opaque
