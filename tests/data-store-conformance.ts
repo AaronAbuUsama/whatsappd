@@ -110,6 +110,30 @@ test("the Current Mirror projection reads only the message key touched by an upd
   ]);
 });
 
+test("a delete names the forms that reached a contact whose record is gone", async () => {
+  const records: CurrentMirrorRecords = {
+    account: async () => ({ accountId: ACCOUNT }),
+    chat: async () => undefined,
+    contact: async (contactId) =>
+      contactId === LID ? { accountId: ACCOUNT, contactId: LID, nativeIds: [LID] } : undefined,
+    // PN's alias names an owner whose contact record is not there, so the
+    // record's own native ids cannot say what the delete frees.
+    contactId: async (nativeId) => (nativeId === LID ? LID : nativeId === PN ? "gone" : undefined),
+    group: async () => undefined,
+    message: async () => undefined,
+  };
+
+  const projection = await projectCurrentMirror(records, ACCOUNT, [
+    observed({ type: "contact", contact: { id: LID, nativeIds: [LID, PN] } }),
+  ]);
+
+  expect(projection.deletes).toEqual([
+    { type: "contact", contactId: "gone", freedNativeIds: [PN] },
+  ]);
+  // …and it is re-pointed in the same projection, so nothing is stranded.
+  expect(projection.aliases).toEqual([{ nativeId: PN, contactId: LID }]);
+});
+
 export function dataStoreConformance(name: string, create: DataStoreFactory): void {
   test(`[${name}] every supported event kind crosses one acceptance boundary`, async () => {
     const resource = await create();

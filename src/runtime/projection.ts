@@ -143,9 +143,13 @@ async function projectChat(state: ProjectionState, chat: ChatRecord): Promise<vo
 
 async function projectContact(state: ProjectionState, contact: ContactRecord): Promise<void> {
   const reachedIds: string[] = [];
+  /** Which of this observation's forms reached each owner, record or not. */
+  const reachedBy = new Map<string, string[]>();
   for (const nativeId of contact.nativeIds) {
     const reached = await state.contactId(nativeId);
-    if (reached !== undefined && !reachedIds.includes(reached)) reachedIds.push(reached);
+    if (reached === undefined) continue;
+    if (!reachedIds.includes(reached)) reachedIds.push(reached);
+    reachedBy.set(reached, [...(reachedBy.get(reached) ?? []), nativeId]);
   }
   const contactId = reachedIds[0] ?? contact.contactId;
   const reached: ContactRecord[] = [];
@@ -169,13 +173,20 @@ async function projectContact(state: ProjectionState, contact: ContactRecord): P
   };
 
   for (const id of reachedIds.slice(1)) {
-    // The record's own native ids are what this delete frees; they are all in
-    // `merged.nativeIds` and so are all re-pointed by the aliases below.
-    const freedNativeIds = reached.find((record) => record.contactId === id)?.nativeIds;
+    // What this delete frees is the record's own native ids, plus the forms
+    // that reached it — which is all there is to name when the record itself
+    // is missing. Both are in `merged.nativeIds`, so the aliases below
+    // re-point every one of them.
+    const freedNativeIds = [
+      ...new Set([
+        ...(reached.find((record) => record.contactId === id)?.nativeIds ?? []),
+        ...(reachedBy.get(id) ?? []),
+      ]),
+    ];
     state.delete({
       type: "contact",
       contactId: id,
-      ...(freedNativeIds?.length && { freedNativeIds }),
+      ...(freedNativeIds.length > 0 && { freedNativeIds }),
     });
   }
   for (const id of merged.nativeIds) await state.alias(id, contactId);
