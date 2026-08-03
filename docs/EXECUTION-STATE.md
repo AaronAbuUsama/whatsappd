@@ -167,6 +167,16 @@ WhatsApp messages”, or report a delivered count tied to the request.
   block was corrected to the landed shapes on 2026-08-03.
 - `docs/client-stack-defect-ledger.md` spans #105–#107 and does not reset per
   PR. Its "Inherited obligation" lines are binding on later layers.
+- **#106's shape was re-decided on 2026-08-03 and is no longer the handle.** A
+  four-way design exercise replaced `chats.open() => WhatsAppConversation` with
+  a fifth `messages` namespace: no handle, no `open()`, no per-chat `close()`.
+  Three of four independent designs concluded the handle was what created the
+  layer's hazards, and the fourth — briefed to defend it — conceded the retired
+  per-`open()` design stayed typeable under it. Trap 1 is now unavailable rather
+  than discouraged, trap 2 dissolves by widening `NAMESPACES` one word, and
+  trap 3 is not instantiated because pages fill only absent message ids while
+  the patch stream always overwrites. Retention is deliberately unbounded in
+  0.3 and tracked by #121. C1's inherited obligation records the discharge.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - `fileStore()` remains the credential-only option for the independently usable
