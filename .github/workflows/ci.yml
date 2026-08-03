@@ -6,6 +6,50 @@ on:
   pull_request:
 
 jobs:
+  # The reviewable unit is capped by a check rather than by a rule, because a
+  # remembered rule is exactly the failure class this repository keeps hitting:
+  # finding supply is proportional to reviewable surface, and three review
+  # spirals (#45/#47, #51, #93/#94) shrank the loop and never the surface.
+  # Raise the budget in the PR body with `PR-Budget: <n>` and say why.
+  budget:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reviewable-unit budget
+        env:
+          BASE: ${{ github.base_ref }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          budget=$(printf '%s' "$BODY" | sed -n 's/^PR-Budget:[[:space:]]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+          budget=${budget:-400}
+          changed=$(git diff --numstat "origin/$BASE...HEAD" -- 'src/**' 'tests/**' \
+            | awk '{ s += $1 + $2 } END { print s + 0 }')
+          echo "src+tests changed lines: $changed (budget $budget)"
+          if [ "$changed" -gt "$budget" ]; then
+            echo "::error::Diff is $changed changed lines in src/ and tests/, over the $budget budget. Split the PR. If this unit genuinely cannot be split, add 'PR-Budget: <n>' to the PR body with a reason."
+            exit 1
+          fi
+
+  # One specific false-green, made unrepeatable. Spreading the parent
+  # environment into a spawned `node --test` leaks NODE_TEST_CONTEXT, which
+  # makes the child print "run() is being called recursively ... skipping
+  # running files" and exit 0. PR #94 carried this from round 1 to round 8 --
+  # green on both runtimes, cited in every review receipt, executing nothing.
+  proof-env:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No inherited environment in spawned test processes
+        run: |
+          if grep -rn '\.\.\.process\.env' tests/; then
+            echo "::error::A test spawns a child with the parent environment. Pass an explicit allowlist instead -- inheriting NODE_TEST_CONTEXT makes a nested 'node --test' skip every file and exit 0."
+            exit 1
+          fi
+          echo "no inherited environment in tests/"
+
   build:
     runs-on: ubuntu-latest
     strategy:

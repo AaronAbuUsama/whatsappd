@@ -195,7 +195,9 @@ Snapshots expose `contactAliases`, mapping every WhatsApp-delivered PN or LID
 form to its owning contact record. When later evidence explicitly links two
 previously separate contact records, the patch upserts the consolidated record
 and deletes only the redundant current-mirror contact; accepted source evidence
-is never deleted.
+is never deleted. That patch also carries the aliases that changed, and the
+delete names the native ids it freed, so a consumer following patches keeps
+`contactAliases` coherent without re-reading a snapshot.
 
 Connection and presence are live signals with an expiry: no status is ever
 stored, and none is replayed as current truth. The _instant_ each was observed

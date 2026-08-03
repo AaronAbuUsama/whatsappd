@@ -253,7 +253,24 @@ export type MirrorRecord =
   | { readonly type: "message"; readonly message: MessageRecord };
 
 /** A current-mirror identity removed because WhatsApp linked it to another record. */
-export type MirrorDelete = { readonly type: "contact"; readonly contactId: string };
+export type MirrorDelete = {
+  readonly type: "contact";
+  readonly contactId: string;
+  /**
+   * The native ids this record owned, which now belong to the record it was
+   * linked into (ADR-0022, ADR-0030).
+   *
+   * @remarks
+   * Every one of them is re-pointed by a {@link MirrorAlias} in the same patch,
+   * so a consumer never has to apply deletes and aliases in a particular order.
+   * They are named here for a consumer that keeps its own contact-to-native-id
+   * index and would otherwise have no way to know what this delete freed.
+   */
+  readonly freedNativeIds?: readonly string[];
+};
+
+/** One native PN or LID address, and the contact record that now owns it. */
+export type MirrorAlias = { readonly nativeId: string; readonly contactId: string };
 
 /**
  * The Snapshot Window: one account's bounded current mirror at one revision.
@@ -348,6 +365,8 @@ export interface StoredMessagePage {
  * Deletes are identity-specific: currently only a contact record that WhatsApp
  * explicitly linked to another PN/LID form can be removed. Source observations
  * remain append-only; authoritative replacement still requires bounded scope.
+ * A patch carries every mutation kind the projection computed — upserts,
+ * deletes, and the aliases between them (ADR-0030 amending ADR-0011).
  */
 export interface WhatsAppPatch {
   readonly accountId: string;
@@ -355,6 +374,19 @@ export interface WhatsAppPatch {
   readonly revision: number;
   readonly upserts: readonly MirrorRecord[];
   readonly deletes?: readonly MirrorDelete[];
+  /**
+   * Address Resolution that changed, present only when some did.
+   *
+   * @remarks
+   * The projection has always computed these; without them on the patch a
+   * consumer maintaining state from patches cannot keep Address Resolution
+   * coherent at all, and has to discard its state and re-read a snapshot on an
+   * ordinary event (ADR-0030). Only a native id whose owner actually changed
+   * appears: re-observing a contact re-asserts every alias it already had, and
+   * carrying those would move the revision on an observation that told the
+   * mirror nothing.
+   */
+  readonly aliases?: readonly MirrorAlias[];
 }
 
 /**

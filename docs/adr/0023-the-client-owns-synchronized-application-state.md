@@ -2,6 +2,13 @@
 status: accepted
 ---
 
+> Extended by ADR-0028 and ADR-0029, which specify the mechanism this decision
+> only assigns: live state is derived rather than committed, and the Client
+> commits every affected value through one non-`async` boundary and notifies once
+> from committed state. The independent-lifetime model below stands — the
+> application still owns Backend, Runtime and Client. A Client that owns its own
+> account lifecycle is a separate, additive decision and is not yet accepted.
+
 # The Client owns synchronized application state
 
 The framework-independent WhatsApp Client is the application-facing owner of
