@@ -40,7 +40,7 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "check": "vp check",
     "proof": "node --experimental-strip-types tests/proof.ts",
-    "proof:pack": "node --experimental-strip-types tests/packed-imports.ts",
+    "proof:pack": "pnpm build && node --experimental-strip-types tests/packed-imports.ts",
     "prepublishOnly": "vp run build",
     "prepare": "vp config"
   },

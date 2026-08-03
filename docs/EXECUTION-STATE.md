@@ -4,8 +4,16 @@ Last updated: 2026-08-03. The capability catalogue merged at
 `d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the first executable
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. After #64/#70 and substrate
 #96–#98 landed, the owner replaced the underspecified #71/#22/#23/#30/#40/#41
-spine with the executable stack #105–#113. #105 is the next frontier node; its
-live dispatch condition is recorded below.
+spine with the executable stack #105–#113. #105 merged in PR #116 at
+`6778fdf`. #117 went ahead of #106 because it repairs a proof that six of the
+remaining nodes list as required validation — #106, #107, #108, #109, #111 and
+#112. Not #113, which is a human release operation with no validation list.
+
+The owner also moved #110 out of 0.3 on 2026-08-03: the headless React bindings
+are being written inside a real OpenTUI application and will be extracted into
+`@whatsappd/react@0.4.0` once stable there, per ADR-0008. **0.3.0 publishes
+`whatsappd` alone**, the repository stays a single package through the release,
+and #111 becomes #112's only blocker.
 
 ## Where everything lives
 
@@ -150,7 +158,15 @@ WhatsApp messages”, or report a delivered count tied to the request.
 - #70 completed normalized message/update projection in PR #88; accepted
   updates remain retained and page by source `seq`. #96–#98 supply joint reads,
   split durable/live delivery and alias deltas. #105–#107 own the friendly
-  Client stack.
+  Client stack; #105 landed the private Runtime source, hydrated namespaces,
+  one commit and one delivery primitive in PR #116.
+- `docs/issue-71-dx-contract-v2.md` is historical. #105 deliberately diverged
+  from it — zero-argument namespace listeners, a flat `ClientAccountState`,
+  `connection?: Status`, and one presence primitive on `contacts` — and where
+  the two disagree, `src/runtime/client.ts` on `master` wins. #106's interface
+  block was corrected to the landed shapes on 2026-08-03.
+- `docs/client-stack-defect-ledger.md` spans #105–#107 and does not reset per
+  PR. Its "Inherited obligation" lines are binding on later layers.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - `fileStore()` remains the credential-only option for the independently usable
@@ -169,39 +185,65 @@ filesystem media already supplies the local durable composition.
 The replacement 0.3 graph is:
 
 ```text
-completed substrate: #64  #70  #96  #97  #98
+completed substrate: #64  #70  #96  #97  #98  #105
 
-#105 Client core
+#117 proof:pack observes the artifact under test
   ↓
-#106 conversations and lifetimes
+#106 conversations, paging, recovery and lifetimes
   ↓
-#107 public/packed Client cut
+#107 public/packed Client cut   ← the friendly Client becomes the package root
   ↓
 #108 durable operations
   ↓
 #109 pairing and unlink
-  ├──────────────→ #110 React + OpenTUI ──┐
-  └──────────────→ #111 real-account P4 ──┤
-                                          ↓
-                                  #112 release candidate
-                                          ↓
-                                  #113 publish 0.3.0
+  ↓
+#111 real-account P4
+  ↓
+#112 release candidate
+  ↓
+#113 publish 0.3.0
 ```
 
-#105–#110 form the ordered implementation stack. A child may start from its
-predecessor's reviewed exact head after the documented handoff gate, targets
-that predecessor while stacked, and never merges before it. #110 and #111 may
-proceed in parallel after #109; #112 is their convergence gate. #106–#112 are
-fully specified for agents and #113 is a human release operation. #105 becomes
-fully specified and executable only when PR #114's merge receipt replaces its
-reserved base with the exact merge commit and adds `ready-for-agent`; before
-that operation, no implementation node is executable.
+The graph is now one line. A child may start from its predecessor's reviewed
+exact head after the documented handoff gate, targets that predecessor while
+stacked, and never merges before it. #106–#112 are fully specified for agents
+and #113 is a human release operation.
+
+#117 went first because `pnpm proof:pack` could pass having observed a `dist/`
+built before the change under test — a false green in six gates at once. It now
+builds before packing and runs in CI.
+
+Its residue is **#119**, and C6 in `docs/client-stack-defect-ledger.md` is the
+only place that describes it; anything else points there. Bare `pnpm pack` is
+still stale-prone, `release.yml` publishes a tarball the packed proof never
+inspected, and the positive control catches an empty `dist/` but not a wrong
+one. **#112 and #113 depend on #119**: #113's acceptance requires that the
+registry tarball match #112's reviewed packed artifact, and nothing in the
+release path establishes that until #119 lands.
+
+#107 is worth more than its position suggests. It is the node that makes
+`createWhatsAppClient` reachable at all. The package exports exactly `.`,
+`./testing` and `./package.json` (`package.json:29-33`), and
+`tests/packed-imports.ts:137-139` asserts every other subpath rejects with
+`ERR_PACKAGE_PATH_NOT_EXPORTED` — so an installed consumer cannot deep-import
+its way to the friendly Client. It gets the raw frame surface at
+`src/index.ts:55-106` or nothing. The OpenTUI application that will later
+produce #110's bindings is blocked on exactly that, and on #108 for sends.
+
+#118 was absorbed into #106 rather than tracked beside it. The reasoning is
+`docs/issue-71-postmortem.md:79` — 19 of 28 findings were "same class, new
+site", recurring after a fix — together with C10 in the defect ledger, which
+draws the conclusion those recurrences support: an obligation is missed when
+the correct path costs more to type than the incorrect one, and a firmer
+sentence in a document never changes that. An obligation in a sibling issue an
+executor may not open is the most expensive path of all.
 
 Post-0.3 and research lanes do not block that spine:
 
 ```text
 #50 real Android history research ──┐
 #113 published 0.3 ─────────────────┴─→ #25 automatic history
+#108 ─→ #110 extract @whatsappd/react once a real OpenTUI consumer is stable
 #113 ─→ #72 restartable media jobs
 #113 ─→ #73 … #80 domain expansion
 #113 ─→ #81 Postgres ─┐

@@ -197,8 +197,23 @@ construction.
 - `tests/packed-imports.ts` was all-negative assertions; a stale, empty or
   declaration-less `dist/` satisfied every one. A positive control now asserts
   the declarations were actually read and contain known-published symbols.
-- `pnpm proof:pack` still archives whatever `dist/` holds — `pnpm pack` does not
-  rebuild — and is **absent from CI**. Filed separately; not fixed here.
+- `pnpm proof:pack` archived whatever `dist/` held — `pnpm pack` does not
+  rebuild — and was **absent from CI**. Both fixed by #117: the script now
+  builds before packing, and CI runs it on the Node 22 and Node 24 legs.
+  Verified the way this file requires — the violating state was reproduced
+  (a forbidden root export, no build, exit 0) and then made red.
+- **The residue is that the fix is in the caller, not the proof.** `pnpm pack`
+  by itself still packs a stale `dist/`, so `proof:pack` is trustworthy and
+  bare packing is not. Two live consequences: `.github/workflows/release.yml`
+  builds and packs but never runs `proof:pack`, so a published tarball is one
+  the packed proof never inspected; and the positive control at
+  `tests/packed-imports.ts:51-57` names symbols present in _any_ recent build,
+  so it catches an **empty** `dist/` and not a **wrong** one. This class stays
+  open on that second point — a wrong-but-nonempty artifact still reads green.
+  Both consequences are filed as #119, and the second is confirmed rather than
+  reasoned: building `dist/` from `7e1a730` (pre-#105 master, before
+  `src/runtime/client.ts` existed — 1,175 insertions of divergence) and running
+  the harness bare passes every assertion, positive control included.
 - The round-1 mutation audit chose its mutations from the author's model of the
   design, so it was blind exactly where the design was. Round 2 derived them
   from the code's decision points instead, and killed 39 of 46 where the first
@@ -283,4 +298,8 @@ provable only if the substrate changes.
   it with `julianday('now')`) and is compared against a process `Date.now()`.
   Postmortem R23 class. Damage is bounded by `freshnessMs`, which is
   process-clock and binds tighter.
-- `pnpm proof:pack` is not in CI and does not rebuild.
+- `pnpm proof:pack` — **see C6, which is the only entry that states this.** It
+  was restated here, and when #117 fixed it C6 was updated and this line was
+  not, so the file contradicted itself for one commit. That is C10 applied to
+  the ledger instead of by it: the cheap path is editing the site you happen to
+  be looking at. One fact, one home, and a pointer from anywhere else.
