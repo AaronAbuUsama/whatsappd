@@ -224,10 +224,12 @@ test("awaited creation returns account, chat, contact and group state already ap
 
 test("a client is only creatable over a runtime this module produced", async () => {
   // The private source is reachable only through the registration
-  // `createWhatsAppRuntime()` makes, so a look-alike is not a runtime.
+  // `createWhatsAppRuntime()` makes, so a look-alike is not a runtime. Matched
+  // on the message, not merely on `TypeError`: dereferencing a missing source
+  // also throws `TypeError`, so the bare type would pass with no guard at all.
   await assert.rejects(
     createWhatsAppClient({ accountId: "personal" } as unknown as WhatsAppRuntime),
-    TypeError,
+    /createWhatsAppRuntime/,
   );
 });
 
@@ -470,8 +472,66 @@ test("a subscription is released by its abort signal", async () => {
     });
     await tick();
     expect(calls).toBe(1);
+
+    // A signal that was already aborted subscribes nothing at all. Registering
+    // and then listening for an `abort` that has already fired would leave the
+    // listener subscribed for the client's whole life.
+    let afterAbort = 0;
+    const off = worker.client.chats.subscribe(() => void (afterAbort += 1), {
+      signal: controller.signal,
+    });
+    await worker.driver.emit({
+      type: "message",
+      message: textMessage({ id: "m3", chatId: PERSON, text: "three", timestamp: AT + 2 }),
+    });
+    await tick();
+    expect(afterAbort).toBe(0);
+    // …and its unsubscribe is still callable and still a no-op.
+    off();
+    off();
   } finally {
     await worker.stop();
+  }
+});
+
+test("closing the client releases its subscriptions and stops following", async () => {
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    let chatDeliveries = 0;
+    let contactDeliveries = 0;
+    worker.client.chats.subscribe(() => void (chatDeliveries += 1));
+    worker.client.contacts.subscribe(() => void (contactDeliveries += 1));
+
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+    await worker.driver.emit({
+      type: "message",
+      message: textMessage({ id: "m1", chatId: PERSON, text: "one", timestamp: AT }),
+    });
+    await tick();
+    expect(chatDeliveries).toBe(1);
+    expect(contactDeliveries).toBe(1);
+    expect(worker.client.contacts.presence(PERSON)).toBe("typing");
+    const chatsAtClose = chatDeliveries;
+    const contactsAtClose = contactDeliveries;
+
+    await worker.client.close();
+    // Idempotent, and the second call joins rather than starting a second stop.
+    await Promise.all([worker.client.close(), worker.client.close()]);
+
+    // Both channels are detached: a durable frame and a live frame after close
+    // reach nothing, and no live state is reported as current any more.
+    await worker.driver.emit({
+      type: "message",
+      message: textMessage({ id: "m2", chatId: PERSON, text: "two", timestamp: AT + 1 }),
+    });
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "recording" } });
+    for (let turn = 0; turn < 5; turn += 1) await tick();
+
+    expect(chatDeliveries).toBe(chatsAtClose);
+    expect(contactDeliveries).toBe(contactsAtClose);
+    expect(worker.client.contacts.presence(PERSON)).toBe(undefined);
+  } finally {
+    await worker.runtime.stop().catch(() => {});
   }
 });
 
@@ -557,7 +617,14 @@ test("every durable record kind master supports reaches the core state", async (
 
     // Chats: the media/location chat and the poll's group chat.
     expect(chatIds(worker.client.chats.list()).sort()).toEqual([PERSON, ROOM].sort());
+    // Each kind is *observed*, not merely emitted: this layer owns no messages,
+    // so a chat's newest activity is the one thing every kind moves here — and
+    // these instants are reachable only if the image, the location and the poll
+    // each projected. Downgrading any of them to a text fixture changes these.
+    const personChat = worker.client.chats.list().find((chat) => chat.chatId === PERSON);
+    expect(personChat?.lastMessageAt).toBe(AT + 2); // the location, newer than the image
     const room = worker.client.chats.list().find((chat) => chat.chatId === ROOM);
+    expect(room?.lastMessageAt).toBe(AT + 3); // the poll
     expect(room?.isGroup).toBe(true);
     expect(room?.subject).toBe("Room");
 
@@ -782,6 +849,189 @@ test("two listeners in one delivery derive live state from one sampled instant",
   }
 });
 
+test("a listener that stops the runtime cannot split its own delivery in two", async () => {
+  // The instant is not the only thing a live read derives from. The claim and
+  // the attached session are too, and a listener may legitimately stop the
+  // Runtime — `release()` clears both synchronously, inside the fanout. Unless
+  // all three are sampled together, the listeners after that one observe a
+  // different connection, presence and identity from the same transition.
+  const worker = await lane({
+    freshnessMs: 600_000,
+    identity: { jid: "15551230000:7@s.whatsapp.net", pushName: "Me" },
+  });
+  try {
+    const views: string[] = [];
+    const read = (): string => {
+      const account = worker.client.account.get();
+      return [
+        account.connection?.phase ?? "none",
+        account.identity ? "identity" : "no-identity",
+        worker.client.contacts.presence(PERSON) ?? "none",
+      ].join("/");
+    };
+
+    worker.client.contacts.subscribe(() => views.push(read()));
+    worker.client.contacts.subscribe(() => {
+      views.push(read());
+      // Permitted: listeners may re-enter, and the application owns the Runtime.
+      void worker.runtime.stop().catch(() => {});
+    });
+    worker.client.contacts.subscribe(() => views.push(read()));
+
+    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+    await tick();
+
+    expect(views.length).toBe(3);
+    // One transition, one view — whatever the middle listener did to the account.
+    expect(new Set(views).size).toBe(1);
+    expect(views[0]).toBe("online/identity/typing");
+  } finally {
+    await worker.client.close();
+    await worker.runtime.stop().catch(() => {});
+  }
+});
+
+test("two listeners in one delivery read one account state, not two", async () => {
+  mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const start = Date.now();
+  try {
+    const worker = await lane({ freshnessMs: 5_000, leaseTtlMs: 600_000 });
+    try {
+      await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+      await tick();
+      expect(worker.client.account.get().connection?.phase).toBe("online");
+
+      const seen: Array<string | undefined> = [];
+      // The same proof the presence path gets: the first listener moves the
+      // clock past the connection deadline, and the second must still agree.
+      worker.client.chats.subscribe(() => {
+        mock.timers.setTime(start + 60_000);
+        seen.push(worker.client.account.get().connection?.phase);
+      });
+      worker.client.chats.subscribe(() => {
+        seen.push(worker.client.account.get().connection?.phase);
+      });
+
+      await worker.driver.emit({
+        type: "message",
+        message: textMessage({ id: "m1", chatId: PERSON, text: "hi", timestamp: AT }),
+      });
+      await tick();
+
+      expect(seen).toEqual(["online", "online"]);
+      expect(worker.client.account.get().connection).toBe(undefined);
+    } finally {
+      await worker.stop();
+    }
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("account state keeps one identity while it says the same thing", async () => {
+  // A binding re-reads on every notification and compares with `Object.is`, so
+  // a fresh object per call is an infinite render loop rather than a nicety.
+  const worker = await lane({ identity: { jid: "15551230000:7@s.whatsapp.net" } });
+  try {
+    const first = worker.client.account.get();
+    expect(worker.client.account.get()).toBe(first);
+    // Including the deep-owned identity, which must not be re-copied per read.
+    expect(worker.client.account.get().identity).toBe(first.identity);
+
+    // A transition that changes what it says returns something new…
+    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+    await tick();
+    const online = worker.client.account.get();
+    expect(online).not.toBe(first);
+    expect(online.connection?.phase).toBe("online");
+    // …and settles again.
+    expect(worker.client.account.get()).toBe(online);
+
+    // A transition in another namespace leaves it alone.
+    await worker.driver.emit({
+      type: "message",
+      message: textMessage({ id: "m1", chatId: PERSON, text: "hi", timestamp: AT }),
+    });
+    await tick();
+    expect(worker.client.account.get()).toBe(online);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("presence follows the address WhatsApp used, across a consolidated contact", async () => {
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    // One contact, reachable by both its PN and LID forms.
+    await worker.driver.emit({
+      type: "contact",
+      contact: { id: PERSON, nativeIds: [PERSON, PERSON_LID], displayName: "Person" },
+    });
+    await tick();
+    const contact = worker.client.contacts.list()[0];
+    assert.ok(contact);
+    expect(contact.contactId).toBe(PERSON);
+
+    // WhatsApp addresses the presence by the LID form.
+    await worker.driver.emit({
+      type: "presence",
+      presence: { chatId: PERSON_LID, kind: "typing" },
+    });
+    await tick();
+
+    // Both forms answer for the same peer — the live half of Address Resolution
+    // agreeing with the durable half, which resolves the same way.
+    expect(worker.client.contacts.presence(PERSON_LID)).toBe("typing");
+    expect(worker.client.contacts.presence(contact.contactId)).toBe("typing");
+    expect(typeof worker.client.contacts.resolve(PERSON_LID)?.lastSeenAt).toBe("number");
+    // An address belonging to nobody still answers for nobody.
+    expect(worker.client.contacts.presence("stranger@s.whatsapp.net")).toBe(undefined);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a group's presence names the participant, never the group chat", async () => {
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    await worker.driver.emit({
+      type: "presence",
+      presence: { chatId: ROOM, participant: PERSON, kind: "recording" },
+    });
+    await tick();
+
+    // In a group WhatsApp names who is present; the chat is not the peer.
+    expect(worker.client.contacts.presence(PERSON)).toBe("recording");
+    expect(worker.client.contacts.presence(ROOM)).toBe(undefined);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a live observation with no claim behind it is never reported", async () => {
+  const worker = await lane({ freshnessMs: 600_000 });
+  try {
+    let notified = 0;
+    worker.client.contacts.subscribe(() => void (notified += 1));
+
+    // The session dispatcher snapshots its subscribers synchronously and runs
+    // handler bodies a microtask later, so `off()` cannot retract a presence
+    // already in flight — and the runtime publishes presence before its own
+    // lease check. Teardown therefore does emit a live frame with no claim held.
+    void worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+    void Promise.resolve().then(() => void worker.runtime.stop().catch(() => {}));
+    for (let turn = 0; turn < 10; turn += 1) await tick();
+
+    // It is dropped before it can become client state: nothing to report, and
+    // nothing to notify an application about after the account was given back.
+    expect(worker.client.contacts.presence(PERSON)).toBe(undefined);
+    expect(notified).toBe(0);
+  } finally {
+    await worker.client.close();
+  }
+});
+
 test("an unavailable presence removes its subject immediately", async () => {
   const worker = await lane({ freshnessMs: 600_000 });
   try {
@@ -831,9 +1081,13 @@ test("a live observation expires with its claim even before its own deadline", a
 
 test("a replaced claim makes the observation made under the old one unavailable", async () => {
   const leases = movableLeaseStore();
-  // The lease heartbeat is the only path that replaces a live claim, so its
-  // interval is driven deliberately rather than waited on.
-  mock.timers.enable({ apis: ["setInterval"] });
+  // The heartbeat is the only path that replaces a live claim, so its interval
+  // is driven deliberately rather than waited on — and `Date` is frozen with it.
+  // With a real clock and a one-second TTL, a slow machine would make the read
+  // go `undefined` because the lease *expired* rather than because the claim was
+  // *replaced*, and the test would pass for the wrong reason without ever
+  // failing red.
+  mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.now() });
   try {
     const worker = await lane({
       backend: { ...memoryBackend(), leases },
@@ -847,14 +1101,26 @@ test("a replaced claim makes the observation made under the old one unavailable"
       expect(worker.client.account.get().connection?.phase).toBe("online");
       expect(worker.client.contacts.presence(PERSON)).toBe("typing");
 
-      // The account moves to a new claim. Neither observation expired, but
-      // neither was made under the claim that now holds the account.
+      // The account moves to a new claim. Neither observation expired — the
+      // clock has moved 500ms against a 600s freshness and a 1s lease that is
+      // renewed, not lapsed — but neither was made under the claim that now
+      // holds the account.
       leases.replace();
       mock.timers.tick(500);
       await until(() => worker.client.account.get().connection === undefined);
 
       expect(worker.client.account.get().connection).toBe(undefined);
       expect(worker.client.contacts.presence(PERSON)).toBe(undefined);
+
+      // And the mechanism is the token, not a client that has simply gone
+      // quiet: an observation made under the claim that now holds the account
+      // is reported normally.
+      await worker.driver.emit({
+        type: "presence",
+        presence: { chatId: PERSON, kind: "recording" },
+      });
+      await tick();
+      expect(worker.client.contacts.presence(PERSON)).toBe("recording");
     } finally {
       await worker.stop();
     }
@@ -931,20 +1197,128 @@ test("session identity is account state only while a session is attached", async
   }
 });
 
-test("runtime closure is observable as account state and notifies once", async () => {
+test("runtime closure is a transition of its own, observed as it happens", async () => {
   const worker = await lane();
   try {
-    let notified = 0;
-    worker.client.account.subscribe(() => void (notified += 1));
+    // Recorded per delivery rather than counted: stopping produces two
+    // transitions — the disconnection instant it stamps, then the closure — and
+    // a bare count cannot tell whether the closure notified at all, because the
+    // stamp alone would satisfy it.
+    const observed: boolean[] = [];
+    worker.client.account.subscribe(() => observed.push(worker.client.account.get().closed));
     expect(worker.client.account.get().closed).toBe(false);
 
     await worker.runtime.stop();
     await tick();
 
     expect(worker.client.account.get().closed).toBe(true);
-    expect(notified > 0).toBe(true);
+    // The closure is one of the deliveries, not merely implied by a later read.
+    expect(observed.includes(true)).toBe(true);
+    // …and it is the last thing this client says.
+    expect(observed[observed.length - 1]).toBe(true);
+    // The disconnection instant the same teardown stamped is durable state and
+    // survives the closure — the postmortem's one legitimately-failing field.
+    expect(typeof worker.client.account.get().lastDisconnectedAt).toBe("number");
   } finally {
     await worker.client.close();
+  }
+});
+
+test("a failure that ends following is reported as account state, not only a warning", async () => {
+  // The gap-recovery re-snapshot fails. Nobody is awaiting the pump, so the
+  // account state is the only place this can surface — and it must surface, or
+  // the client renders WhatsApp state that can never change again while
+  // reporting itself live.
+  const base = memoryBackend();
+  let failNextSnapshot = false;
+  const failure = new Error("the mirror read failed");
+  const backend: WhatsAppBackend = {
+    ...base,
+    leases: movableLeaseStore(),
+    data: {
+      ...base.data,
+      snapshot: async (accountId) => {
+        if (!failNextSnapshot) return base.data.snapshot(accountId);
+        failNextSnapshot = false;
+        throw failure;
+      },
+    },
+  };
+  const worker = await lane({ backend });
+  try {
+    await worker.driver.emit({
+      type: "contact",
+      contact: { id: PERSON, nativeIds: [PERSON], displayName: "Person" },
+    });
+    await tick();
+    expect(worker.client.account.get().closed).toBe(false);
+
+    let notified = 0;
+    worker.client.account.subscribe(() => void (notified += 1));
+
+    // Skip a revision so the reused pull loop must re-snapshot, and make that
+    // read fail.
+    await backend.data.accept(
+      "personal",
+      [{ observedAt: AT, event: { type: "contact", contact: { id: ROOM, nativeIds: [ROOM] } } }],
+      1,
+    );
+    failNextSnapshot = true;
+    await worker.driver.emit({
+      type: "contact",
+      contact: { id: SELF, nativeIds: [SELF], displayName: "Me" },
+    });
+    await until(() => worker.client.account.get().closed);
+
+    expect(worker.client.account.get().closed).toBe(true);
+    // Handed out by identity, so a caller can compare it with the cause it holds.
+    expect(worker.client.account.get().error).toBe(failure);
+    expect(notified > 0).toBe(true);
+
+    // The live channel is released with it: a client that cannot follow durable
+    // state must not keep answering as though its live state were current.
+    await worker.driver.emit({ type: "presence", presence: { chatId: PERSON, kind: "typing" } });
+    await tick();
+    expect(worker.client.contacts.presence(PERSON)).toBe(undefined);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a client over an already-stopped runtime is hydrated, not empty", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({
+    type: "contact",
+    contact: { id: PERSON, nativeIds: [PERSON], displayName: "Person" },
+  });
+  await driver.emit({
+    type: "message",
+    message: textMessage({ id: "m1", chatId: PERSON, text: "hi", timestamp: AT }),
+  });
+  await tick();
+  const stored = await backend.data.snapshot("personal");
+
+  // The runtime stops. Its terminal frame carries no snapshot, so a client
+  // created afterwards would see nothing at all unless it reads the mirror.
+  await runtime.stop();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    // Resolving the factory means hydration was applied — unconditionally.
+    expect(contactIds(client.contacts.list())).toEqual([PERSON]);
+    expect(chatIds(client.chats.list())).toEqual([PERSON]);
+    expect(client.contacts.list().length).toBe(stored.contacts.length);
+    // …and the account is visibly closed, so nothing is mistaken for live.
+    expect(client.account.get().closed).toBe(true);
+    expect(client.account.get().connection).toBe(undefined);
+  } finally {
+    await client.close();
   }
 });
 
@@ -1012,6 +1386,7 @@ test("committed values are client-owned and unaffected by mutating what a caller
       (returned.nativeIds as string[]).push("injected@s.whatsapp.net");
     }, TypeError);
 
+    // Every returned list, not just one — each namespace freezes its own.
     const groups = worker.client.groups.list();
     const room = groups[0];
     assert.ok(room, "the group the fixture created must be listed");
@@ -1025,10 +1400,30 @@ test("committed values are client-owned and unaffected by mutating what a caller
     assert.throws(() => {
       (room.participants as { id: string }[]).push({ id: "forged@s.whatsapp.net" });
     }, TypeError);
+    assert.throws(() => {
+      (worker.client.chats.list() as ChatRecord[]).push({
+        accountId: "personal",
+        chatId: "forged@s.whatsapp.net",
+        isGroup: false,
+        lastMessageAt: 0,
+      });
+    }, TypeError);
+    assert.throws(() => {
+      (worker.client.contacts.list() as ContactRecord[]).push({
+        accountId: "personal",
+        contactId: "forged@s.whatsapp.net",
+        nativeIds: [],
+      });
+    }, TypeError);
 
-    // The values a listener was handed, mutated from inside a delivery.
+    // The values a listener was handed, mutated from inside a delivery. Counted
+    // and null-checked: an assertion inside a callback nothing proves ran is
+    // vacuous, and `assert.throws` is satisfied by dereferencing `undefined`.
+    let delivered = 0;
     worker.client.contacts.subscribe(() => {
+      delivered += 1;
       const inside = worker.client.contacts.resolve(PERSON);
+      assert.ok(inside, "the listener must be able to read the contact it was told about");
       assert.throws(() => {
         (inside as { displayName?: string }).displayName = "Renamed by a listener";
       }, TypeError);
@@ -1038,6 +1433,7 @@ test("committed values are client-owned and unaffected by mutating what a caller
       contact: { id: PERSON, nativeIds: [PERSON], displayName: "Person", username: "person" },
     });
     await tick();
+    expect(delivered).toBe(1);
 
     const after = worker.client.contacts.resolve(PERSON);
     expect(after?.displayName).toBe("Person");

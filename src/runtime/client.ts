@@ -81,6 +81,23 @@ function freeze<T>(value: T): T {
  */
 const own = <T>(value: T): T => freeze(structuredClone(value));
 
+/**
+ * Whether two account states say the same thing.
+ *
+ * @remarks
+ * Shallow, and that is enough: every member is either a primitive or a value
+ * this Client already owns and reuses by reference — the connection status is
+ * owned once when the observation is retained, and the identity copy is cached
+ * against the session's own object. `error` is compared by identity
+ * deliberately, because the runtime hands the terminal error out by identity so
+ * callers can compare causes.
+ */
+function same(a: ClientAccountState, b: ClientAccountState): boolean {
+  const keys = Object.keys(a) as (keyof ClientAccountState)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => Object.is(a[key], b[key]));
+}
+
 /** One retained live observation and the claim that made it trustworthy. */
 interface Observation<T> {
   readonly value: T;
@@ -148,11 +165,25 @@ export interface ClientAccountState {
   /** The linked account's own identity, while a session is attached. */
   readonly identity?: WaIdentity;
   /**
-   * The Runtime has stopped consuming this account, deliberately or on the
-   * failure that ended it. Nothing follows it.
+   * This Client is no longer following the account. Nothing follows it.
+   *
+   * @remarks
+   * Set when the Runtime stopped consuming the account — deliberately or on the
+   * failure that ended it — and also when following itself failed in a way the
+   * Runtime's terminal frame could not describe, such as a mirror read that
+   * failed during gap recovery. The two are one fact from an application's side:
+   * this state will never change again. Reporting only the first would leave the
+   * second indistinguishable from a quiet account, which is the condition
+   * Runtime Closure exists to make impossible.
    */
   readonly closed: boolean;
-  /** The failure that ended it, absent when it stopped deliberately. */
+  /**
+   * The failure behind it, absent when the Runtime stopped deliberately.
+   *
+   * @remarks
+   * Handed out by identity rather than copied, so a caller can compare it
+   * against the cause it already holds.
+   */
   readonly error?: unknown;
 }
 
@@ -279,16 +310,61 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   let orderedGroups: readonly GroupRecord[] | undefined;
 
   /**
-   * The instant this delivery derives live state from, while one is running.
+   * Everything outside committed state that a read derives an answer from.
    *
    * @remarks
-   * Threaded through the delivery rather than re-read per listener, which is
-   * the primitive ADR-0028 requires: a deadline falling between two listeners
-   * of one delivery would otherwise give them different values from the same
-   * transition.
+   * All three of these change without a transition — the clock by moving, the
+   * claim when the lease is renewed or given back, the identity when a session
+   * attaches or detaches — so all three are sampled together, once, and handed
+   * to every listener in the delivery.
+   *
+   * ADR-0028 names the instant because the clock is the axis issue #71 argued
+   * about, but its requirement is the general one: *"a deadline crossing during
+   * fanout cannot split one transition into two observed values"*. Threading
+   * only the instant satisfies the letter and not the property. A listener may
+   * legitimately stop the Runtime (ADR-0029 rule 1, and the application owns the
+   * Runtime under ADR-0023), and `release()` clears the lease and the session
+   * synchronously — so a later listener in the same fanout would otherwise see a
+   * different connection, a different presence and a vanished identity from the
+   * same transition.
    */
-  let deliveryInstant: number | undefined;
-  const now = (): number => deliveryInstant ?? Date.now();
+  interface Derivation {
+    readonly at: number;
+    readonly claim: ClientClaim | undefined;
+    readonly identity: WaIdentity | undefined;
+  }
+
+  const sample = (): Derivation => ({
+    at: Date.now(),
+    claim: source.currentClaim(),
+    identity: source.identity(),
+  });
+
+  /**
+   * This Client's copy of whatever identity the session currently reports.
+   *
+   * @remarks
+   * Kept against the session's own object rather than re-copied per read.
+   * `own()` exists so that reads return stored values instead of cloning on the
+   * path listeners run on, and `account.get()` is exactly that path — deep
+   * cloning there would also hand back a different object every call, which is
+   * what a binding must not see.
+   */
+  let identityCopy: { readonly from: WaIdentity; readonly value: WaIdentity } | undefined;
+  const owned = (identity: WaIdentity): WaIdentity => {
+    if (identityCopy?.from !== identity) identityCopy = { from: identity, value: own(identity) };
+    return identityCopy.value;
+  };
+
+  /** The last answer `account.get()` gave, reused while it still holds. */
+  let accountState: ClientAccountState | undefined;
+
+  /** Whether this Client has stopped following, and so has no live truth. */
+  let detached = false;
+
+  /** The basis this delivery derives from, while one is running. */
+  let delivery: Derivation | undefined;
+  const basis = (): Derivation => delivery ?? sample();
 
   /**
    * Whether a retained observation is still something to report.
@@ -299,9 +375,15 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
    * the single-writer claim that made it true, and a claim that has moved to
    * another holder never made it (ADR-0009, ADR-0028).
    */
-  function current<T>(observation: Observation<T> | undefined, at: number): T | undefined {
-    if (!observation) return undefined;
-    const claim = source.currentClaim();
+  function current<T>(observation: Observation<T> | undefined, from: Derivation): T | undefined {
+    // A Client that has stopped following has no live truth left. It keeps its
+    // durable records — a chat that existed still existed — but it can no longer
+    // receive the `unavailable` or the disconnection that would end an
+    // observation, so anything it still held would be reported as current until
+    // its own deadline with nothing able to falsify it. Derived rather than
+    // cleared, for the same reason expiry is (ADR-0028).
+    if (!observation || detached) return undefined;
+    const { at, claim } = from;
     if (!claim || claim.fencingToken !== observation.claim.fencingToken) return undefined;
     return at < observation.expiresAt && at < claim.expiresAt ? observation.value : undefined;
   }
@@ -418,11 +500,11 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     });
 
     if (touched.size === 0) return;
-    // One instant for the whole delivery, sampled after the transition is
-    // closed and restored afterwards, so a read outside any delivery reads the
-    // clock as it always would.
-    const outer = deliveryInstant;
-    deliveryInstant = Date.now();
+    // One derivation basis for the whole delivery, sampled after the transition
+    // is closed and restored afterwards, so a read outside any delivery samples
+    // afresh as it always would.
+    const outer = delivery;
+    delivery = sample();
     try {
       // One fanout for the whole transition rather than one per namespace: the
       // membership copy has to span every namespace this transition affected,
@@ -432,7 +514,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         if (touched.has(listener.namespace)) listener.notify();
       });
     } finally {
-      deliveryInstant = outer;
+      delivery = outer;
     }
   }
 
@@ -455,21 +537,29 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     account: {
       subscribe: subscribeTo("account"),
       get() {
-        const status = current(connection, now());
-        const identity = source.identity();
-        return Object.freeze({
+        const from = basis();
+        const next = Object.freeze({
           accountId: runtime.accountId,
           ...(record.lastConnectedAt !== undefined && { lastConnectedAt: record.lastConnectedAt }),
           ...(record.lastDisconnectedAt !== undefined && {
             lastDisconnectedAt: record.lastDisconnectedAt,
           }),
-          ...(status !== undefined && { connection: status }),
-          ...(identity !== undefined && { identity: own(identity) }),
+          ...(current(connection, from) !== undefined && { connection: current(connection, from) }),
+          ...(from.identity !== undefined && { identity: owned(from.identity) }),
           closed: closure !== undefined,
           // Spread rather than tested, so a deliberate stop reports no `error`
           // key at all and a failure that *was* `undefined` still reports one.
           ...closure,
         });
+        // Unlike the three ordered reads this cannot be memoized against a
+        // transition — it derives from the clock, so an expiry that is not a
+        // transition still has to change it (ADR-0028). What a binding needs is
+        // a value that is referentially equal while it *says* the same thing, so
+        // the previous answer is returned whenever the new one matches it:
+        // React's external store compares successive snapshots with `Object.is`
+        // and re-renders for ever otherwise (ADR-0016, ADR-0023).
+        if (accountState && same(accountState, next)) return accountState;
+        return (accountState = next);
       },
     },
 
@@ -493,7 +583,27 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         const contactId = aliases.get(nativeId);
         return contactId === undefined ? undefined : contacts.get(contactId);
       },
-      presence: (nativeId) => current(presence.get(nativeId), now()),
+      presence(nativeId) {
+        const from = basis();
+        const exact = current(presence.get(nativeId), from);
+        if (exact !== undefined) return exact;
+        // An observation is keyed by the address WhatsApp addressed it to, and
+        // the same peer is addressed by its PN form on one occasion and its LID
+        // form on another. So a presence observed under one form has to answer
+        // for the contact's other forms too, exactly as the durable half of the
+        // same fact already does — `projection.ts` resolves a last-seen through
+        // the alias map before recording it, and a live read that did not would
+        // report a consolidated contact as never present (ADR-0022, ADR-0030).
+        const contactId = aliases.get(nativeId);
+        const contact = contactId === undefined ? undefined : contacts.get(contactId);
+        if (!contact) return undefined;
+        for (const form of contact.nativeIds) {
+          if (form === nativeId) continue;
+          const found = current(presence.get(form), from);
+          if (found !== undefined) return found;
+        }
+        return undefined;
+      },
     },
 
     groups: {
@@ -530,6 +640,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // its subscription behind.
       following.abort();
       offLive();
+      detached = true;
       await pump;
       listeners.clear();
     })());
@@ -537,10 +648,19 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   try {
     // The transition is the loop iteration, and the first one is the initial
     // snapshot: awaiting it is what makes a resolved factory a hydrated Client.
-    // A runtime that has already stopped hands over its terminal frame instead,
-    // which hydrates a closed account rather than suspending for ever.
     const first = await frames.next();
     if (!first.done) consume(first.value);
+    // A Runtime that had already stopped hands over its terminal frame and no
+    // snapshot at all, so the mirror is read here instead. Resolving the factory
+    // has to mean the durable state was applied *unconditionally* — an
+    // empty-because-closed Client is precisely the observable un-hydrated state
+    // this factory exists to remove, and the records are still true: a chat that
+    // existed does not stop having existed because this account stopped being
+    // consumed. Only live state decays (ADR-0020), and none is retained here.
+    if (!first.done && first.value.type === "closed") {
+      const snapshot = await source.read((view) => view.snapshot());
+      commit((tx) => tx.replace(snapshot));
+    }
   } catch (error) {
     offLive();
     following.abort();
@@ -552,9 +672,19 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       for (let next = await frames.next(); !next.done; next = await frames.next())
         consume(next.value);
     } catch (error) {
-      // Following the account has ended in a way the runtime's terminal frame
-      // could not describe. It cannot be reported to a caller — nobody is
-      // awaiting this — and it must not disappear.
+      // Following the account has ended in a way the Runtime's terminal frame
+      // could not describe — a mirror read that failed during gap recovery, say.
+      // Nobody is awaiting this, so the only place it can be reported is the
+      // account state, and it must be reported: a Client that silently stops
+      // following renders WhatsApp state that will never change again while
+      // telling the application it is live. That is exactly the failure Runtime
+      // Closure exists to prevent — "a watch waits for ever on an update that
+      // cannot come" — reproduced one layer up. The live subscription goes with
+      // it, because a Client that cannot follow durable state must not keep
+      // reporting live state as though it were still current.
+      commit((tx) => tx.close({ type: "closed", error }));
+      offLive();
+      detached = true;
       surface(error);
     }
   })();

@@ -42,6 +42,19 @@ try {
         .map((file) => readFile(path.join(dist, file), "utf8")),
     )
   ).join("\n");
+  // A positive control, before anything is asserted absent. Every check below
+  // is a negative — `regex.test(declarations) === false` — and a `dist/` that
+  // is empty, stale, or emitted no `.d.mts` at all satisfies every one of them
+  // while observing nothing. That is the shape of the false green in
+  // `docs/issue-71-postmortem.md` section 6, so the file has to prove it is
+  // looking at real declarations first.
+  assert.ok(declarations.length > 0, "no packed declarations were read");
+  for (const published of ["createWhatsAppRuntime", "WhatsAppRuntime", "createSession"]) {
+    assert.ok(
+      new RegExp(`\\b${published}\\b`).test(declarations),
+      `${published} is missing from the packed declarations — they are not the artifact under test`,
+    );
+  }
   for (const removed of [
     "SessionStore",
     "IncomingMessage",
