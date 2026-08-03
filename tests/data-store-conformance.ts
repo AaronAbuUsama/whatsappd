@@ -9,6 +9,7 @@ import {
   type WhatsAppDataStore,
   type WhatsAppDurableEvent,
 } from "../src/runtime/contracts.ts";
+import { memoryDataStore } from "../src/runtime/memory.ts";
 import { projectCurrentMirror, type CurrentMirrorRecords } from "../src/runtime/projection.ts";
 import { textMessage } from "../src/testing.ts";
 
@@ -125,6 +126,33 @@ test("the Current Mirror projection reads only the message key touched by an upd
   expect(projection.upserts).toMatchObject([
     { type: "message", message: { messageId: "current", receipts: [{ status: "read" }] } },
   ]);
+});
+
+test("a read on one store does not join another store's open read", async () => {
+  const first = memoryDataStore();
+  const second = memoryDataStore();
+  const store = (data: WhatsAppDataStore, id: string): Promise<unknown> =>
+    data.accept(
+      ACCOUNT,
+      [
+        observed({
+          type: "message",
+          message: textMessage({ id, chatId: PN, text: id, timestamp: AT }),
+        }),
+      ],
+      1,
+    );
+  await store(first, "in-first");
+  await store(second, "in-second");
+
+  // Same account id, different stores. A read reached from inside another
+  // store's read is a *different* transaction on different state, and joining
+  // it would answer from the wrong database.
+  const inside = await first.read(ACCOUNT, async () =>
+    (await second.messages(ACCOUNT, PN)).messages.map(({ messageId }) => messageId),
+  );
+
+  expect(inside).toEqual(["in-second"]);
 });
 
 export function dataStoreConformance(name: string, create: DataStoreFactory): void {

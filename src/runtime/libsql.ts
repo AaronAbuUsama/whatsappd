@@ -158,17 +158,6 @@ async function migrate(client: Client): Promise<void> {
   }
 }
 
-/**
- * The read transaction the current async context is already inside, if any.
- *
- * @remarks
- * Module-scoped so it distinguishes *nested* from merely concurrent: two
- * `read()` calls racing each other each get their own context, while anything
- * reached from inside one — including `snapshot()` and `messages()`, which are
- * conveniences over `read()` — finds the open transaction.
- */
-const openReads = new AsyncLocalStorage<Transaction>();
-
 async function transact<T>(
   client: LazyLibsqlClient,
   mode: "read" | "write",
@@ -1184,6 +1173,17 @@ function validatePage(options: StoredMessagePageOptions | undefined): number {
 }
 
 function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
+  /**
+   * The read transaction the current async context is already inside, if any.
+   *
+   * @remarks
+   * Per store, not per module: it distinguishes *nested* from merely
+   * concurrent — two `read()` calls racing each other each get their own
+   * context — and a callback that reaches a *different* store must not join
+   * this one, whose transaction is open on a different database.
+   */
+  const openReads = new AsyncLocalStorage<Transaction>();
+
   /**
    * One account's mirror, answered through an already-open read transaction.
    * Neither read opens a second one — which is what would let a page disagree

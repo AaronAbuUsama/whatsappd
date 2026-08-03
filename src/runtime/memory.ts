@@ -44,9 +44,6 @@ interface AccountMirror {
   batches: AcceptedWhatsAppBatch[];
 }
 
-/** The mirrors an open {@link WhatsAppDataStore.read} has already pinned, by account. */
-const openReads = new AsyncLocalStorage<Map<string, AccountMirror>>();
-
 const messageKey = (chatId: string, messageId: string): string => `${chatId}\0${messageId}`;
 
 /**
@@ -72,6 +69,14 @@ const newestFirst = (a: StoredMessageCursor, b: StoredMessageCursor): number =>
  */
 export function memoryDataStore(): WhatsAppDataStore {
   const accounts = new Map<string, AccountMirror>();
+  /**
+   * The mirrors an open {@link WhatsAppDataStore.read} has pinned, by account.
+   *
+   * @remarks
+   * Per store: a callback that reaches a *different* store must read that
+   * store's own state, not this one's mirror for the same account id.
+   */
+  const openReads = new AsyncLocalStorage<Map<string, AccountMirror>>();
   // ponytail: one in-memory transaction chain preserves atomic call order;
   // split it per account only if test-backend contention becomes measurable.
   let operations: Promise<void> = Promise.resolve();
