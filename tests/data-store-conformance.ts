@@ -820,11 +820,14 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       for (let round = 0; round < 5; round += 1) {
         // A writer advancing the mirror for as long as the read is open. The
         // read must not be able to see part of what it commits.
-        // The in-memory store is the leg that observes this: local libSQL
-        // clients in one process share `LazyLibsqlClient.run`'s queue, so an
-        // open read holds it and no write commits inside one. libSQL's
-        // transaction is what makes a remote or multi-process deployment
-        // correct, and no in-process test can distinguish it from that queue.
+        // The in-memory store is the leg that observes this. Nothing can
+        // commit inside an open libSQL read here, and the reason is the
+        // storage engine rather than this package: a local libSQL file runs
+        // `journal_mode = delete`, where a read transaction holds a shared
+        // lock and every writer gets `SQLITE_BUSY` until it commits. That
+        // holds for a second connection, a second backend, and a worker
+        // thread alike, so the libSQL leg confirms the reads agree and does
+        // not confirm behaviour under a concurrent commit.
         const writing = (async () => {
           for (let step = 0; step < 5; step += 1)
             await write(`r${round}-${step}`, PN, AT + 1 + round * 10 + step);
