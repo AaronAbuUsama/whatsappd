@@ -66,7 +66,7 @@ _Avoid_: Generic database abstraction, application repository
 **WhatsApp Client**:
 The backend-independent, synchronized application view of one WhatsApp Account.
 It exposes named domain state and actions, reconciles live changes with stored
-pages, and owns opened conversations for applications and UI bindings.
+pages, and holds Retained Messages per chat for applications and UI bindings.
 _Avoid_: HTTP client, backend SDK
 
 **Retained Messages**:

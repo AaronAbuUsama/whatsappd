@@ -24,7 +24,7 @@ status: accepted
 The framework-independent WhatsApp Client is the application-facing owner of
 snapshot hydration, contiguous patch application, revision-gap replacement,
 stored-page reconciliation by message identity, connection freshness,
-short-lived presence, opened-conversation state, operation results, and
+short-lived presence, ~~opened-conversation state~~ retained messages per chat, operation results, and
 resource cancellation. Applications consume named domain state and actions;
 they do not merge Snapshot Windows, patches, pages, or source batches.
 
@@ -51,7 +51,7 @@ and platform effects.
   string command names and generic payloads erase discoverability and useful
   TypeScript results. A universal envelope may remain internal to durable
   command storage.
-- **Namespaced Client with opened conversations**: accepted because it gives
+- **Namespaced Client with ~~opened conversations~~ a retained-messages namespace**: accepted because it gives
   callers domain-shaped discovery while concentrating message paging and live
   reconciliation in the one object that needs it.
 - **Let every UI binding reconcile runtime frames**: rejected because React,
@@ -67,11 +67,13 @@ Receipts distinguish queued, claimed, executing, succeeded, failed, and
 `outcome_unknown`; execution that may have reached WhatsApp is never retried
 under the same operation identity.
 
-`client.close()` releases all Client subscriptions and opened conversations but
+`client.close()` releases all Client subscriptions ~~and opened conversations~~ but
 does not implicitly stop an application-owned Runtime or close an
 application-owned Backend. Each resource is closed by the layer that created
-it. Closing an opened conversation cancels its page reads and subscriptions; it
-does not delete stored messages or leave the WhatsApp chat.
+it. ~~Closing an opened conversation cancels its page reads and subscriptions; it
+does not delete stored messages or leave the WhatsApp chat.~~ There is nothing
+per-chat to close: retained messages are released when durable state is replaced
+or the Client closes.
 
 ## Consequences
 

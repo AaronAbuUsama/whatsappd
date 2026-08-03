@@ -173,10 +173,14 @@ WhatsApp messages”, or report a delivered count tied to the request.
   Three of four independent designs concluded the handle was what created the
   layer's hazards, and the fourth — briefed to defend it — conceded the retired
   per-`open()` design stayed typeable under it. Trap 1 is now unavailable rather
-  than discouraged, trap 2 dissolves by widening `NAMESPACES` one word, and
-  trap 3 is not instantiated because pages fill only absent message ids while
-  the patch stream always overwrites. Retention is deliberately unbounded in
-  0.3 and tracked by #121. C1's inherited obligation records the discharge.
+  than discouraged. Two further claims made here on the day of the decision were
+  **wrong and are corrected in #106**: widening `NAMESPACES` is not free (it is a
+  `TS7053` error against `ordered`, and `reset()` needs an explicit
+  `retained.clear()`), and the fill rule alone does not make stale page results
+  impossible — entry identity is also required, and a converging catch-up
+  transient remains and is disclosed. Read #106, not this paragraph, for the
+  mechanisms. Retention is deliberately unbounded in 0.3 and tracked by #121.
+  C1's inherited obligation records the discharge.
 - `libsqlBackend()` now persists credentials, accepted/current data, and leases;
   `fileMediaStore()` supplies the separately injected restart-safe media bytes.
 - `fileStore()` remains the credential-only option for the independently usable
