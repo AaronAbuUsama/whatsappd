@@ -116,6 +116,26 @@ anything but its two parameters, so reaching a new input _requires_ adding it to
 inside the closure, or a live read is written that does not route through it,
 the class is open again.
 
+**Carve-out added at #106, because the obligation as written forbade the correct
+code.** `messages.older()` reads the raw `following` variable rather than
+`basis().following`. That is deliberate and is _not_ a live read: routing it
+through the frozen delivery basis would make a call from inside a fanout see the
+basis as it was before a listener closed the Client, and issue a storage read
+against a Backend the application already owns the closing of. The obligation
+governs reads that _derive a reported value_; a guard deciding whether to
+perform an effect needs the current fact, not the delivery's.
+
+**Recurred a third time, at #106 review round 1, on a new axis.** `older()` is
+the first public path that commits _synchronously_, so a listener calling it —
+the infinite-scroll shape the issue documents — ran a whole nested `commit`
+inside the outer `fanout`. The nested one sampled a second basis and then
+restored the outer, older one, so a sibling listener watched a presence expire,
+return, and expire again with no live frame between. **Closed by** `commit`
+reusing an in-progress basis (`delivery = outer ?? sample()`) instead of
+re-sampling: a nested transition is part of the same synchronous burst, which is
+exactly the unit ADR-0028 says cannot split. Pinned by a test that crosses a
+freshness deadline from inside a listener that pages.
+
 ### C3 — recovery or termination as a detached task rather than a Client state
 
 **Closed by** reporting a follow failure as account state. A durable-follow
@@ -185,7 +205,9 @@ later layer that adds a per-chat presence surface inherits this entry unchanged.
 writers rather than by each ingest site, so a value cannot be stored without
 being copied through `put`. Reads return stored values directly.
 
-`put.closed` is the one writer that deliberately does _not_ copy. The Runtime
+`put.closed` and `put.page`'s failure branch are the two writers that
+deliberately do _not_ copy — the second added at #106, for the same reason and
+required by its acceptance criteria. The Runtime
 hands a terminal error out by identity so a caller can compare it against the
 cause it holds — and copying would also throw outright on an error carrying a
 function in its `cause`, losing the very failure being reported. Proven: an
@@ -195,6 +217,18 @@ could not be cloned`.
 **Residue.** Three of the writers' copies are pinned by a red test; the account
 path is not independently falsifiable, because every reachable account change
 also marks through `put.connection` or `put.closed`.
+
+**#106 added two more copies and, at review round 1, neither was falsifiable** —
+both `own()` calls could be deleted with the whole suite green. Now pinned by a
+test that asserts the frozen shape and a caller's mutation throwing, for the
+live-patch writer and the page writer separately.
+
+`entry.before` is the one value entering `retained` that is neither `own()`ed
+nor one of the two documented exceptions. It is two primitives behind
+`readonly`, never handed to a caller, and both shipped adapters copy it on the
+way out — so the exposure is a third-party `WhatsAppBackend` returning an
+aliased cursor, and the damage is confined to this Client's own paging. Recorded
+rather than fixed.
 
 ### C5 — one listener Set holding several roles
 
@@ -288,15 +322,15 @@ array is a compile error instead of a snapshot that silently stops recovering.
 Recorded so a later layer does not mistake them for missing tests. Each becomes
 provable only if the substrate changes.
 
-| Property                                                    | Why no test can fail red                                                                                                                                                                                                                   |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `replace()` clears chats / groups / aliases                 | Only contacts have a delete producer (`MirrorDelete` is contact-only by type, ADR-0019/0022), and alias rows are insert-only in both stores. Nothing else can ever _disappear_ from a snapshot.                                            |
-| Freed native ids are dropped from the alias map             | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                                                              |
-| The delivery basis is restored rather than cleared          | Save/restore is defensive against a nested `commit`, which no public path can currently produce.                                                                                                                                           |
-| `close()` releases each registration; `close()` is memoized | After `following` is false and the pump has ended, no commit follows, so neither is behaviourally observable. Releasing each registration detaches caller-supplied abort signals; the memo makes concurrent closes join. Both are hygiene. |
-| `put.account`'s and `put.connection`'s marks, separately    | Mutually redundant: every reachable account change marks through at least one of them, so neither is falsifiable alone. Removing **both** is caught.                                                                                       |
-| `put.alias`'s mark                                          | Redundant with `put.contact` — every alias the projection emits accompanies the contact upsert that produced it (`projection.ts`). Not, as an earlier note here said, with `put.connection`.                                               |
-| `error` present-but-`undefined` on a closure                | `error` is spread rather than tested, so a failure whose cause _is_ `undefined` still reports the key. Correct in code, and **unproven**: no public path constructs a terminal failure with an `undefined` cause.                          |
+| Property                                                    | Why no test can fail red                                                                                                                                                                                                                                                                      |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replace()` clears chats / groups / aliases                 | Only contacts have a delete producer (`MirrorDelete` is contact-only by type, ADR-0019/0022), and alias rows are insert-only in both stores. Nothing else can ever _disappear_ from a snapshot.                                                                                               |
+| Freed native ids are dropped from the alias map             | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                                                                                                                 |
+| ~~The delivery basis is restored rather than cleared~~      | **No longer unprovable — falsified at #106.** `messages.older()` commits synchronously, so a listener calling it produces exactly the nested `commit` this row said no public path could. Save/restore is now load-bearing, and re-sampling instead of reusing the outer basis is a red test. |
+| `close()` releases each registration; `close()` is memoized | After `following` is false and the pump has ended, no commit follows, so neither is behaviourally observable. Releasing each registration detaches caller-supplied abort signals; the memo makes concurrent closes join. Both are hygiene.                                                    |
+| `put.account`'s and `put.connection`'s marks, separately    | Mutually redundant: every reachable account change marks through at least one of them, so neither is falsifiable alone. Removing **both** is caught.                                                                                                                                          |
+| `put.alias`'s mark                                          | Redundant with `put.contact` — every alias the projection emits accompanies the contact upsert that produced it (`projection.ts`). Not, as an earlier note here said, with `put.connection`.                                                                                                  |
+| `error` present-but-`undefined` on a closure                | `error` is spread rather than tested, so a failure whose cause _is_ `undefined` still reports the key. Correct in code, and **unproven**: no public path constructs a terminal failure with an `undefined` cause.                                                                             |
 
 ## Decisions taken here that a later layer may want to revisit
 
@@ -326,3 +360,78 @@ provable only if the substrate changes.
   not, so the file contradicted itself for one commit. That is C10 applied to
   the ledger instead of by it: the cheap path is editing the site you happen to
   be looking at. One fact, one home, and a pointer from anywhere else.
+
+## #106 / the `messages` namespace — review rounds
+
+Round counter restarts at 1 here; the classes above do not.
+
+**The GitHub Codex reviewer was unavailable for this run, confirmed by the
+repository owner**, so rounds are performed by independent fresh-context local
+review agents instead — the same substitution recorded on PR #116, and recorded
+here rather than left implicit. Three lenses per round: correctness of the
+page/live reconciliation, defect-class recurrence, and contract/scope.
+
+### Round 1 — `c81b671`
+
+Four real defects, and one root cause behind almost every test finding.
+
+**The test root cause, because it is the more useful entry.** Three tracers
+seeded fewer messages than one store page (25). The first `older()` therefore
+returned everything and left the entry `"exhausted"`, so the _second_ one — the
+one each test wrapped in a `hold()` gate believing it was holding a read open —
+short-circuited on the single-flight guard before issuing any read. Measured: 0
+reads. Every assertion after the gate passed on state nothing had touched. The
+issue states this requirement explicitly, for tracer 2 only ("Fixture must
+exceed one page so `nextBefore` is real"); it was applied there and nowhere
+else. All three now seed above a page, and each asserts a read was issued and
+that the entry is `"loading"` before the gate opens, so the vacuous shape cannot
+come back quietly.
+
+**Two real defects, both found by more than one lens:**
+
+1. **`close()` mid-read stranded `older: "loading"` for ever.** The guard was on
+   the _commit_ rather than on the _effect_, so the transition that ended
+   following left a per-chat field mid-flight, describing a read that could
+   never finish and that `older()` would never restart. Fixed by binding the two
+   facts into one `endFollowing()` — C10 applied rather than restated, since
+   `following = false` alone is now greppable and wrong.
+2. **A nested `commit` inside a `fanout` ran the derivation basis backwards.**
+   Recorded under C2 above as that class's third recurrence.
+
+**Two lower-severity ones:** `older()` could issue a read after a listener
+closed the Client inside the loading-mark fanout (now guarded and pinned); and
+the success `commit` sat inside the same `try` as the read, so a throw while
+_applying_ a page would have committed a failure on top of a half-inserted
+buffer and blamed the mirror for it. The second is unreachable with both
+in-tree stores and was fixed because the guard shape read as though it already
+protected against it.
+
+**The finding the issue invited by name was not found, and the negative result
+is recorded rather than a manufactured substitute.** No sequence produces a
+permanently wrong result from the fill rule plus entry identity. The argument
+bottoms out in two places: a page is never pinned below the Client's own applied
+revision, because a patch is published only after the accept that produced it
+resolved and both stores read at-or-after that point; and every patch after the
+entry exists lands in the buffer, because entries are removed only by
+`retained.clear()`, which is exactly what makes the identity check reject the
+in-flight page.
+
+**The one window where it does strand is a specification gap, and it is closed
+by ordering rather than by the named fallback.** If the entry did not exist for
+part of a read's life, `put.message`'s drop rule would discard exactly the
+patches that repair the page about to land, and the stale page would be
+permanent. The issue mandates that `get()` creates the entry and says nothing
+about `older()` — which is the primary way a chat is first filled — so an
+implementer following its text literally can write the stranding version and
+satisfy every acceptance criterion. `older()` creates the entry synchronously
+before issuing its read, and a tracer fails red if that moves. Per-message-id
+revisions would not have helped: a dropped patch has no entry to record a
+revision in.
+
+**Mutation audit at the round-1 fix head.** Twelve mutations derived from the
+diff's decision points rather than from the author's model of it, each written,
+compiled and run: fill rule removed, `touch("messages")` removed, entry-identity
+guard removed, both `own()` calls removed separately, drop rule removed,
+`retained.clear()` removed, ascending tie-break, `localeCompare` tie-break,
+nested-commit basis re-sampled, and both `following` guards in `older()`. All
+twelve fail red. Before round 1 the first five and the last two did not.

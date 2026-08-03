@@ -2007,9 +2007,21 @@ test("older() lands the newest page, then the page before it, then exhausts", as
 
     expect(worker.client.messages.get(PERSON).messages.length).toBe(0);
 
+    // Nothing but paging happens in this test, so every delivery counted here
+    // is one a page read caused — which is what makes the count a proof that
+    // landing a page announces itself rather than only mutating the buffer.
+    const woken: number[] = [];
+    worker.client.messages.subscribe(() =>
+      woken.push(worker.client.messages.get(PERSON).messages.length),
+    );
+
     worker.client.messages.older(PERSON);
     expect(worker.client.messages.get(PERSON).older).toBe("loading");
+    // The `loading` mark is itself a transition: a binding showing a spinner
+    // has to be told the read started, not only that it finished.
+    expect(woken).toEqual([0]);
     await until(() => worker.client.messages.get(PERSON).messages.length === 25);
+    expect(woken).toEqual([0, 25]);
     // Newest first: t29 down to t5.
     expect(texts(worker.client, PERSON)[0]).toBe("t29");
     expect(texts(worker.client, PERSON).at(-1)).toBe("t5");
@@ -2020,10 +2032,13 @@ test("older() lands the newest page, then the page before it, then exhausts", as
     expect(texts(worker.client, PERSON).at(-1)).toBe("t0");
     // Nothing older is stored, so the cursor is gone and the state says so.
     expect(worker.client.messages.get(PERSON).older).toBe("exhausted");
+    expect(woken).toEqual([0, 25, 25, 30]);
 
-    // An exhausted chat issues no further read and stays exhausted.
+    // An exhausted chat issues no further read and stays exhausted — and says
+    // nothing, because a call that fetches nothing is not a transition.
     worker.client.messages.older(PERSON);
     await tick();
+    expect(woken).toEqual([0, 25, 25, 30]);
     expect(worker.client.messages.get(PERSON).older).toBe("exhausted");
     expect(worker.client.messages.get(PERSON).messages.length).toBe(30);
   } finally {
@@ -2037,17 +2052,23 @@ test("a patch overwrites a held id; a page never does", async () => {
   const backend = heldReads(memoryBackend());
   const worker = await lane({ backend });
   try {
-    await seed(worker, PERSON, 1);
-    worker.client.messages.older(PERSON);
-    await until(() => worker.client.messages.get(PERSON).messages.length === 1);
-    expect(worker.client.messages.get(PERSON).messages[0]?.reactions).toEqual([]);
+    // The entry first, so the live traffic below is *retained* rather than
+    // dropped — which is what makes the first page overlap ids the buffer
+    // already holds. Paging a chat this way round is the real scroll-up: a
+    // conversation has been open and receiving, and is then read backwards.
+    worker.client.messages.get(PERSON);
+    await seed(worker, PERSON, 30);
+    expect(worker.client.messages.get(PERSON).messages.length).toBe(30);
+    // Never paged, so a held read below is a real one rather than a call that
+    // short-circuits on `exhausted` and holds a gate nobody waits on.
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
 
     // Direction 1 — a patch wins over what the buffer holds.
     await worker.driver.emit({
       type: "update",
       update: {
         kind: "reaction",
-        ref: { id: "m0", chatId: PERSON, fromMe: false },
+        ref: { id: "m29", chatId: PERSON, fromMe: false },
         emoji: "🔥",
         by: PERSON,
         removed: false,
@@ -2055,18 +2076,26 @@ test("a patch overwrites a held id; a page never does", async () => {
     });
     await until(() => worker.client.messages.get(PERSON).messages[0]?.reactions.length === 1);
 
-    // Direction 2 — a page read that started before the reaction lands after
-    // it, and must not put the pre-reaction copy back. The page is pinned at
-    // read start, so its row genuinely is the older one.
+    // Direction 2 — a page pinned before an edit lands after it, and must not
+    // put the pre-edit copy back over the id the buffer holds.
+    const reads = backend.reads();
+    const woken: string[] = [];
+    worker.client.messages.subscribe(() => void woken.push("messages"));
+
     backend.hold("start");
     worker.client.messages.older(PERSON);
     await tick();
+    // The read is genuinely in flight: without this the gate below holds
+    // nothing and every assertion after it passes on unchanged state.
+    expect(backend.reads() - reads).toBe(1);
+    expect(worker.client.messages.get(PERSON).older).toBe("loading");
+
     await worker.driver.emit({
       type: "update",
       update: {
         kind: "edit",
-        ref: { id: "m0", chatId: PERSON, fromMe: false },
-        message: textMessage({ id: "m0", chatId: PERSON, text: "edited", timestamp: AT }),
+        ref: { id: "m29", chatId: PERSON, fromMe: false },
+        message: textMessage({ id: "m29", chatId: PERSON, text: "edited", timestamp: AT + 29 }),
       },
     });
     await tick();
@@ -2074,9 +2103,15 @@ test("a patch overwrites a held id; a page never does", async () => {
     await until(() => worker.client.messages.get(PERSON).older !== "loading");
 
     // Both live changes survived the page: the reaction it never saw, and the
-    // edit that landed while it was in flight.
+    // edit that landed while it was in flight. The page's own copy of `m29`
+    // carried neither.
     expect(worker.client.messages.get(PERSON).messages[0]?.reactions.length).toBe(1);
-    expect(texts(worker.client, PERSON)).toEqual(["edited"]);
+    expect(texts(worker.client, PERSON)[0]).toBe("edited");
+    // The page still did its job for the ids the buffer did not hold.
+    expect(worker.client.messages.get(PERSON).messages.length).toBe(30);
+    // And landing it announced itself: a page that committed without marking
+    // the namespace would leave every subscriber holding a stale view.
+    expect(woken.length > 0).toBe(true);
   } finally {
     await worker.stop();
   }
@@ -2151,11 +2186,21 @@ test("a page that resolves after a revision gap commits nothing", async () => {
     // A snapshot carries no messages (ADR-0010), so recovery empties the chat.
     expect(worker.client.messages.get(PERSON).messages).toEqual([]);
 
+    // Subscribed *after* the gap, because the identity guard's whole observable
+    // effect is the delivery it suppresses. `retained.clear()` already detached
+    // the captured entry, so a stale page cannot be read back through `get()`
+    // whether the guard is there or not — but without it the page still marks
+    // the namespace and wakes every listener for a transition that changed
+    // nothing. Asserting emptiness alone passes with the guard deleted.
+    const woken: string[] = [];
+    worker.client.messages.subscribe(() => void woken.push("messages"));
+
     // The pre-gap page now resolves. It was taken against an entry `replace()`
     // discarded, so it commits nothing — object identity, not a revision.
     backend.release();
     await tick();
     await tick();
+    expect(woken).toEqual([]);
     expect(worker.client.messages.get(PERSON).messages).toEqual([]);
     // And the entry it could have resurrected is still the fresh one.
     expect(worker.client.messages.get(PERSON).older).toBe("stored");
@@ -2171,16 +2216,22 @@ test("a page fresher than the buffer is refused, and the next transition converg
   const backend = heldReads(inner);
   const worker = await lane({ backend });
   try {
-    await seed(worker, PERSON, 1);
-    worker.client.messages.older(PERSON);
-    await until(() => worker.client.messages.get(PERSON).messages.length === 1);
-    expect(texts(worker.client, PERSON)).toEqual(["t0"]);
+    // Entry first, so the traffic below is retained and the first page overlaps
+    // ids the buffer already holds — and so `older` is still `"stored"` when
+    // the gate goes on, which is what makes the held read a real one.
+    worker.client.messages.get(PERSON);
+    await seed(worker, PERSON, 30);
+    expect(texts(worker.client, PERSON)[0]).toBe("t29");
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
 
     // The store moves ahead of the client with no patch published, so the page
     // this read pins on release is *newer* than anything the client has.
+    const reads = backend.reads();
     backend.hold("release");
     worker.client.messages.older(PERSON);
     await tick();
+    expect(backend.reads() - reads).toBe(1);
+    expect(worker.client.messages.get(PERSON).older).toBe("loading");
     await backend.data.accept(
       "personal",
       [
@@ -2194,8 +2245,13 @@ test("a page fresher than the buffer is refused, and the next transition converg
             type: "update",
             update: {
               kind: "edit",
-              ref: { id: "m0", chatId: PERSON, fromMe: false },
-              message: textMessage({ id: "m0", chatId: PERSON, text: "newer", timestamp: AT }),
+              ref: { id: "m29", chatId: PERSON, fromMe: false },
+              message: textMessage({
+                id: "m29",
+                chatId: PERSON,
+                text: "newer",
+                timestamp: AT + 29,
+              }),
             },
           },
         },
@@ -2206,8 +2262,11 @@ test("a page fresher than the buffer is refused, and the next transition converg
     await until(() => worker.client.messages.get(PERSON).older !== "loading");
 
     // The fill rule refused the fresher row, because the id is held. That is
-    // the transient the README discloses, not a permanent state.
-    expect(texts(worker.client, PERSON)).toEqual(["t0"]);
+    // the transient the README discloses, not a permanent state. The page
+    // genuinely carried "newer" — it was pinned after the store moved — so this
+    // is the refusal happening, not a page that never ran.
+    expect(texts(worker.client, PERSON)[0]).toBe("t29");
+    expect(worker.client.messages.get(PERSON).messages.length).toBe(30);
 
     // It converges on the next transition rather than stranding: the published
     // patch is from a revision the client is not at, so the pull loop replaces
@@ -2219,8 +2278,8 @@ test("a page fresher than the buffer is refused, and the next transition converg
     });
     await until(() => worker.client.messages.get(PERSON).messages.length === 0);
     worker.client.messages.older(PERSON);
-    await until(() => worker.client.messages.get(PERSON).messages.length === 1);
-    expect(texts(worker.client, PERSON)).toEqual(["newer"]);
+    await until(() => worker.client.messages.get(PERSON).messages.length === 25);
+    expect(texts(worker.client, PERSON)[0]).toBe("newer");
   } finally {
     await worker.stop();
   }
@@ -2350,7 +2409,7 @@ test("timestamp collisions break by descending id, and a backdated live message 
 
     // Descending by identifier, matching `ORDER BY timestamp DESC, message_id
     // DESC` in both stores (`libsql.ts:1308`, `memory.ts:57`). An ascending
-    // tie-break — the one `chats.list()` uses at `client.ts:762` — reverses
+    // tie-break — the one `chats.list()` uses in this same file — reverses
     // this, and `"Zed" < "apple"` by code unit while `"apple" < "Zed"` by
     // locale, so this also fails red if the comparison stops being binary.
     expect(heldIds(worker.client, PERSON)).toEqual(["m-mid", LOWER, UPPER]);
@@ -2421,8 +2480,14 @@ test("another chat's traffic leaves this chat's view identical", async () => {
     worker.client.messages.older(PERSON);
     await until(() => worker.client.messages.get(PERSON).messages.length === 2);
 
+    // The other chat needs an *entry*, or its traffic is dropped by the
+    // no-entry rule and never marks the namespace at all — in which case a
+    // namespace-wide view cache would pass this test unchanged.
+    worker.client.messages.get(PERSON_LID);
     const held = worker.client.messages.get(PERSON);
     const untouched = worker.client.messages.get(ROOM);
+    const woken: string[] = [];
+    worker.client.messages.subscribe(() => void woken.push("messages"));
 
     // A namespace-wide subscription wakes for any chat, which is the accepted
     // cost — but an uninterested listener must re-read the *same* object.
@@ -2437,6 +2502,10 @@ test("another chat's traffic leaves this chat's view identical", async () => {
     });
     await tick();
 
+    // The transition really did reach this namespace and really did change the
+    // other chat, so the memo below survives an invalidation that happened.
+    expect(woken.length > 0).toBe(true);
+    expect(texts(worker.client, PERSON_LID)).toEqual(["elsewhere"]);
     expect(worker.client.messages.get(PERSON)).toBe(held);
     // Including a chat that was never paged at all.
     expect(worker.client.messages.get(ROOM)).toBe(untouched);
@@ -2520,24 +2589,41 @@ test("closing mid-read commits nothing, and afterwards nothing throws or reads",
   const backend = heldReads(memoryBackend());
   const worker = await lane({ backend });
   try {
-    await seed(worker, PERSON, 3);
+    // More than one page, so the entry is still `"stored"` after the first
+    // read and the gated one below is a read genuinely in flight. With a
+    // one-page fixture it short-circuits on `exhausted` and every assertion
+    // here passes without a single read being issued.
+    await seed(worker, PERSON, 30);
     worker.client.messages.older(PERSON);
-    await until(() => worker.client.messages.get(PERSON).messages.length === 3);
+    await until(() => worker.client.messages.get(PERSON).messages.length === 25);
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
 
     const woken: string[] = [];
     worker.client.messages.subscribe(() => void woken.push("messages"));
 
+    const reads = backend.reads();
     backend.hold("start");
     worker.client.messages.older(PERSON);
     await tick();
+    expect(backend.reads() - reads).toBe(1);
+    expect(worker.client.messages.get(PERSON).older).toBe("loading");
+    // One delivery so far, and it is the `loading` mark — anything after this
+    // point is the late result speaking when it should not.
+    expect(woken).toEqual(["messages"]);
+
     await worker.client.close();
     backend.release();
     await tick();
     await tick();
 
     // The late result commits nothing and notifies nobody.
-    expect(woken).toEqual([]);
-    expect(worker.client.messages.get(PERSON).messages.length).toBe(3);
+    expect(woken).toEqual(["messages"]);
+    expect(worker.client.messages.get(PERSON).messages.length).toBe(25);
+
+    // And the read it can no longer finish is not left claiming to be running.
+    // `"loading"` here would be permanent: no result can land, `older()` is a
+    // no-op, and a binding rendering a spinner on it would spin for ever.
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
 
     // Afterwards `get()` still answers from what is held and `older()` is a
     // no-op that neither throws nor reaches storage.
@@ -2545,7 +2631,7 @@ test("closing mid-read commits nothing, and afterwards nothing throws or reads",
     worker.client.messages.older(PERSON);
     await tick();
     expect(backend.reads()).toBe(after);
-    expect(worker.client.messages.get(PERSON).older).not.toBe("loading");
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
   } finally {
     await worker.runtime.stop().catch(() => {});
   }
@@ -2607,5 +2693,128 @@ test("older() creates the entry before it reads, so no repair is dropped mid-rea
     expect(texts(worker.client, PERSON)).toEqual(["repaired"]);
   } finally {
     await worker.stop();
+  }
+});
+
+test("retained messages are client-owned and frozen, from both writers", async () => {
+  const worker = await lane();
+  try {
+    // Writer 1 — the live patch path. The entry exists, so it is retained.
+    worker.client.messages.get(PERSON);
+    await seed(worker, PERSON, 1);
+    const live = worker.client.messages.get(PERSON).messages[0];
+    // Asserted present before it is mutated below: with optional chaining, a
+    // missing record would make the mutation throw `TypeError` and satisfy the
+    // very assertion that is supposed to prove the freeze.
+    assert.ok(live);
+    expect(Object.isFrozen(live)).toBe(true);
+    // Frozen all the way down, not just at the top: `receipts` and `reactions`
+    // are the arrays a caller would reach for.
+    expect(Object.isFrozen(live.reactions)).toBe(true);
+    expect(Object.isFrozen(live.receipts)).toBe(true);
+    // Reads hand back the stored value directly, so a caller reaching into it
+    // would be reaching into committed Client state.
+    expect(() => {
+      (live.reactions as unknown as unknown[]).push({ subject: "x", emoji: "💥" });
+    }).toThrow();
+    expect(worker.client.messages.get(PERSON).messages[0]?.reactions.length).toBe(0);
+
+    // Writer 2 — the page path, on a chat whose rows were dropped before it had
+    // an entry and are therefore only reachable through a stored page.
+    await seed(worker, PERSON_LID, 1, { from: 50, at: () => AT + 50 });
+    worker.client.messages.older(PERSON_LID);
+    await until(() => worker.client.messages.get(PERSON_LID).messages.length === 1);
+    const paged = worker.client.messages.get(PERSON_LID).messages[0];
+    assert.ok(paged);
+    expect(Object.isFrozen(paged)).toBe(true);
+    expect(Object.isFrozen(paged.reactions)).toBe(true);
+    expect(() => {
+      (paged.reactions as unknown as unknown[]).push({ subject: "x", emoji: "💥" });
+    }).toThrow();
+    expect(worker.client.messages.get(PERSON_LID).messages[0]?.reactions.length).toBe(0);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("older() from inside a listener cannot split the delivery basis", async () => {
+  // `older()` is the first public path that commits synchronously, so a
+  // listener calling it — the infinite-scroll shape the issue documents — runs
+  // a whole nested transition inside the outer fanout. Every listener in that
+  // burst must still derive live state from one instant: re-sampling for the
+  // nested delivery and then restoring the outer basis let a sibling watch a
+  // presence expire, come back, and expire again with no live frame between.
+  const worker = await lane({ freshnessMs: 5_000 });
+  try {
+    await worker.driver.emit({ type: "connection", status: { phase: "online" } });
+    await worker.driver.emit({
+      type: "presence",
+      presence: { chatId: PERSON, kind: "typing", at: AT },
+    });
+    await tick();
+    expect(worker.client.contacts.presence(PERSON)).toBe("typing");
+
+    const seen: (string | undefined)[] = [];
+    const realNow = Date.now;
+    let skew = 0;
+    Date.now = () => realNow() + skew;
+    try {
+      worker.client.messages.get(ROOM);
+      // Crosses the freshness deadline from inside the fanout, then commits a
+      // nested transition — the exact pair the basis has to survive.
+      worker.client.messages.subscribe(() => {
+        skew += 10_000;
+        worker.client.messages.older(ROOM);
+      });
+      worker.client.messages.subscribe(() => seen.push(worker.client.contacts.presence(PERSON)));
+
+      worker.client.messages.get(PERSON);
+      await seed(worker, PERSON, 1);
+      await tick();
+    } finally {
+      Date.now = realNow;
+    }
+
+    // Never present after absent. The value may expire, but it may not come
+    // back inside one synchronous burst with nothing having observed it again.
+    const firstGone = seen.indexOf(undefined);
+    expect(firstGone === -1 || seen.slice(firstGone).every((value) => value === undefined)).toBe(
+      true,
+    );
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a listener that closes the client mid-mark stops the read being issued", async () => {
+  // `older()` commits the `loading` mark before it reads, and that commit
+  // fanouts synchronously — so a listener may close the Client (ADR-0029 rule
+  // 1) in the window between the mark and the read. Without a second check the
+  // read is then issued against a Backend whose lifetime the application owns
+  // and may already have ended (ADR-0023).
+  const backend = heldReads(memoryBackend());
+  const worker = await lane({ backend });
+  try {
+    await seed(worker, PERSON, 30);
+    worker.client.messages.older(PERSON);
+    await until(() => worker.client.messages.get(PERSON).messages.length === 25);
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
+
+    worker.client.messages.subscribe(() => {
+      if (worker.client.messages.get(PERSON).older === "loading") void worker.client.close();
+    });
+
+    const reads = backend.reads();
+    worker.client.messages.older(PERSON);
+    await tick();
+    await tick();
+
+    // No read reached storage, and the mark the listener interrupted was rolled
+    // back rather than left claiming a load that can never finish.
+    expect(backend.reads()).toBe(reads);
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
+    expect(worker.client.messages.get(PERSON).messages.length).toBe(25);
+  } finally {
+    await worker.runtime.stop().catch(() => {});
   }
 });
