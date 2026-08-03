@@ -5,8 +5,9 @@ Last updated: 2026-08-03. The capability catalogue merged at
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. After #64/#70 and substrate
 #96–#98 landed, the owner replaced the underspecified #71/#22/#23/#30/#40/#41
 spine with the executable stack #105–#113. #105 merged in PR #116 at
-`6778fdf`. #117 is the next frontier node, ahead of #106, because it repairs a
-proof that all seven remaining nodes list as required validation.
+`6778fdf`. #117 went ahead of #106 because it repairs a proof that six of the
+remaining nodes list as required validation — #106, #107, #108, #109, #111 and
+#112. Not #113, which is a human release operation with no validation list.
 
 The owner also moved #110 out of 0.3 on 2026-08-03: the headless React bindings
 are being written inside a real OpenTUI application and will be extracted into
@@ -208,13 +209,17 @@ exact head after the documented handoff gate, targets that predecessor while
 stacked, and never merges before it. #106–#112 are fully specified for agents
 and #113 is a human release operation.
 
-#117 went first because `pnpm proof:pack` appears in the required-validation
-list of every node below it and could pass having observed a `dist/` built
-before the change under test — a false green in seven gates at once. It now
-builds before packing and runs in CI. Its residue is recorded under C6 in
-`docs/client-stack-defect-ledger.md`: bare `pnpm pack` is still stale-prone,
-`release.yml` publishes a tarball the packed proof never inspected, and the
-proof's positive control catches an empty `dist/` but not a wrong one.
+#117 went first because `pnpm proof:pack` could pass having observed a `dist/`
+built before the change under test — a false green in six gates at once. It now
+builds before packing and runs in CI.
+
+Its residue is **#119**, and C6 in `docs/client-stack-defect-ledger.md` is the
+only place that describes it; anything else points there. Bare `pnpm pack` is
+still stale-prone, `release.yml` publishes a tarball the packed proof never
+inspected, and the positive control catches an empty `dist/` but not a wrong
+one. **#112 and #113 depend on #119**: #113's acceptance requires that the
+registry tarball match #112's reviewed packed artifact, and nothing in the
+release path establishes that until #119 lands.
 
 #107 is worth more than its position suggests. It is the node that makes
 `createWhatsAppClient` reachable at all. The package exports exactly `.`,

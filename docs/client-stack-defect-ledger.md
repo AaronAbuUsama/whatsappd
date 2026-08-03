@@ -210,6 +210,10 @@ construction.
   `tests/packed-imports.ts:51-57` names symbols present in _any_ recent build,
   so it catches an **empty** `dist/` and not a **wrong** one. This class stays
   open on that second point — a wrong-but-nonempty artifact still reads green.
+  Both consequences are filed as #119, and the second is confirmed rather than
+  reasoned: building `dist/` from `7e1a730` (pre-#105 master, before
+  `src/runtime/client.ts` existed — 1,175 insertions of divergence) and running
+  the harness bare passes every assertion, positive control included.
 - The round-1 mutation audit chose its mutations from the author's model of the
   design, so it was blind exactly where the design was. Round 2 derived them
   from the code's decision points instead, and killed 39 of 46 where the first
@@ -294,4 +298,8 @@ provable only if the substrate changes.
   it with `julianday('now')`) and is compared against a process `Date.now()`.
   Postmortem R23 class. Damage is bounded by `freshnessMs`, which is
   process-clock and binds tighter.
-- `pnpm proof:pack` is not in CI and does not rebuild.
+- `pnpm proof:pack` — **see C6, which is the only entry that states this.** It
+  was restated here, and when #117 fixed it C6 was updated and this line was
+  not, so the file contradicted itself for one commit. That is C10 applied to
+  the ledger instead of by it: the cheap path is editing the site you happen to
+  be looking at. One fact, one home, and a pointer from anywhere else.
