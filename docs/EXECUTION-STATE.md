@@ -4,8 +4,8 @@ Last updated: 2026-08-03. The capability catalogue merged at
 `d7923f6cf93c810f8ea660089dd1edbd96523a81`, and #68 merged the first executable
 graph at `4bc28f7dc44b2573ba08eace67f831b5a7cd4bb1`. After #64/#70 and substrate
 #96–#98 landed, the owner replaced the underspecified #71/#22/#23/#30/#40/#41
-spine with the executable stack #105–#113. #105 is the current executable
-frontier.
+spine with the executable stack #105–#113. #105 is the next frontier node; its
+live dispatch condition is recorded below.
 
 ## Where everything lives
 
@@ -191,9 +191,11 @@ completed substrate: #64  #70  #96  #97  #98
 #105–#110 form the ordered implementation stack. A child may start from its
 predecessor's reviewed exact head after the documented handoff gate, targets
 that predecessor while stacked, and never merges before it. #110 and #111 may
-proceed in parallel after #109; #112 is their convergence gate. #105–#112 are
-fully specified for agents and #113 is a human release operation, but only
-**#105** is executable before the first handoff.
+proceed in parallel after #109; #112 is their convergence gate. #106–#112 are
+fully specified for agents and #113 is a human release operation. #105 becomes
+fully specified and executable only when PR #114's merge receipt replaces its
+reserved base with the exact merge commit and adds `ready-for-agent`; before
+that operation, no implementation node is executable.
 
 Post-0.3 and research lanes do not block that spine:
 
