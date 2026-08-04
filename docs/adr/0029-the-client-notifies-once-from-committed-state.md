@@ -42,7 +42,7 @@ function commit(mutate: (tx: Tx) => void): void;
 ```
 
 A non-`async` function cannot await, therefore cannot yield to the event loop,
-therefore nothing — no application callback, no timer, no concurrent `open()` —
+therefore nothing — no application callback, no timer, no concurrent `older()` —
 can interleave inside a transition. "Committed before notified" becomes a
 property of the type signature rather than a rule remembered at seventeen sites.
 Asynchronous work happens outside commit, and its result is checked before it may

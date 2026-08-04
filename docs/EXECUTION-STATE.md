@@ -19,7 +19,7 @@ and #111 becomes #112's only blocker.
 
 | Artifact                         | Location                                                   |
 | -------------------------------- | ---------------------------------------------------------- |
-| Sharpened target architecture    | `docs/architecture/runtime-backends-and-headless-react.md` |
+| Historical target architecture   | `docs/architecture/runtime-backends-and-headless-react.md` |
 | Shared domain language           | `CONTEXT.md`                                               |
 | Accepted architecture decisions  | `docs/adr/0001` … `0030` (`0027` reserved)                 |
 | Published build specification    | GitHub issue #15                                           |
