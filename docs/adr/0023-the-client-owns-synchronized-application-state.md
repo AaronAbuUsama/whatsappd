@@ -72,8 +72,22 @@ does not implicitly stop an application-owned Runtime or close an
 application-owned Backend. Each resource is closed by the layer that created
 it. ~~Closing an opened conversation cancels its page reads and subscriptions; it
 does not delete stored messages or leave the WhatsApp chat.~~ There is nothing
-per-chat to close: retained messages are released when durable state is replaced
-or the Client closes.
+per-chat to close: retained messages are released when a revision gap replaces
+durable state (`client.ts:939`).
+
+Closing the Client ends every page read still in flight, without applying its
+rows, and releases its subscriptions (`client.ts:1214-1229`). It does not empty
+what is already held: a closed Client is finished rather than emptied, and
+`messages.get(chatId)` still answers from the rows it had. `messages.older()` is
+already a no-op once closed and does not even allocate an entry
+(`client.ts:1142-1147`).
+
+> Amended 2026-08-04. This paragraph previously said retained messages are
+> released "when durable state is replaced **or the Client closes**". The second
+> half was never implemented — `retained.clear()` runs only in the revision-gap
+> path — and no test asserted either behaviour. Whether a closed Client _should_
+> drop what it holds is a retention question, not a decision this ADR settled;
+> it belongs to #121 and is filed there.
 
 ## Consequences
 
