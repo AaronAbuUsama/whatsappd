@@ -326,11 +326,13 @@ provable only if the substrate changes.
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `replace()` clears chats / groups / aliases                 | Only contacts have a delete producer (`MirrorDelete` is contact-only by type, ADR-0019/0022), and alias rows are insert-only in both stores. Nothing else can ever _disappear_ from a snapshot.                                                                                                                                                                                                                                                   |
 | Freed native ids are dropped from the alias map             | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                                                                                                                                                                                                                                                                     |
-| ~~The delivery basis is restored rather than cleared~~      | **No longer unprovable — falsified at #106.** `messages.older()` commits synchronously, so a listener calling it produces exactly the nested `commit` this row said no public path could. Save/restore is now load-bearing, and re-sampling instead of reusing the outer basis is a red test.                                                                                                                                                     |
+| The delivery basis is restored rather than cleared          | Still unprovable, and #106 did **not** falsify it — an earlier version of this row said so and was wrong. Replacing `finally { delivery = outer }` with `delivery = undefined` passes the whole suite. What #106 changed is the row below: a different property on the same two lines.                                                                                                                                                            |
+| A nested `commit` reuses the running delivery basis         | **Provable, and newly so at #106.** `messages.older()` commits synchronously, so a listener calling it produces the nested `commit` the row above said no public path could — but what fails red is `delivery = outer ?? sample()` replaced by `delivery = sample()`, not the restore. Conflating the two is how this table briefly claimed a proof it did not have.                                                                              |
 | `close()` releases each registration; `close()` is memoized | After `following` is false and the pump has ended, no commit follows, so neither is behaviourally observable. Releasing each registration detaches caller-supplied abort signals; the memo makes concurrent closes join. Both are hygiene.                                                                                                                                                                                                        |
 | `put.account`'s and `put.connection`'s marks, separately    | Mutually redundant: every reachable account change marks through at least one of them, so neither is falsifiable alone. Removing **both** is caught.                                                                                                                                                                                                                                                                                              |
 | `put.alias`'s mark                                          | Redundant with `put.contact` — every alias the projection emits accompanies the contact upsert that produced it (`projection.ts`). Not, as an earlier note here said, with `put.connection`.                                                                                                                                                                                                                                                      |
 | The retired per-entry revision watermark is absent          | Verifiable by reading `Retained` — no revision field exists — and **not behaviourally**. A watermark only refuses a patch at or below the page's revision, and in the single-writer path every patch published after a page read has a higher one. The damaging case needs the Client lagging the mirror, and nothing in the public surface delays the frame pump. Reinstating the watermark exactly as #106 describes it passes the whole suite. |
+| `stopped()` announces nothing when no read was running      | The `entry.older !== "loading"` short-circuit in `put.page`'s ENDED branch can be deleted with the suite green. Its effect is real — without it every `close()` delivers a spurious `messages` notification to every subscriber — but no assertion counts deliveries on a Client that was idle when it closed.                                                                                                                                    |
 | A page is applied atomically                                | The outer `catch` in `older()` commits the failure and delivers either way, so half-applying a page and then reporting it is indistinguishable from applying none of it: the partial rows are real rows from that page and a retry fills the rest. Kept as defence in depth, claimed as nothing.                                                                                                                                                  |
 | `error` present-but-`undefined` on a closure                | `error` is spread rather than tested, so a failure whose cause _is_ `undefined` still reports the key. Correct in code, and **unproven**: no public path constructs a terminal failure with an `undefined` cause.                                                                                                                                                                                                                                 |
 
@@ -502,3 +504,39 @@ unprovable with their reasons, rather than left looking pinned. Three of the
 sixteen — the cross-chat row filter, the apply-throw commit, and `stopped()`
 announcing rather than only correcting — were green when first written and are
 red only because this audit found them.
+
+### Round 3 — `e8d2028`
+
+Two lenses: "did the replan close the class" and a merge-gate pass over
+acceptance, documentation and scope.
+
+**The class is closed.** Neither lens found a new way to leave a chat reporting
+`"loading"` with no read running, and both looked for one specifically —
+`stopped()` racing a landing in both directions, a gap recreating the entry
+mid-read, `stop()` twice, a listener calling `older()`/`close()` from inside the
+`stopped()` delivery, and a throw from the `commit` that reports an apply-throw.
+The trap-3 negative result held for the third round, from a third independent
+route.
+
+**Both blocking findings were documentation, and one was ugly.** Deleting
+`endFollowing` left its twenty-line doc comment behind, attached to `sample()` —
+so the module's live documentation described a function that samples the
+derivation basis as one that stops following, and argued, in the head commit that
+removed the defect, for _"Deliberately not a `commit`"_: the round-2 blocking
+defect, stated as guidance to the next editor. `pnpm check` cannot see a comment
+on the wrong symbol. Deleted.
+
+**The second is this table over-claiming on the one row it edited.** Round 2
+struck "the delivery basis is restored rather than cleared" as falsified. It is
+not: replacing `finally { delivery = outer }` with `delivery = undefined` still
+passes the whole suite. What #106 made provable is a _different_ property on the
+same two lines — reusing an in-progress basis rather than re-sampling — and
+conflating them turned an honest row into a claimed proof. Both rows now exist
+separately, and both were re-measured rather than reasoned. The rule this table
+states about the code applies to the table.
+
+Also corrected: the README asserted the catch-up transient "always" resolves by a
+later patch, which is false on the gap branch — a snapshot carries no messages,
+so the chat empties and the application must re-page. This PR's own tracer
+exercises that path. And `entryFor`'s comment undercounted the mutations outside
+`commit`, which is the wording an acceptance criterion turns on.

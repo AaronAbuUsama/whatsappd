@@ -595,26 +595,6 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   /** Whether this Client is still following, and so still has live truth. */
   let following = true;
 
-  /**
-   * Stop following, and end every page read in flight with it.
-   *
-   * @remarks
-   * The two are bound into one call rather than left as two lines to line up at
-   * each site, because they are one fact: once nothing follows, no page read
-   * can land — its result is discarded — so a chat left saying `"loading"` is
-   * describing a read that will never finish and that `older()` will never
-   * restart. A binding rendering a spinner on it spins for ever.
-   *
-   * That was two separate lines once, and the second was missing at both sites.
-   * `following = false` on its own is now greppable and wrong, which is class
-   * C10 applied rather than restated: the correct path is the shorter one.
-   *
-   * Deliberately not a `commit`. Nothing here changes what a reader is entitled
-   * to be *told* — `stop()` is what the application asked for, and the follow
-   * failure has already committed its closure as the last delivery this Client
-   * will ever make. Rolling `"loading"` back only removes a claim that has
-   * stopped being true, and the view memo is dropped so the next read sees it.
-   */
   const sample = (): Derivation => ({
     at: Date.now(),
     claim: source.currentClaim(),
@@ -726,8 +706,9 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
    * This chat's entry, created empty if it has none.
    *
    * @remarks
-   * One of two mutations outside `commit` — the other is {@link viewOf}'s memo
-   * — and it is deliberate: it marks no
+   * One of the few mutations outside `commit` — with {@link viewOf}'s memo,
+   * `owned()`'s identity copy and `subscribeTo`'s registration — and it is
+   * deliberate: it marks no
    * namespace, notifies nobody and cannot split a delivery, because an entry
    * nothing has been put into yet reads exactly as no entry would. What it buys
    * is that `get()` on a never-paged chat is referentially stable, and that

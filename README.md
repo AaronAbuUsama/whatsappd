@@ -195,9 +195,15 @@ A page read returns the mirror's state at the moment it ran, which can be ahead
 of the changes the Client has applied — and a page never overwrites a message
 the Client already holds, only adds ones it does not. So a message edited just
 before a page read can briefly show its older text, until the patch carrying
-that edit arrives. It always does: the Client receives every change through the
-revision the page was read at, so the last write is the newest. The window is
-the Client's own lag behind the mirror, and nothing stays wrong once it closes.
+that edit arrives — the Client receives every change through the revision the
+page was read at, so the last write is the newest, and the window is its own lag
+behind the mirror.
+
+One case resolves differently and an application has to handle it: if the Client
+misses a revision, it replaces its state from a fresh snapshot, and a snapshot
+carries no messages. The chat empties rather than correcting in place, and the
+application pages it again — which is why a view that has gone empty is a signal
+to re-page rather than a chat with nothing in it.
 
 Credentials, WhatsApp data, the account lease, and media bytes are four separate
 capabilities. `memoryBackend()` groups in-memory implementations of all four;
