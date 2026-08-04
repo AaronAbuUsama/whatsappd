@@ -278,8 +278,8 @@ export type MirrorAlias = { readonly nativeId: string; readonly contactId: strin
  * @remarks
  * Account state, chat summaries, contacts, and groups — and deliberately not a
  * message window per chat, whose size would grow with chats multiplied by
- * windows while a UI shows one conversation (ADR-0010). An opened chat reads
- * {@link WhatsAppDataStore.messages} instead.
+ * windows while a UI shows one chat (ADR-0010). One chat's messages are read
+ * from {@link WhatsAppDataStore.messages} instead.
  */
 export interface WhatsAppSnapshot {
   readonly accountId: string;
@@ -339,7 +339,7 @@ export interface StoredMessagePage {
    * @remarks
    * The handle that orders this page against the patch stream: every change up
    * to and including this revision is already reflected here, so a consumer
-   * knows which patches its open conversation has and has not absorbed. Same
+   * knows which patches the chat view it holds has and has not absorbed. Same
    * number, same meaning, as {@link WhatsAppSnapshot.revision}.
    */
   readonly revision: number;
@@ -496,10 +496,10 @@ export interface WhatsAppDataStore {
    * Read one chat's stored messages, newest first.
    *
    * @remarks
-   * The backend read behind an opened conversation, and behind scrolling it.
-   * It never contacts WhatsApp; asking for older messages than WhatsApp has
-   * delivered is a History Backfill Request, a different operation with a
-   * phone dependency and an asynchronous result (ADR-0010).
+   * The backend read behind one chat's messages, and behind scrolling back
+   * through them. It never contacts WhatsApp; asking for older messages than
+   * WhatsApp has delivered is a History Backfill Request, a different operation
+   * with a phone dependency and an asynchronous result (ADR-0010).
    *
    * @throws {@link RangeError} when `limit` is not a positive integer.
    */
@@ -743,12 +743,12 @@ export interface WhatsAppClient {
   watch(options?: { readonly signal?: AbortSignal }): AsyncIterable<WhatsAppDurableFrame>;
 
   /**
-   * Read one opened chat's stored messages, newest first, then older pages
-   * from the returned cursor.
+   * Read one chat's stored messages, newest first, then older pages from the
+   * returned cursor.
    *
    * @remarks
-   * A snapshot carries no message window, so this is how a conversation is
-   * filled (ADR-0010). It reads storage only — see
+   * A snapshot carries no message window, so this is how one chat's messages
+   * are filled (ADR-0010). It reads storage only — see
    * {@link WhatsAppDataStore.messages}.
    *
    * **Consumers apply both surfaces by record identity.** This method and the

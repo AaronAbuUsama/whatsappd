@@ -106,9 +106,9 @@ for await (const frame of client.watch()) {
   if (frame.type === "patch") console.log(frame.patch.revision, frame.patch.upserts);
 }
 
-// Opening a conversation reads its stored messages, newest first, then scrolls
-// back through `nextBefore`. This reads the backend only - it never asks
-// WhatsApp for anything.
+// One chat's stored messages, newest first, then scroll back through
+// `nextBefore`. This reads the backend only - it never asks WhatsApp for
+// anything.
 const page = await client.messages("15551234567@s.whatsapp.net", { limit: 25 });
 const older = page.nextBefore
   ? await client.messages("15551234567@s.whatsapp.net", { before: page.nextBefore })

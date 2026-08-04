@@ -6,8 +6,8 @@ Page saved messages and recover revision gaps. A client snapshot is now the
 Snapshot Window it was meant to be — account state, chat summaries, contacts,
 and groups — and no longer carries a message window for every chat, whose size
 grew with chats multiplied by windows while a UI shows one conversation
-(ADR-0010). An opened conversation reads `client.messages(chatId, { limit })`
-instead, and scrolls with the `nextBefore` cursor each page returns.
+(ADR-0010). One chat's messages are read with `client.messages(chatId, { limit })`
+instead, and scrolled with the `nextBefore` cursor each page returns.
 
 The cursor is `(timestamp, messageId)` descending, both parts load-bearing: a
 history sync lands many messages on one second, and a timestamp-only boundary
@@ -16,14 +16,17 @@ saved page returns no cursor, which says that nothing older is _stored_ and
 deliberately makes no claim that WhatsApp history is complete. Paging reads the
 backend alone and issues no WhatsApp history command.
 
-A conversation is fed by `messages()` and by the message upserts on `watch()`,
-and the two reconcile on `(chatId, messageId)` rather than by appending. A
-backdated message — a clock-skewed send, and routinely the backfill of #25 —
-arrives as a patch _and_ appears in the older page that now contains it;
-applying both by identity leaves one message, and nothing is ever skipped
-because the cursor is a position in the ordering rather than an offset. Each
-page carries the `revision` it was read at, so the two surfaces can be ordered
-as well as merged.
+One chat's view is fed by `messages()` and by the message upserts on `watch()`,
+and the two reconcile on `(chatId, messageId)` rather than by appending — but
+not symmetrically. A page may only _insert_: it never replaces an id already
+held, so a live upsert that landed while a read was in flight is not overwritten
+by the older copy that read was fetching. A patch carries no such rule, because
+by construction it is the newer statement about its id. A backdated message — a
+clock-skewed send, and routinely the backfill of #25 — arrives as a patch _and_
+appears in the older page that now contains it; one message is left, the patch's
+copy survives, and nothing is ever skipped because the cursor is a position in
+the ordering rather than an offset. Each page carries the `revision` it was read
+at, so the two surfaces can be ordered as well as merged.
 
 Contacts and groups now project instead of only being recorded: the runtime
 subscribes `contact` and `group`, a conversation sync's contacts and its group

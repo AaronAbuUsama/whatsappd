@@ -3,6 +3,12 @@
 Two failed implementations (PR #93 closed, PR #94 retired), 8 hosted review rounds,
 28 valid findings, 5 still open. This is the diagnosis, not a design.
 
+The diagnosis stands and is required reading. The _interface_ it investigates does
+not: `chats.open(chatId)` and its conversation handle were retired unbuilt on
+2026-08-03 (ADR-0023, ADR-0029), replaced by a `messages` namespace read by chat
+id. Where this report names them it is quoting the design under investigation, not
+describing an API that exists.
+
 Investigated at: master `921ac3a`, PR #93 head `537726cd`, PR #94 head `4009780d`.
 
 ---
