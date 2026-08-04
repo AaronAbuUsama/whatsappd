@@ -71,18 +71,32 @@ interface documentation:
 Rules 2, 3 and 5 are primitives — a membership copy, a membership check, a single
 sampled instant — not orderings.
 
-## One window per chat, many handles
+## One buffer per chat, no handles
 
-`chats.open(chatId)` returns a distinct handle each call, and all handles for one
-`chatId` share one message window, one paging cursor, one in-flight page read and
-one presence view. The window is released when the last handle closes; each
-handle's `close()` is idempotent and does not affect the others.
+> Retired unbuilt on 2026-08-03, before implementation. This section used to
+> specify `chats.open(chatId)` returning a distinct handle per call over one
+> shared window, released when the last handle closed. What follows replaces it;
+> the notification rules above are unaffected and were never in question.
 
-This is what allows a transition to address the affected window by key rather
-than by scanning the open conversations, which is how notification came to happen
-inside an iteration in the retired implementations. It also makes concurrent
-paging join by construction rather than per controller, and makes two views of
-one chat — the ordinary case under ADR-0016 — cost one window instead of N.
+A chat's messages are one buffer held in the Client's own state, keyed by chat
+id, read by chat id and extended backwards by chat id. Nothing is handed out
+that owns it, so there is no handle to share, refcount or close.
+
+The reason for the change is that the handle was carrying two jobs. Its useful
+job — letting a transition address the affected chat by key rather than by
+scanning open conversations, which is how notification came to happen inside an
+iteration in the retired implementations — is done by the buffer being keyed
+state, and needs no controller. Its other effect was to create a per-`open()`
+call scope, which is exactly where `docs/issue-71-postmortem.md` §2's retired
+design puts conversation state and its private watcher list. With no `open()`
+there is no such scope, so that design stops being the cheaper path and becomes
+an unavailable one.
+
+Two views of one chat still cost one buffer rather than N, and concurrent paging
+still joins, both by construction rather than by refcounting. What is given up
+is a per-caller lifetime: retention is released only when the Client's durable
+state is replaced or the Client is closed. That cost was accepted deliberately
+and is tracked separately.
 
 ## Considered options
 
