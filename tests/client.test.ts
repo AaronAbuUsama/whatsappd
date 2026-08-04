@@ -2863,13 +2863,26 @@ test("a follow failure ends page reads and says so on the messages namespace", a
     await until(() => worker.client.messages.get(PERSON).messages.length === 25);
 
     const woken: string[] = [];
-    worker.client.messages.subscribe(() => void woken.push("messages"));
+    // Reads the account seam from inside the messages delivery: the closure and
+    // the reads it ended are one transition, so a listener woken by either must
+    // see both. Split into two commits, this listener runs with `following`
+    // already false and `closed` not yet set — a Client reporting itself live
+    // while it has stopped following, which is the state C3 exists to make
+    // unobservable.
+    const closedWhenWoken: boolean[] = [];
+    worker.client.messages.subscribe(() => {
+      woken.push("messages");
+      closedWhenWoken.push(worker.client.account.get().closed);
+    });
     // Held open, so the read is genuinely in flight when following ends.
     backend.hold("start");
     worker.client.messages.older(PERSON);
     await tick();
     expect(worker.client.messages.get(PERSON).older).toBe("loading");
+    // Both, or the loading mark's own delivery — correctly made while this
+    // Client was still following — is counted against the closure below.
     woken.length = 0;
+    closedWhenWoken.length = 0;
 
     // A revision the client never sees, then a published patch from a revision
     // it is not at — so the pull loop re-snapshots, and the snapshot read
@@ -2896,6 +2909,7 @@ test("a follow failure ends page reads and says so on the messages namespace", a
 
     // Told, not merely corrected.
     expect(woken.length > 0).toBe(true);
+    expect(closedWhenWoken.every(Boolean)).toBe(true);
     backend.release();
     await tick();
     await tick();
@@ -3053,5 +3067,80 @@ test("a page carrying another chat's rows does not land them under this chat", a
     expect(worker.client.messages.get(PERSON_LID).messages).toEqual([]);
   } finally {
     await worker.stop();
+  }
+});
+
+test("closing ends every chat's read in flight, not just the first", async () => {
+  // The replan's claim is that ending a read is a total function over every way
+  // one can end. That is arity-one only unless something pages two chats at
+  // once — and a `break`, an early `return`, or a `find()`-shaped rewrite of the
+  // rollback loop is exactly the cheap wrong path C10 predicts. This namespace
+  // is keyed by chat and exists to serve several at a time.
+  const backend = heldReads(memoryBackend());
+  const worker = await lane({ backend });
+  try {
+    // Both chats above one store page, so both stay `"stored"` after their
+    // first page and a second read on each is genuinely in flight.
+    await seed(worker, PERSON, 30);
+    await seed(worker, PERSON_LID, 30, { from: 100, at: (index) => AT + 100 + index });
+    for (const chatId of [PERSON, PERSON_LID]) {
+      worker.client.messages.older(chatId);
+      await until(() => worker.client.messages.get(chatId).messages.length === 25);
+      expect(worker.client.messages.get(chatId).older).toBe("stored");
+    }
+
+    backend.hold("start");
+    worker.client.messages.older(PERSON);
+    worker.client.messages.older(PERSON_LID);
+    await tick();
+    expect(worker.client.messages.get(PERSON).older).toBe("loading");
+    expect(worker.client.messages.get(PERSON_LID).older).toBe("loading");
+
+    await worker.client.close();
+    backend.release();
+    await tick();
+    await tick();
+
+    // Every chat, not the first one the loop happened to reach. A chat left at
+    // `"loading"` here is stranded for good: no result can land and `older()`
+    // refuses to restart it.
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
+    expect(worker.client.messages.get(PERSON_LID).older).toBe("stored");
+    expect(worker.client.messages.get(PERSON).messages.length).toBe(25);
+    expect(worker.client.messages.get(PERSON_LID).messages.length).toBe(25);
+  } finally {
+    await worker.runtime.stop().catch(() => {});
+  }
+});
+
+test("paging still works against storage after a deliberate runtime closure", async () => {
+  // `account.get().closed` and "`older()` is a no-op" are deliberately not the
+  // same condition, and the TSDoc says so. A Runtime that stopped on purpose
+  // hands over a terminal frame and leaves this Client following, so a stored
+  // page — which never contacts WhatsApp (ADR-0010) — still answers. Conflating
+  // the two makes an application reading history after its worker shut down get
+  // an empty chat with no error and no delivery.
+  const backend = memoryBackend();
+  const worker = await lane({ backend });
+  try {
+    await seed(worker, PERSON, 3);
+  } finally {
+    await worker.client.close();
+  }
+  await worker.runtime.stop();
+
+  const after = await createWhatsAppClient(worker.runtime);
+  try {
+    // Closed, and still able to read what the mirror holds.
+    expect(after.account.get().closed).toBe(true);
+    expect(after.messages.get(PERSON).messages).toEqual([]);
+
+    after.messages.older(PERSON);
+    await until(() => after.messages.get(PERSON).messages.length === 3);
+    expect(texts(after, PERSON)).toEqual(["t2", "t1", "t0"]);
+    expect(after.messages.get(PERSON).older).toBe("exhausted");
+    expect(after.messages.get(PERSON).error).toBe(undefined);
+  } finally {
+    await after.close();
   }
 });
