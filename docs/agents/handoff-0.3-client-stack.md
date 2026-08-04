@@ -151,7 +151,7 @@ message. If the real-phone run finds the shape wrong, the README, the naming cut
 and the packaging proof are all rework.
 
 The **full** #111 genuinely cannot run first — it needs pairing (#109) and sends
-(#108). But the **read path** needs neither. Create a new issue:
+(#108). But the **read path** needs neither. **Filed as #127 on 2026-08-04:**
 
 > **A real-account read-path smoke test, runnable on `master` today.**
 > Link a real authorised test account with the existing harness; compose
@@ -162,7 +162,8 @@ The **full** #111 genuinely cannot run first — it needs pairing (#109) and sen
 > process against the same files and assert the durable state reconstructs and no
 > live presence/connection does.
 > Explicitly **not** covering sends, pairing-as-a-feature, or unlink.
-> Make #107 blocked by it.
+> #127 blocks #107. **#107's body has not yet been edited to record that
+> dependency** — do it as part of item 1c.
 
 **Harness assessment — extend, do not rebuild.**
 
@@ -183,7 +184,7 @@ anything destructive.
 
 ### Phase 3 — then the existing chain
 
-7. **#107** — the public cut (after 1c and Phase 2).
+7. **#107** — the public cut (after 1c and #127).
 8. **#108** — sends. Re-spec first, per its banner.
 9. **#109** — pairing and unlink.
 10. **#111** — the full real-account proof. Re-spec first, per its banner.
