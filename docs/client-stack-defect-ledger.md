@@ -322,15 +322,17 @@ array is a compile error instead of a snapshot that silently stops recovering.
 Recorded so a later layer does not mistake them for missing tests. Each becomes
 provable only if the substrate changes.
 
-| Property                                                    | Why no test can fail red                                                                                                                                                                                                                                                                      |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `replace()` clears chats / groups / aliases                 | Only contacts have a delete producer (`MirrorDelete` is contact-only by type, ADR-0019/0022), and alias rows are insert-only in both stores. Nothing else can ever _disappear_ from a snapshot.                                                                                               |
-| Freed native ids are dropped from the alias map             | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                                                                                                                 |
-| ~~The delivery basis is restored rather than cleared~~      | **No longer unprovable — falsified at #106.** `messages.older()` commits synchronously, so a listener calling it produces exactly the nested `commit` this row said no public path could. Save/restore is now load-bearing, and re-sampling instead of reusing the outer basis is a red test. |
-| `close()` releases each registration; `close()` is memoized | After `following` is false and the pump has ended, no commit follows, so neither is behaviourally observable. Releasing each registration detaches caller-supplied abort signals; the memo makes concurrent closes join. Both are hygiene.                                                    |
-| `put.account`'s and `put.connection`'s marks, separately    | Mutually redundant: every reachable account change marks through at least one of them, so neither is falsifiable alone. Removing **both** is caught.                                                                                                                                          |
-| `put.alias`'s mark                                          | Redundant with `put.contact` — every alias the projection emits accompanies the contact upsert that produced it (`projection.ts`). Not, as an earlier note here said, with `put.connection`.                                                                                                  |
-| `error` present-but-`undefined` on a closure                | `error` is spread rather than tested, so a failure whose cause _is_ `undefined` still reports the key. Correct in code, and **unproven**: no public path constructs a terminal failure with an `undefined` cause.                                                                             |
+| Property                                                    | Why no test can fail red                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `replace()` clears chats / groups / aliases                 | Only contacts have a delete producer (`MirrorDelete` is contact-only by type, ADR-0019/0022), and alias rows are insert-only in both stores. Nothing else can ever _disappear_ from a snapshot.                                                                                                                                                                                                                                                   |
+| Freed native ids are dropped from the alias map             | `projection.ts` re-points every freed id in the same patch, so the sweep changes no read. It is required by #105 and bounds alias-map growth.                                                                                                                                                                                                                                                                                                     |
+| ~~The delivery basis is restored rather than cleared~~      | **No longer unprovable — falsified at #106.** `messages.older()` commits synchronously, so a listener calling it produces exactly the nested `commit` this row said no public path could. Save/restore is now load-bearing, and re-sampling instead of reusing the outer basis is a red test.                                                                                                                                                     |
+| `close()` releases each registration; `close()` is memoized | After `following` is false and the pump has ended, no commit follows, so neither is behaviourally observable. Releasing each registration detaches caller-supplied abort signals; the memo makes concurrent closes join. Both are hygiene.                                                                                                                                                                                                        |
+| `put.account`'s and `put.connection`'s marks, separately    | Mutually redundant: every reachable account change marks through at least one of them, so neither is falsifiable alone. Removing **both** is caught.                                                                                                                                                                                                                                                                                              |
+| `put.alias`'s mark                                          | Redundant with `put.contact` — every alias the projection emits accompanies the contact upsert that produced it (`projection.ts`). Not, as an earlier note here said, with `put.connection`.                                                                                                                                                                                                                                                      |
+| The retired per-entry revision watermark is absent          | Verifiable by reading `Retained` — no revision field exists — and **not behaviourally**. A watermark only refuses a patch at or below the page's revision, and in the single-writer path every patch published after a page read has a higher one. The damaging case needs the Client lagging the mirror, and nothing in the public surface delays the frame pump. Reinstating the watermark exactly as #106 describes it passes the whole suite. |
+| A page is applied atomically                                | The outer `catch` in `older()` commits the failure and delivers either way, so half-applying a page and then reporting it is indistinguishable from applying none of it: the partial rows are real rows from that page and a retry fills the rest. Kept as defence in depth, claimed as nothing.                                                                                                                                                  |
+| `error` present-but-`undefined` on a closure                | `error` is spread rather than tested, so a failure whose cause _is_ `undefined` still reports the key. Correct in code, and **unproven**: no public path constructs a terminal failure with an `undefined` cause.                                                                                                                                                                                                                                 |
 
 ## Decisions taken here that a later layer may want to revisit
 
@@ -444,3 +446,59 @@ wrong lines and reported a green suite as evidence of an unfalsifiable `own()`.
 Re-run against matched content, both fail red. A mutation audit that cannot say
 it mutated what it meant to is C6 wearing a lab coat — the audit needs the same
 "did this actually observe anything" check it is applied to.
+
+### Round 2 — `018ca47`
+
+Two lenses: "did the round-1 fixes introduce new defects" and an independent
+correctness pass over concurrency and failure. Four blocking findings, and the
+important thing about them is that **three were caused by the round-1 fixes.**
+
+**The repeated class, and why round 1's fix was the wrong shape.** One property
+kept failing: _a chat must never say `"loading"` when no read is running._ Round
+1 found it on the `close()` path and fixed it by adding a rollback at the two
+sites that end following. That is an instruction-shaped fix, and C10 says those
+lose. Round 2 found the same property broken two more ways:
+
+- a throw while _applying_ a page — reachable through any third-party
+  `WhatsAppDataStore`, and made **worse** by round 1's own fix, which moved the
+  success `commit` outside the `try` to stop a mislabelled error and thereby
+  traded a recoverable wrong label for a permanently unpageable chat with no
+  `error` at all and no delivery;
+- and the rollback itself, which corrected the stored value **beside** `commit`
+  rather than through it, so it announced nothing. A poller saw the fix; a
+  `useSyncExternalStore` binding — the consumer this namespace exists for — kept
+  its cached `"loading"` snapshot for ever. That is the exact outcome the
+  rollback's own comment claimed to remove, and it also made `endFollowing` a
+  second publication path for namespace state, which C1's inherited obligation
+  forbids outright.
+
+**Replanned rather than patched again.** The root cause is that `older` was a
+committed field whose lifetime is a read's lifetime, with five exits — success,
+read failure, apply throw, close, follow failure — each separately responsible
+for ending it _and_ announcing it. Ending a read is now a **total function** over
+a `PageLanding` union with a member for every one of those exits, `older()`'s
+async body has a single landing and no path out without one, and ending
+following is a `Tx` writer (`tx.stopped()`) inside `commit` rather than a
+function beside it. `following = false` appears in exactly one place.
+
+The apply-throw path additionally commits the throw as the failure it is, so the
+chat is retryable and the application can see why, and `put.page` does all its
+`own()`ing before its first mutation so a page this Client cannot take ownership
+of owns nothing.
+
+**A finding that removed a claim rather than adding a fix.** Tracer 11.6 said it
+proved the watermark's absence. It did not, for two reasons — the harness's
+deferred-read mode was inert against `memoryDataStore` (which pins its mirror
+when `read` is _entered_, so waiting inside the `MirrorView` still read the
+pre-`accept` snapshot), and, once that was fixed, a watermark reinstated exactly
+as #106 describes it still passed all 406 tests. The reason is structural and is
+now recorded in the table above. The tracer's claim was corrected to what it
+actually demonstrates; the criterion is met by construction, and this file says
+so rather than pointing at a test that cannot fail.
+
+**Mutation audit at the round-2 fix head.** Eighteen mutations, each written,
+compiled and run. Sixteen fail red. The two that do not are recorded above as
+unprovable with their reasons, rather than left looking pinned. Three of the
+sixteen — the cross-chat row filter, the apply-throw commit, and `stopped()`
+announcing rather than only correcting — were green when first written and are
+red only because this audit found them.

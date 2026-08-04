@@ -1902,9 +1902,10 @@ const heldIds = (client: WhatsAppClientCore, chatId: string): string[] =>
  *
  * `pin` chooses which of the two races is under test. `"start"` reads the rows
  * before waiting, so the page carries the store's state at read *start* and a
- * live upsert that lands mid-read is the fresher copy. `"release"` waits first,
- * so the page carries the state at read *end* — which is how a page fresher
- * than the Client's own revision is constructed.
+ * live upsert that lands mid-read is the fresher copy. `"release"` waits
+ * *outside* `data.read`, so the page carries the state at read *end* — which is
+ * how a page fresher than anything the Client holds is constructed, and which
+ * has to happen out here because the memory store pins its mirror on entry.
  */
 function heldReads(inner: WhatsAppBackend): WhatsAppBackend & {
   hold(pin?: "start" | "release"): void;
@@ -1919,22 +1920,26 @@ function heldReads(inner: WhatsAppBackend): WhatsAppBackend & {
     ...inner,
     data: {
       ...inner.data,
-      read: (accountId, fn) =>
-        inner.data.read(accountId, (view) =>
+      async read(accountId, fn) {
+        reads += 1;
+        // `"release"` waits out here, before `data.read` is entered at all.
+        // Deferring inside the `MirrorView` does not work: `memoryDataStore`
+        // pins the mirror when `read` is *entered* (`memory.ts:163-168`), so a
+        // wait inside `view.messages` still reads the pre-`accept` snapshot and
+        // the page is not fresher than anything. That inertness silently made a
+        // whole tracer assert a refusal that never happened.
+        if (pin === "release") await gate;
+        return inner.data.read(accountId, (view) =>
           fn({
             ...view,
             async messages(chatId, options) {
-              reads += 1;
-              if (pin === "release") {
-                await gate;
-                return view.messages(chatId, options);
-              }
               const page = await view.messages(chatId, options);
-              await gate;
+              if (pin === "start") await gate;
               return page;
             },
           }),
-        ),
+        );
+      },
     },
     hold(at = "start") {
       pin = at;
@@ -2209,7 +2214,15 @@ test("a page that resolves after a revision gap commits nothing", async () => {
   }
 });
 
-// ── 11.6 No per-entry revision watermark ──────────────────────────────────
+// ── 11.6 A fresher page is refused, and converges ─────────────────────────
+//
+// This does NOT prove the absence of a per-entry revision watermark, and an
+// earlier version of it claimed to. Reinstating the watermark passes this test
+// and the whole suite: it only ever refuses a patch whose revision is at or
+// below the page's, and in the single-writer path every patch published after a
+// page read has a *higher* revision. The damaging case needs the Client lagging
+// the mirror, and nothing in the public surface delays the frame pump. See the
+// ledger's structurally-unprovable table.
 
 test("a page fresher than the buffer is refused, and the next transition converges", async () => {
   const inner: WhatsAppBackend = { ...memoryBackend(), leases: movableLeaseStore() };
@@ -2612,17 +2625,22 @@ test("closing mid-read commits nothing, and afterwards nothing throws or reads",
     expect(woken).toEqual(["messages"]);
 
     await worker.client.close();
+
+    // Closing ended the read, and *announced* that it did. Correcting the
+    // stored value without a delivery is what left a `useSyncExternalStore`
+    // binding holding its cached `loading` snapshot for ever — it re-reads only
+    // when told, so a fix it is never told about does not reach it.
+    expect(woken).toEqual(["messages", "messages"]);
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
+
+    const announced = woken.length;
     backend.release();
     await tick();
     await tick();
 
-    // The late result commits nothing and notifies nobody.
-    expect(woken).toEqual(["messages"]);
+    // The late result itself commits nothing and notifies nobody.
+    expect(woken.length).toBe(announced);
     expect(worker.client.messages.get(PERSON).messages.length).toBe(25);
-
-    // And the read it can no longer finish is not left claiming to be running.
-    // `"loading"` here would be permanent: no result can land, `older()` is a
-    // no-op, and a binding rendering a spinner on it would spin for ever.
     expect(worker.client.messages.get(PERSON).older).toBe("stored");
 
     // Afterwards `get()` still answers from what is held and `older()` is a
@@ -2816,5 +2834,224 @@ test("a listener that closes the client mid-mark stops the read being issued", a
     expect(worker.client.messages.get(PERSON).messages.length).toBe(25);
   } finally {
     await worker.runtime.stop().catch(() => {});
+  }
+});
+
+test("a follow failure ends page reads and says so on the messages namespace", async () => {
+  // The durable-follow failure path is not `close()`: the application is
+  // expected to keep reading, and `account.get()` reports the closure. A chat
+  // mid-read must be told its read ended there too — correcting the value with
+  // no delivery reaches a poller and misses every `useSyncExternalStore`
+  // binding, which is the consumer this namespace is shaped for.
+  const inner = memoryBackend();
+  let failSnapshot = false;
+  const backend = heldReads({
+    ...inner,
+    leases: movableLeaseStore(),
+    data: {
+      ...inner.data,
+      snapshot: async (accountId) => {
+        if (failSnapshot) throw new Error("mirror unreadable");
+        return inner.data.snapshot(accountId);
+      },
+    },
+  });
+  const worker = await lane({ backend });
+  try {
+    await seed(worker, PERSON, 30);
+    worker.client.messages.older(PERSON);
+    await until(() => worker.client.messages.get(PERSON).messages.length === 25);
+
+    const woken: string[] = [];
+    worker.client.messages.subscribe(() => void woken.push("messages"));
+    // Held open, so the read is genuinely in flight when following ends.
+    backend.hold("start");
+    worker.client.messages.older(PERSON);
+    await tick();
+    expect(worker.client.messages.get(PERSON).older).toBe("loading");
+    woken.length = 0;
+
+    // A revision the client never sees, then a published patch from a revision
+    // it is not at — so the pull loop re-snapshots, and the snapshot read
+    // fails. Following ends in a way the Runtime's terminal frame cannot
+    // describe, which is the path that reports itself as account state.
+    failSnapshot = true;
+    await backend.data.accept(
+      "personal",
+      [
+        {
+          observedAt: AT,
+          event: { type: "contact", contact: { id: ROOM, nativeIds: [ROOM] } },
+        },
+      ],
+      1,
+    );
+    await surfaced(async () => {
+      await worker.driver.emit({
+        type: "contact",
+        contact: { id: SELF, nativeIds: [SELF], displayName: "Me" },
+      });
+      await until(() => worker.client.account.get().closed);
+    });
+
+    // Told, not merely corrected.
+    expect(woken.length > 0).toBe(true);
+    backend.release();
+    await tick();
+    await tick();
+    expect(worker.client.messages.get(PERSON).older).toBe("stored");
+    expect(worker.client.messages.get(PERSON).messages.length).toBe(25);
+  } finally {
+    await worker.runtime.stop().catch(() => {});
+  }
+});
+
+test("a read that fails with an undefined cause still reports the error key", async () => {
+  // `failure` is boxed and spread for exactly this: `older` is `"stored"` after
+  // a failure and after a success alike, so `"error" in view` is the only way
+  // to tell them apart — and the issue's own unbounded-retry warning turns on
+  // that signal. Unlike the closure case, this one is constructible.
+  const inner = memoryBackend();
+  let fail = false;
+  const backend: WhatsAppBackend = {
+    ...inner,
+    data: {
+      ...inner.data,
+      read: (accountId, fn) => (fail ? Promise.reject(undefined) : inner.data.read(accountId, fn)),
+    },
+  };
+  const worker = await lane({ backend });
+  try {
+    await seed(worker, PERSON, 30);
+    worker.client.messages.older(PERSON);
+    await until(() => worker.client.messages.get(PERSON).messages.length === 25);
+
+    fail = true;
+    worker.client.messages.older(PERSON);
+    await until(() => worker.client.messages.get(PERSON).older !== "loading");
+
+    const view = worker.client.messages.get(PERSON);
+    expect(view.error).toBe(undefined);
+    // The distinction a test on `error !== undefined` cannot make.
+    expect("error" in view).toBe(true);
+    expect(view.older).toBe("stored");
+    expect(view.messages.length).toBe(25);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a page row this client cannot own fails the page, and the chat stays retryable", async () => {
+  // `own()` is `structuredClone` + freeze, and `structuredClone` throws on a
+  // record carrying a function. `WhatsAppDataStore` is a published contract an
+  // application may implement, so this is reachable from a third-party adapter
+  // even though neither in-tree store can produce it.
+  //
+  // The failure mode this pins is specific: a throw while *applying* a page is
+  // not a failed read, but the load has still ended. Left mid-transition the
+  // chat reported `"loading"` for ever with no `error`, `older()` short-circuited
+  // on it, and no delivery ever went out — one unclonable row bricked the chat
+  // for the life of the Client.
+  const inner = memoryBackend();
+  let poison = false;
+  const backend: WhatsAppBackend = {
+    ...inner,
+    data: {
+      ...inner.data,
+      read: (accountId, fn) =>
+        inner.data.read(accountId, (view) =>
+          fn({
+            ...view,
+            async messages(chatId, options) {
+              const page = await view.messages(chatId, options);
+              if (!poison) return page;
+              return {
+                ...page,
+                messages: page.messages.map((message) => ({ ...message, hook: () => 1 })),
+              } as typeof page;
+            },
+          }),
+        ),
+    },
+  };
+  const worker = await lane({ backend });
+  try {
+    await seed(worker, PERSON, 30);
+    worker.client.messages.older(PERSON);
+    await until(() => worker.client.messages.get(PERSON).messages.length === 25);
+
+    poison = true;
+    const warnings = await surfaced(async () => {
+      worker.client.messages.older(PERSON);
+      await until(() => worker.client.messages.get(PERSON).older !== "loading");
+    });
+
+    const failed = worker.client.messages.get(PERSON);
+    // Reported as the failure it is, rather than silently stuck loading.
+    expect(failed.older).toBe("stored");
+    expect(failed.error instanceof Error).toBe(true);
+    // Nothing half-applied: the page owned nothing before it threw.
+    expect(failed.messages.length).toBe(25);
+    // And it is still surfaced, because nothing awaits the read.
+    expect(warnings.length > 0).toBe(true);
+
+    // Calling it again is the retry, and it succeeds.
+    poison = false;
+    worker.client.messages.older(PERSON);
+    await until(() => worker.client.messages.get(PERSON).messages.length === 30);
+    expect(worker.client.messages.get(PERSON).older).toBe("exhausted");
+    expect(worker.client.messages.get(PERSON).error).toBe(undefined);
+  } finally {
+    await worker.stop();
+  }
+});
+
+test("a page carrying another chat's rows does not land them under this chat", async () => {
+  // The adapter boundary. `StoredMessagePage` promises rows for the chat asked
+  // for, and both in-tree stores keep that promise — `libsql.ts` validates its
+  // own rows before returning them. A third-party store is still a trust
+  // boundary, and rows read back under the wrong chat id is the worst way for
+  // it to be wrong.
+  const inner = memoryBackend();
+  let leak = false;
+  const backend: WhatsAppBackend = {
+    ...inner,
+    data: {
+      ...inner.data,
+      read: (accountId, fn) =>
+        inner.data.read(accountId, (view) =>
+          fn({
+            ...view,
+            async messages(chatId, options) {
+              const page = await view.messages(chatId, options);
+              if (!leak) return page;
+              return {
+                ...page,
+                messages: page.messages.map((message) => ({
+                  ...message,
+                  chatId: PERSON_LID,
+                  messageId: `leaked-${message.messageId}`,
+                })),
+              };
+            },
+          }),
+        ),
+    },
+  };
+  const worker = await lane({ backend });
+  try {
+    await seed(worker, PERSON, 3);
+    leak = true;
+    worker.client.messages.older(PERSON);
+    await until(() => worker.client.messages.get(PERSON).older !== "loading");
+
+    // The page was accepted — the cursor moved and the read did not fail — but
+    // none of its rows belong to this chat, so none of them are held.
+    expect(worker.client.messages.get(PERSON).messages).toEqual([]);
+    expect(worker.client.messages.get(PERSON).error).toBe(undefined);
+    // And they did not silently appear under the chat they claimed either.
+    expect(worker.client.messages.get(PERSON_LID).messages).toEqual([]);
+  } finally {
+    await worker.stop();
   }
 });

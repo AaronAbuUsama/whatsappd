@@ -258,6 +258,28 @@ interface Registration {
   readonly notify: () => void;
 }
 
+/**
+ * What became of one chat's page read.
+ *
+ * @remarks
+ * Every way a read can end is a member here, so ending one is a *total*
+ * function rather than four call sites each remembering to leave the entry
+ * somewhere sensible. Two defects came from it not being one: a `close()`
+ * mid-read and a throw while applying a page each left a chat saying
+ * `"loading"` for ever, describing a read nothing could finish and `older()`
+ * would not restart.
+ */
+type PageLanding =
+  | { readonly started: true; readonly ended?: undefined }
+  | { readonly ended: true; readonly started?: undefined }
+  | { readonly page: StoredMessagePage; readonly started?: undefined; readonly ended?: undefined }
+  | { readonly error: unknown; readonly started?: undefined; readonly ended?: undefined };
+
+/** A read has begun. */
+const STARTED: PageLanding = Object.freeze({ started: true });
+/** A read is over with no result, because this Client stopped following. */
+const ENDED: PageLanding = Object.freeze({ ended: true });
+
 /** How a transition mutates Client state. The only way anything here changes. */
 interface Tx {
   /** Replace all durable state with a Snapshot Window's. */
@@ -267,15 +289,32 @@ interface Tx {
   /** Retain one live observation under the claim it was made under. */
   observe(frame: WhatsAppLiveFrame, claim: ClientClaim): void;
   /**
-   * Start, land or fail one chat's page read.
+   * Move one chat's page read to whatever became of it.
    *
    * @remarks
-   * `undefined` marks the read as started; a page lands it; an `{ error }` box
-   * reports the failure that ended it. One member rather than three, so a chat's
-   * paging state moves only here, and every one of them re-checks that the entry
-   * it was started against is still the entry the map holds.
+   * One member taking a total {@link PageLanding} rather than several, so a
+   * chat's paging state moves only here, and every path re-checks that the
+   * entry it was started against is still the entry the map holds.
    */
-  page(entry: Retained, result?: StoredMessagePage | { readonly error: unknown }): void;
+  page(entry: Retained, landing: PageLanding): void;
+  /**
+   * Stop following, and end every page read in flight with it.
+   *
+   * @remarks
+   * One writer rather than two lines to line up at each site, because they are
+   * one fact: once nothing follows, no page read can land, so a chat left
+   * saying `"loading"` describes a read that will never finish and that
+   * `older()` will not restart. `following = false` on its own is now greppable
+   * and wrong — class C10 applied rather than restated.
+   *
+   * Inside `commit` rather than beside it. Ending a read changes what
+   * `messages.get()` reports, so a reader that only re-reads when notified —
+   * `useSyncExternalStore`, the binding this namespace is shaped for — has to
+   * be told. Writing it beside `commit` corrected the value and delivered
+   * nothing, which left the spinner it exists to clear on exactly the consumers
+   * that cannot poll.
+   */
+  stopped(): void;
   /** Record that the Runtime has stopped consuming this account. */
   close(frame: Extract<WhatsAppDurableFrame, { type: "closed" }>): void;
 }
@@ -576,15 +615,6 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
    * will ever make. Rolling `"loading"` back only removes a claim that has
    * stopped being true, and the view memo is dropped so the next read sees it.
    */
-  const endFollowing = (): void => {
-    following = false;
-    for (const entry of retained.values())
-      if (entry.older === "loading") {
-        entry.older = "stored";
-        entry.view = undefined;
-      }
-  };
-
   const sample = (): Derivation => ({
     at: Date.now(),
     claim: source.currentClaim(),
@@ -696,7 +726,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
    * This chat's entry, created empty if it has none.
    *
    * @remarks
-   * The one mutation outside `commit`, and it is deliberate: it marks no
+   * One of two mutations outside `commit` — the other is {@link viewOf}'s memo
+   * — and it is deliberate: it marks no
    * namespace, notifies nobody and cannot split a delivery, because an entry
    * nothing has been put into yet reads exactly as no entry would. What it buys
    * is that `get()` on a never-paged chat is referentially stable, and that
@@ -830,28 +861,48 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
        * asserts the absence of that delivery, because asserting the chat is
        * empty passes with this line deleted.
        */
-      page: (entry: Retained, result?: StoredMessagePage | { readonly error: unknown }): void => {
+      page: (entry: Retained, landing: PageLanding): void => {
         if (retained.get(entry.chatId) !== entry) return;
-        if (!result) entry.older = "loading";
-        else if ("error" in result) {
+        if (landing.started) entry.older = "loading";
+        else if (landing.ended) {
+          // The read is over without a result — this Client stopped following,
+          // so nothing can land and `older()` will not restart it. Only a chat
+          // actually mid-read changes, so a Client with none of them announces
+          // nothing.
+          if (entry.older !== "loading") return;
+          entry.older = "stored";
+        } else if ("error" in landing) {
           // What was already held, and where the next page starts, both
           // survive: a failure is not evidence about the mirror's contents.
           // Back to `"stored"` because calling `older()` again is the retry.
-          entry.failure = result;
+          entry.failure = landing;
           entry.older = "stored";
         } else {
-          entry.failure = undefined;
+          // Everything that can throw runs *before* the first mutation, so a
+          // row this Client cannot take ownership of fails the whole page and
+          // leaves the entry exactly as it was — retryable, and still holding
+          // what it held. Half-applying it and then reporting a read failure
+          // over the top was how a single unclonable row bricked a chat.
+          //
           // The fill rule: a page may only *insert*. A read in flight can then
           // never be wrong about an id the buffer already holds — only
-          // insufficient — so a live upsert that landed while it was running
-          // is never overwritten by the older copy it was reading.
-          for (const message of result.messages)
-            if (!entry.byId.has(message.messageId)) entry.byId.set(message.messageId, own(message));
-          entry.before = result.nextBefore;
+          // insufficient — so a live upsert that landed while it was running is
+          // never overwritten by the older copy it was reading. The chat check
+          // beside it is the adapter boundary: `WhatsAppDataStore` is a
+          // published contract an application may implement, and rows for
+          // another chat would otherwise be read back under this chat's id.
+          const fresh = landing.page.messages
+            .filter(
+              (message) => message.chatId === entry.chatId && !entry.byId.has(message.messageId),
+            )
+            .map(own);
+          entry.failure = undefined;
+          for (const message of fresh) entry.byId.set(message.messageId, message);
+          entry.before = landing.page.nextBefore;
           // `nextBefore` is present only when an older stored row really
           // exists, so its absence is the end of the mirror — and never a
           // statement about WhatsApp (ADR-0010).
-          entry.older = result.nextBefore ? "stored" : "exhausted";
+          entry.older = landing.page.nextBefore ? "stored" : "exhausted";
         }
         entry.view = undefined;
         touch("messages");
@@ -980,8 +1031,13 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         });
       },
 
-      page(entry, result) {
-        put.page(entry, result);
+      page(entry, landing) {
+        put.page(entry, landing);
+      },
+
+      stopped() {
+        following = false;
+        for (const entry of retained.values()) put.page(entry, ENDED);
       },
 
       close(frame) {
@@ -1114,33 +1170,43 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         // in-flight promise to hold: `older()` returns `void` and `close()`
         // deliberately does not join a page read, so nothing could await one.
         if (entry.older !== "stored") return;
-        commit((tx) => tx.page(entry));
+        commit((tx) => tx.page(entry, STARTED));
         // Re-checked after that commit, not only before it: the commit fanouts
         // synchronously, and a listener may call `close()` inside it (ADR-0029
         // rule 1) — which would otherwise let this issue a read against a
         // Backend the application already owns the closing of (ADR-0023).
-        // `endFollowing` has already put the entry back to `"stored"` by here.
+        // `tx.stopped()` has already ended the read this just started.
         if (!following) return;
         void (async () => {
-          let page: StoredMessagePage;
+          let landing: PageLanding;
           try {
-            page = await source.read((view) =>
-              view.messages(chatId, entry.before && { before: entry.before }),
-            );
+            landing = {
+              page: await source.read((view) =>
+                view.messages(chatId, entry.before && { before: entry.before }),
+              ),
+            };
           } catch (error) {
-            // Re-checked here as well as inside the writer: a Client that
-            // stopped following mid-read must commit nothing and notify nobody,
-            // and `commit` would otherwise announce a transition after the last
-            // delivery this Client will ever make.
-            if (following) commit((tx) => tx.page(entry, { error }));
-            return;
+            landing = { error };
           }
-          // Deliberately outside the `try`: a throw from *applying* the page is
-          // not a failed read, and catching it there would commit a failure on
-          // top of a half-inserted buffer and report it as the mirror's fault.
-          if (following) commit((tx) => tx.page(entry, page));
+          // One landing, one commit, and no way out of here without one: a
+          // Client that stopped following has already had this read ended for
+          // it, and every other exit — a page, a failed read, or a throw while
+          // *applying* a page — leaves the entry retryable rather than claiming
+          // to be loading with nothing able to finish it. Applying it is what
+          // can still throw, and `put.page` does its owning before its first
+          // mutation so a page this Client cannot take owns nothing.
+          if (!following) return;
+          try {
+            commit((tx) => tx.page(entry, landing));
+          } catch (error) {
+            // Not a failed read, but the load has still ended. Reported as the
+            // failure it is so the chat is retryable and the application can
+            // see why, rather than left mid-transition and silent.
+            commit((tx) => tx.page(entry, { error }));
+            throw error;
+          }
         })().catch(surface);
-        // Nothing awaits this read, so a failure inside the apply above would
+        // Nothing awaits this read, so a throw while applying the page would
         // otherwise be an unhandled rejection that takes the worker down.
       },
     },
@@ -1171,7 +1237,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // its subscription behind.
       follow.abort();
       offLive();
-      endFollowing();
+      commit((tx) => tx.stopped());
       await pump;
       // Each registration is released rather than the set emptied, so the abort
       // handler a caller's signal is holding goes with it — clearing the set
@@ -1222,8 +1288,15 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // reports a live connection the very next line invalidates with nobody
       // left to notify.
       offLive();
-      endFollowing();
-      commit((tx) => tx.close({ type: "closed", error }));
+      // One transition, so the closure and the reads it ended are announced
+      // together rather than as two deliveries — and `following` is false
+      // before the basis is sampled, which is what makes this the last
+      // delivery this Client ever makes rather than one reporting live state
+      // the next line invalidates.
+      commit((tx) => {
+        tx.stopped();
+        tx.close({ type: "closed", error });
+      });
       surface(error);
     }
     // Nothing awaits this loop, so a failure inside the reporting above — the
