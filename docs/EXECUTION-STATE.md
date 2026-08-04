@@ -227,18 +227,18 @@ and #113 is a human release operation.
 built before the change under test — a false green in six gates at once. It now
 builds before packing and runs in CI.
 
-Its residue is **#119**, and C6 in `docs/client-stack-defect-ledger.md` is the
-only place that describes it; anything else points there. Bare `pnpm pack` is
-still stale-prone, `release.yml` publishes a tarball the packed proof never
-inspected, and the positive control catches an empty `dist/` but not a wrong
-one. **#112 and #113 depend on #119**: #113's acceptance requires that the
-registry tarball match #112's reviewed packed artifact, and nothing in the
-release path establishes that until #119 lands.
+Its residue was **#119**, and C6 in `docs/client-stack-defect-ledger.md` is the
+only place that describes it; anything else points there. This paragraph used to
+restate C6's open facts instead, which is the trap C6 already records this file
+falling into, so what #119 changed is written there and not here. **#112 and
+#113 still route through it**: #113's acceptance requires that the registry
+tarball match #112's reviewed packed artifact, and the release path establishes
+that only from #119 onward.
 
 #107 is worth more than its position suggests. It is the node that makes
 `createWhatsAppClient` reachable at all. The package exports exactly `.`,
 `./testing` and `./package.json` (`package.json:29-33`), and
-`tests/packed-imports.ts:137-139` asserts every other subpath rejects with
+`tests/packed-imports.ts:178-180` asserts every other subpath rejects with
 `ERR_PACKAGE_PATH_NOT_EXPORTED` — so an installed consumer cannot deep-import
 its way to the friendly Client. It gets the raw frame surface at
 `src/index.ts:55-106` or nothing. The OpenTUI application that will later

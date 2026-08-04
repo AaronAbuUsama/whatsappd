@@ -25,6 +25,12 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+      # The publish step below packs `dist/`, and `pnpm pack` archives whatever
+      # `dist/` already holds. Without this the tarball that reaches npm is the
+      # one artifact the packed proof never inspected — the proof would guard
+      # pull requests and not releases (#119). It runs on the publishing commit,
+      # so the artifact is proven on the exact commit that publishes it.
+      - run: pnpm proof:pack
       - name: Publish to npm (skip if this version is already published)
         run: |
           VERSION="$(node -p "require('./package.json').version")"
