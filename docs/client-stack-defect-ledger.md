@@ -249,28 +249,50 @@ construction.
 
 ### C6 — a proof that reports green having observed nothing
 
-**Not closed. Partially mitigated, and the one to watch.**
+**No open consequence. Still the one to watch — the class is an obligation, not
+a construction.**
 
 - `tests/packed-imports.ts` was all-negative assertions; a stale, empty or
-  declaration-less `dist/` satisfied every one. A positive control now asserts
-  the declarations were actually read and contain known-published symbols.
+  declaration-less `dist/` satisfied every one. A positive control now runs
+  before them: the declarations must be non-empty, and the packed `dist/` must
+  hash byte-for-byte identical to a rebuild from the working tree's source.
 - `pnpm proof:pack` archived whatever `dist/` held — `pnpm pack` does not
   rebuild — and was **absent from CI**. Both fixed by #117: the script now
   builds before packing, and CI runs it on the Node 22 and Node 24 legs.
   Verified the way this file requires — the violating state was reproduced
   (a forbidden root export, no build, exit 0) and then made red.
-- **The residue is that the fix is in the caller, not the proof.** `pnpm pack`
-  by itself still packs a stale `dist/`, so `proof:pack` is trustworthy and
-  bare packing is not. Two live consequences: `.github/workflows/release.yml`
-  builds and packs but never runs `proof:pack`, so a published tarball is one
-  the packed proof never inspected; and the positive control at
-  `tests/packed-imports.ts:51-57` names symbols present in _any_ recent build,
-  so it catches an **empty** `dist/` and not a **wrong** one. This class stays
-  open on that second point — a wrong-but-nonempty artifact still reads green.
-  Both consequences are filed as #119, and the second is confirmed rather than
-  reasoned: building `dist/` from `7e1a730` (pre-#105 master, before
-  `src/runtime/client.ts` existed — 1,175 insertions of divergence) and running
-  the harness bare passes every assertion, positive control included.
+- **The residue was that the fix was in the caller, not the proof**, and #119
+  closed it at both live consequences. `.github/workflows/release.yml` now runs
+  `pnpm proof:pack` before the publish step, so the tarball that reaches npm is
+  one the packed proof inspected on the publishing commit. And the positive
+  control no longer names symbols — `createWhatsAppRuntime` and friends are in
+  every recent build, so they caught an **empty** `dist/` and not a **wrong**
+  one. It compares the artifact instead. `pnpm pack` still archives a stale
+  `dist/`, but the proof now says so rather than depending on its caller to
+  prevent it — running the harness bare, without `proof:pack`'s build in front
+  of it, is trustworthy for the first time.
+
+  Verified on three violating states, each observed red by the digests it
+  disagreed on rather than by an exit code. `dist/` built with `src/` checked
+  out from `7e1a730` — the repro #119 records — differs in four of its six
+  files, and the retired control passed that same artifact green, re-confirmed
+  by running master's harness against it on the fix branch. A planted
+  `dist/zz-stale-sentinel.d.mts` reaches the tarball and is absent from the
+  rebuild. A build stubbed to write nothing throws `ENOENT` on a `dist/` removed
+  a line earlier, instead of comparing two stale directories equal.
+
+  Note what the export surface could not have done: `src/index.ts` is
+  byte-identical between `7e1a730` and today, all 104 names, so a control
+  derived from the published vocabulary — the obvious next-strongest idea —
+  would have passed the exact artifact this one catches.
+
+  **The ceiling is that this trusts `vp pack` to clean `dist/` and to be
+  byte-idempotent.** Both hold today: the build logs `Cleaning 6 files`, and two
+  consecutive builds hash identically. Losing idempotence turns the control red
+  on every run, which announces itself. Losing the clean would let a stale file
+  survive into both sides and read green — the one way this weakens quietly, so
+  it is what a `vp` upgrade has to re-check.
+
 - The round-1 mutation audit chose its mutations from the author's model of the
   design, so it was blind exactly where the design was. Round 2 derived them
   from the code's decision points instead, and killed 39 of 46 where the first
