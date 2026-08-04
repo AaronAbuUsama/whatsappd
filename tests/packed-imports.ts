@@ -81,6 +81,7 @@ try {
     "createWhatsAppClient",
     "WhatsAppClientCore",
     "ClientAccountState",
+    "ClientChatMessages",
     "ClientNamespace",
     "fanout",
   ]) {
