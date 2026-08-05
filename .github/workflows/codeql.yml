@@ -1,0 +1,48 @@
+name: CodeQL
+
+# `pnpm check` reads this code for type errors and lint violations; neither is
+# looking for injected SQL, an unsafe deserialization, or a prototype pollution
+# reachable from a message body. This is the only job that reads the code as an
+# attacker would.
+#
+# It matters more here than in an application, because a defect in a published
+# library is installed by every consumer and cannot be fixed by patching one
+# deployment.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # A dependency-free codebase can still become vulnerable when a new query
+    # ships in the CodeQL pack, so this runs on a clock and not only on change.
+    - cron: "0 3 * * 1"
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      # Writing the alerts back to the Security tab is the entire point.
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # `security-extended` over the default pack: this library handles
+          # message content and credentials, so the extra precision is worth
+          # the extra runtime.
+          queries: security-extended
+
+      # No build step. `javascript-typescript` analyses the sources directly,
+      # and running `vp pack` first would point the analysis at bundled output
+      # where the original expressions no longer exist.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"

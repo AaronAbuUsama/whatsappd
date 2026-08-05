@@ -1,0 +1,59 @@
+version: 2
+
+updates:
+  # Runtime and tooling dependencies.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # A version published minutes ago has been reviewed by nobody. Most
+    # npm supply-chain compromises are found and yanked within days, so
+    # waiting is most of the defence -- and costs nothing on a weekly
+    # schedule that was never going to pick it up the same day anyway.
+    # Security updates ignore cooldown entirely, which is the right
+    # asymmetry: a known CVE should not wait behind a caution meant for
+    # unknown ones.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    groups:
+      # One reviewed pull request instead of a dozen. Patch and minor bumps
+      # are read together or not at all, and separate PRs guarantee "not at
+      # all" -- the point of grouping is to make review affordable enough
+      # that it actually happens.
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # `baileys` is pinned to an exact release candidate, and the pin is
+      # load-bearing: it is the reverse-engineered WhatsApp protocol
+      # implementation, where a minor bump can change wire behaviour that
+      # no test here would catch. It moves when someone decides to move it
+      # and reads the changelog first.
+      - dependency-name: baileys
+      # The peer dependency range is a compatibility promise to consumers,
+      # not a version this repository runs. Widening it is a deliberate
+      # decision about what the library supports.
+      - dependency-name: "@libsql/client"
+        update-types: [version-update:semver-major]
+    commit-message:
+      prefix: deps
+      prefix-development: deps-dev
+      include: scope
+
+  # The workflows themselves. Actions are ordinary supply chain: a compromised
+  # `actions/checkout` runs with the repository's token, and these were pinned
+  # once at the tag and then never revisited.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
