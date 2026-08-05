@@ -180,7 +180,14 @@ The orchestrator owns the run:
 
 - keep at most one active implementation lane per issue;
 - run independent frontier nodes concurrently only when their paths and
-  exclusive resources do not conflict;
+  exclusive resources do not conflict. **The linked WhatsApp accounts are such a
+  resource, and `pnpm state` cannot see it.** One runtime owns one account
+  (ADR-0009), so two nodes whose live runs need the same profile are serial no
+  matter how independent the graph says they are — #50 and #127 both need
+  `android` and were simultaneously on the frontier. Check
+  `docs/runbooks/real-account-testing.md` before dispatching two nodes at once.
+  A node's implementation usually does not need the account; only its live run
+  does, so the lane to overlap is one node's build against another's live pass;
 - poll agents and PR checks with bounded waits;
 - nudge a quiet agent, inspect its branch/PR/terminal, and recover its lane
   before declaring it stalled;
