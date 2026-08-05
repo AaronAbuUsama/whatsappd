@@ -38,7 +38,26 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - run: pnpm test
+      # Coverage thresholds sit just under the measured numbers (95.81 lines /
+      # 86.68 branches / 89.55 functions), so they pass on arrival and ratchet:
+      # the gate is what stops the next change lowering them quietly, not a
+      # target to climb toward. The TAP output is kept as an artifact because
+      # `node --test` prints per-test durations there and nothing was retaining
+      # them.
+      # `test:report` carries the reporter flags itself rather than taking them
+      # as extra argv. Appending them to `pnpm test:coverage` puts them after
+      # `--test`, where node reads them as another test path and writes nothing
+      # -- an artifact step that uploads an empty file and stays green.
+      - name: Test with coverage thresholds
+        run: pnpm test:report
+      - name: Keep the timing and coverage record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-node${{ matrix.node }}
+          path: test-results.tap
+          if-no-files-found: error
+          retention-days: 30
       # The agent-facing docs are checked against the repository they describe.
       # `AGENTS.md` routes an agent onward by bare relative path, so a path that
       # has moved sends it to read nothing and continue anyway -- and a renamed

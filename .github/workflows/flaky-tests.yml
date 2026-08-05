@@ -1,0 +1,70 @@
+name: Flaky test detection
+
+# A flaky test is not usually discovered — it is tolerated, retried by hand, and
+# eventually believed. This runs the suite repeatedly against unchanged code, so
+# a test that only sometimes passes is caught by the schedule rather than by
+# someone re-running a red PR until it goes green.
+#
+# Deliberately not a retry mechanism. Retries in CI hide flakiness by making it
+# survivable; this reports it and leaves the suite honest.
+
+on:
+  schedule:
+    # 04:00 UTC daily, well clear of the working day so a real failure is
+    # waiting rather than competing with PR runs.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Number of consecutive suite runs
+        required: false
+        default: "10"
+
+jobs:
+  repeat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run the suite repeatedly
+        id: repeat
+        env:
+          RUNS: ${{ github.event.inputs.runs || '10' }}
+        run: |
+          failed=0
+          for i in $(seq 1 "$RUNS"); do
+            if pnpm test > "run-$i.log" 2>&1; then
+              echo "run $i: pass"
+            else
+              failed=$((failed + 1))
+              echo "::warning::Run $i of $RUNS failed on Node ${{ matrix.node }}"
+              echo "run $i: FAIL"
+              tail -40 "run-$i.log"
+            fi
+          done
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          if [ "$failed" -ne 0 ]; then
+            # Every run executes identical code, so a mixed result is by
+            # definition a flaky test rather than a broken one.
+            echo "::error::$failed of $RUNS runs failed on unchanged code. A test that passes only sometimes is a flaky test."
+            exit 1
+          fi
+          echo "$RUNS/$RUNS runs passed on Node ${{ matrix.node }}."
+
+      - name: Keep the failing runs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-run-logs-node${{ matrix.node }}
+          path: run-*.log
+          retention-days: 14
