@@ -1,0 +1,99 @@
+name: Alert on scheduled failure
+
+# Scheduled jobs fail into an empty room. A broken pull request is seen within
+# minutes because someone is waiting on it, but a nightly flake run or a weekly
+# CodeQL scan that starts failing sends one email to whoever last touched the
+# file and is then invisible -- the archetypal way a scheduled check dies
+# quietly and stays dead for months.
+#
+# This turns those failures into an issue, which is the surface the repository
+# already triages. It deliberately covers only the scheduled workflows: a failed
+# PR run already has a reviewer attached to it, and filing issues for those
+# would generate noise that trains everyone to ignore the label.
+
+on:
+  workflow_run:
+    workflows: [Flaky test detection, CodeQL]
+    types: [completed]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  file:
+    # `workflow_run` fires for every completion, including the successful ones.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update an issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const title = `Scheduled failure: ${run.name}`;
+
+            // The label has to exist before it is used to search. Creating an
+            // issue with an unknown label invents it silently, but *filtering*
+            // by one that has never been used returns nothing useful, so the
+            // dedupe below would miss and file a fresh issue every night.
+            await github.rest.issues.createLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'scheduled-failure',
+              color: 'B60205',
+              description: 'A scheduled workflow failed with nobody waiting on it',
+            }).catch((error) => {
+              if (error.status !== 422) throw error; // 422 = already exists
+            });
+
+            // One issue per workflow, reopened and commented rather than
+            // duplicated -- a nightly job that fails for a week should produce
+            // one thread with seven comments, not seven identical issues that
+            // each get closed unread.
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'all',
+              labels: 'scheduled-failure',
+              per_page: 100,
+            });
+            const open = existing.data.find((issue) => issue.title === title);
+
+            const body = [
+              `**${run.name}** failed on \`${run.head_branch}\`.`,
+              '',
+              `- Run: ${run.html_url}`,
+              `- Commit: ${run.head_sha}`,
+              `- Started: ${run.run_started_at}`,
+              '',
+              'This workflow runs on a schedule, so nobody is waiting on the',
+              'result. Failing runs keep the logs as artifacts.',
+            ].join('\n');
+
+            if (open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open.number,
+                body,
+              });
+              if (open.state === 'closed') {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: open.number,
+                  state: 'open',
+                });
+              }
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['scheduled-failure', 'needs-triage'],
+              });
+            }

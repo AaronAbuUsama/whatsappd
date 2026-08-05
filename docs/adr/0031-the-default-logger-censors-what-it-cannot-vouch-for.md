@@ -1,0 +1,61 @@
+---
+status: accepted
+---
+
+# The default logger censors what it cannot vouch for
+
+Every deliberate log call in this library already hands the logger a
+purpose-built object. `connectionUpdateTelemetry` reports `qrChars` — the
+length of the QR — and never the QR. `historySetTelemetry` reports how many
+chats arrived and how many carried inline messages, and never a chat. That
+discipline is real, and it is why the obvious answer to "does this library log
+private data?" was, for most of its surface, no.
+
+It left one gap, and the gap is structural rather than careless. Two sites log
+an error object: the metrics-hook guard, and the session's own run failure.
+Those errors originate in Baileys or in the socket beneath it, so their shape
+is not this library's to choose. A failed send can arrive carrying the payload
+it failed to send. An HTTP-shaped failure can arrive carrying the request
+headers, including the authorization header.
+
+This was measured before it was fixed. An error carrying a message body, a
+recipient's phone number, and a bearer token serialized all three in full.
+
+## The default logger redacts; a supplied logger does not
+
+`createSession` builds a `pino` logger only when the caller supplies none. That
+fallback now carries a `redact` list covering message content, addresses, and
+credentials.
+
+A caller who passes their own `logger` gets exactly what they passed. That
+asymmetry is deliberate: an application with its own logging stack has its own
+redaction policy, its own destinations, and its own compliance story, and
+silently rewriting its configuration would be a worse surprise than the one
+being fixed. The library defends the logger it owns.
+
+## The list is explicit, not recursive
+
+`pino` can redact by wildcard at arbitrary depth. This list does not, because
+deep redaction is walked on every log call, including the overwhelming majority
+that carry nothing sensitive, and this library logs on a connection's hot path.
+
+The cost of that choice is that the list must name the shapes that matter, and
+naming them is fallible. A first version used only nested wildcards — `*.token`
+and the like — and read as complete. It was not: `*.token` matches a token one
+level down and not a `token` on the logged object itself. A test caught it. The
+top-level duplicates in the list exist because of that, and the tests assert on
+the bytes written rather than on the configuration, because a `redact` list can
+be present and still miss the path that carries the secret.
+
+## Consequences
+
+Anyone relying on the default logger to print a full error object for debugging
+will see censored fields. The error's own `message` and the log line's `msg`
+survive, which preserves the diagnostic value that made those two call sites
+worth having; the payload that a debugger might have wanted is the payload this
+decision exists to withhold. Passing an explicit `logger` opts out entirely.
+
+The list is a maintenance burden that grows when the wire format grows. That is
+accepted in exchange for not paying a deep tree-walk on every log call, and it
+is the reason the redaction has tests that fail loudly rather than a comment
+asking for care.

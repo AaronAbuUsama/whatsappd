@@ -38,7 +38,26 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - run: pnpm test
+      # Coverage thresholds sit just under the measured numbers (95.81 lines /
+      # 86.68 branches / 89.55 functions), so they pass on arrival and ratchet:
+      # the gate is what stops the next change lowering them quietly, not a
+      # target to climb toward. The TAP output is kept as an artifact because
+      # `node --test` prints per-test durations there and nothing was retaining
+      # them.
+      # `test:report` carries the reporter flags itself rather than taking them
+      # as extra argv. Appending them to `pnpm test:coverage` puts them after
+      # `--test`, where node reads them as another test path and writes nothing
+      # -- an artifact step that uploads an empty file and stays green.
+      - name: Test with coverage thresholds
+        run: pnpm test:report
+      - name: Keep the timing and coverage record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-node${{ matrix.node }}
+          path: test-results.tap
+          if-no-files-found: error
+          retention-days: 30
       # The agent-facing docs are checked against the repository they describe.
       # `AGENTS.md` routes an agent onward by bare relative path, so a path that
       # has moved sends it to read nothing and continue anyway -- and a renamed
@@ -52,7 +71,35 @@ jobs:
       # regression visible.
       - run: pnpm check:dupes
       - run: pnpm check:unused
-      - run: pnpm build
+      # Build duration is recorded rather than gated. It is genuinely useful --
+      # a build that creeps from one second to thirty is a real regression --
+      # but shared runners vary enough that any threshold tight enough to catch
+      # that would also fail on a noisy neighbour, and a flaky gate gets
+      # disabled rather than investigated. The summary makes the number visible
+      # on every run instead.
+      - name: Build, and record how long it took
+        run: |
+          start=$(date +%s%N)
+          pnpm build
+          elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
+          echo "Build: ${elapsed}ms on Node ${{ matrix.node }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "build_ms=$elapsed" >> "$GITHUB_OUTPUT"
+      # Published size is gated, because unlike duration it is deterministic:
+      # the same commit packs to the same bytes on any runner. Every consumer
+      # downloads this, and the usual way it doubles is a dependency pulled
+      # into the bundle by an import nobody looked at. Measured at 74,532 bytes;
+      # the ceiling leaves room to grow deliberately and not silently.
+      - name: Publish size
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP" >/dev/null
+          VERSION="$(node -p "require('./package.json').version")"
+          bytes=$(wc -c < "$RUNNER_TEMP/whatsappd-$VERSION.tgz")
+          echo "Package: ${bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -gt 120000 ]; then
+            echo "::error::The published tarball is ${bytes} bytes, over the 120000-byte ceiling. Something entered the bundle -- check for a dependency pulled in by a new import."
+            exit 1
+          fi
+          echo "packed ${bytes} bytes, under the 120000-byte ceiling"
       # `pnpm pack` archives whatever `dist/` already holds, so this proof has
       # to build first or it inspects an artifact older than the change under
       # test. The `proof:pack` script owns that build, which is why it does not

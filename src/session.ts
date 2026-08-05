@@ -27,6 +27,66 @@ import {
 const QR_FIRST_MS = 60_000;
 const QR_REFRESH_MS = 20_000;
 
+/**
+ * Fields the default logger censors.
+ *
+ * @remarks
+ * Every deliberate log call in this codebase already passes a hand-built
+ * object of counts and flags — `qrChars` rather than the QR, chat totals
+ * rather than chats. Those were never the risk.
+ *
+ * The risk is the two sites that log `{ err }`, where the error comes from
+ * Baileys or a socket and its shape is not ours to choose. A send failure can
+ * carry the outbound payload, and an HTTP-ish failure can carry request
+ * headers, so the message body, the recipient, and an auth token all reach the
+ * log through an object nobody here constructed. That was verified rather than
+ * assumed: an error carrying all three serialized every one of them in full.
+ *
+ * The wildcards are one level deep by design — `*.text` and `err.data.*`
+ * rather than a recursive sweep — because redaction that walks the whole tree
+ * costs on every log call, including the ones that carry nothing sensitive.
+ * The `err.*` entries are listed explicitly because that is the path that
+ * actually leaked.
+ */
+export const REDACTED_PATHS = [
+  // Message content, wherever it surfaces.
+  "*.text",
+  "*.body",
+  "*.caption",
+  "*.message",
+  "err.data.text",
+  "err.data.body",
+  "err.data.caption",
+  // Addresses — a phone number is identifying on its own.
+  "*.jid",
+  "*.to",
+  "*.from",
+  "*.sender",
+  "*.remoteJid",
+  "*.participant",
+  "err.data.to",
+  "err.data.from",
+  "err.data.jid",
+  // Anything that would let someone else become this session. Listed at the
+  // top level as well as under a wildcard, because `*.token` matches a token
+  // one level down and not a `token` on the logged object itself — a
+  // distinction a test caught after the wildcard-only list looked complete.
+  "*.authorization",
+  "*.token",
+  "*.authToken",
+  "*.creds",
+  "*.keys",
+  "*.password",
+  "authorization",
+  "token",
+  "authToken",
+  "creds",
+  "keys",
+  "password",
+  "err.config.headers.authorization",
+  "err.config.headers.cookie",
+];
+
 /** Configuration for {@link createSession}. */
 export interface SessionConfig {
   /** Where this session's credentials are persisted. */
@@ -257,7 +317,9 @@ export function createSession(config: SessionConfig): WhatsAppSession {
   const { store, auth } = config;
   // A library shouldn't spam stdout uninvited, but reconnect/fault warnings are
   // worth surfacing — default to `warn`, overridable via env or an explicit logger.
-  const logger = config.logger ?? pino({ level: process.env.WA_LOG_LEVEL ?? "warn" });
+  const logger =
+    config.logger ??
+    pino({ level: process.env.WA_LOG_LEVEL ?? "warn", redact: { paths: REDACTED_PATHS } });
   const receiveStatusBroadcast = config.receiveStatusBroadcast ?? false;
   const pacer = createPacer(config.sendMinGapMs ?? 1000);
   // A thrown metrics hook must never break the connection.
