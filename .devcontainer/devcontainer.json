@@ -1,0 +1,25 @@
+{
+  "name": "whatsappd",
+  // Node 22 is the lower of the two versions CI runs, so the container fails
+  // the same way the older matrix leg would rather than passing on a newer
+  // runtime than the floor the package supports (`engines.node` is >=20).
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  // `pnpm install` runs `prepare` (`vp config`), which sets `core.hooksPath`,
+  // so the pre-commit hook is live inside the container too. Corepack is
+  // enabled first so the pinned pnpm@11.10.0 in `packageManager` is the one
+  // that resolves.
+  "postCreateCommand": "corepack enable && pnpm install",
+  "customizations": {
+    "vscode": {
+      "extensions": ["oxc.oxc-vscode"],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "oxc.oxc-vscode"
+      }
+    }
+  },
+  "remoteUser": "node"
+}

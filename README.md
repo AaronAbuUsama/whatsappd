@@ -284,3 +284,20 @@ pnpm proof
 
 `pnpm proof` is the opt-in live-account harness. Unit tests and the deterministic
 driver do not contact WhatsApp.
+
+## Working on whatsappd
+
+```bash
+pnpm install
+pnpm test
+```
+
+That is the whole setup from a fresh clone — no database to start, no service to
+run, and no WhatsApp account to obtain. `CONTRIBUTING.md` covers the inner loop,
+the checks CI runs, and the conventions review will hold you to.
+
+Three environment variables exist, all optional and none of them secret:
+`WA_LOG_LEVEL` sets the level of the default session logger, while `LOG_LEVEL`
+and `AUTH_DIR` only affect the test harnesses. `.env.example` documents them.
+Credentials never travel by environment variable — they live behind a
+`CredentialStore`.
