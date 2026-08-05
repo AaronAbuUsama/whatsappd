@@ -138,6 +138,22 @@ Nothing about this weakens a proof. A resumed credential is the product
 behavior ADR-0005 and #109 exist to establish; requiring a human to re-scan is
 not a stronger claim, only a more expensive one.
 
+**Two profiles were linked on 2026-08-05, on two distinct numbers**, which makes
+the test peer a second real account rather than a self-send:
+
+| Profile   | Primary phone      | Role                                         |
+| --------- | ------------------ | -------------------------------------------- |
+| `ios`     | iPhone             | peer; the account behind the #18 P4 receipts |
+| `android` | Samsung Galaxy S25 | subject; also the #50 platform arm           |
+
+`android` is the subject for anything that publishes a receipt. Its mirror is
+small enough to assert against, and a proof whose fixtures are someone's actual
+correspondence is one nobody can safely publish. Each profile is one account and
+one process — ADR-0009 means two runtimes cannot share a database.
+
+The profiles are the only thing here a human has to recreate, and only if a
+machine is lost. `pnpm proof:profile <name>` establishes or resumes one.
+
 ## Standing facts about the 0.3 Client
 
 - **The conversation handle does not exist.** #106 replaced
