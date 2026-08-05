@@ -67,7 +67,12 @@ const selects = (): string[] => seen.filter((sql) => /^\s*SELECT/i.test(sql));
 const libsql = await import("@libsql/client");
 
 mock.module("@libsql/client", {
-  exports: {
+  // `namedExports` rather than `exports`, which Node 24 prefers and Node 22
+  // ignores outright: on 22 the replacement is accepted and then not applied,
+  // so `createClient` resolves to undefined and the backend cannot open a
+  // database at all. `namedExports` is deprecated on 24 but honoured by both,
+  // and this suite runs on both.
+  namedExports: {
     ...libsql,
     createClient: (config: Parameters<typeof libsql.createClient>[0]): Client => {
       const client = libsql.createClient(config);
