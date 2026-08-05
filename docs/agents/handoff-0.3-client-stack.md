@@ -93,51 +93,24 @@ written there. Do not "fix" them by weakening a test.
 
 ## The work, in order
 
-### Phase 1 — repair the specifications. Nothing gets dispatched until this is done.
+### Phase 1 — repair the specifications. Done; keep the lesson.
 
-The repository currently argues with itself. Every item below is a case where a
-document or issue still teaches the retired handle.
+The repository argued with itself in four places, and all four are closed:
+#124 swept the retired handle out of the docs and comments (PR #123),
+PR #128 repaired `docs/sdk-capabilities.md`'s verification block, and #107,
+#108 and #111 had their bodies corrected before dispatch.
 
-**1a. #124 — already filed and correctly scoped.** It lists ~30 references in
-`docs/sdk-capabilities.md` plus `contracts.ts` TSDoc, the architecture document,
-`README.md`, a changeset and ADR-0029's residue, with a suggested order. Verified
-against `master`: the four `contracts.ts` TSDoc comments (`:281`, `:342`, `:499`,
-`:746`) are still there, `README.md`'s "Opening a conversation" line is still
-there, the architecture document still has `<Conversation.Root>` /
-`loadOlderSaved`, and `sdk-capabilities.md` has **37** matching lines. One item
-is now done: `client.ts`'s "belongs to an opened conversation" no-op comment was
-replaced by #106. **Execute #124 as written; do not re-scope it.**
+**The lesson that outlives them.** #107's unsatisfiable acceptance criterion —
+_"No packed declaration named `WhatsAppClient` carries `watch` or `messages`"_,
+which no correct implementation can meet once the friendly Client owns a
+`messages` namespace — was written once and copied into **#112**, where it
+survived the repair of #107 by a full day. A defect found in one issue body is
+a defect in every body that inherited the sentence. When one is fixed,
+`grep` the other open nodes for the same sentence before closing the loop.
 
-**1b. `docs/sdk-capabilities.md:10` says "Live WhatsApp account: not run".**
-That is false — `.proof-receipts/` holds two P4 receipts from 3 August
-(`issue18-p4.run1-b06fa2f.json`, `issue18-p4.run2-ea53648.json`). `CONTEXT.md`
-defines `not-run` as meaning exactly that. **Not covered by #124** — #124 is the
-handle sweep. Fix the verification block to say what has actually been run, at
-what layer, and what has not.
-
-**1c. #107's body has three defects.** It is the next node on the DAG and it is
-**not safe to dispatch as written**:
-
-- Its "Plain-English outcome" — the first thing an executor reads — is a code
-  sample using `client.chats.open(chatId)` and `conversation.close()`. Twenty
-  lines later the same issue says the handle was dropped. Unlike #108 and #111 it
-  carries **no banner**.
-- Acceptance criterion _"No packed declaration named `WhatsAppClient` carries
-  `watch` or `messages`"_ **cannot be satisfied by a correct implementation.**
-  #107 renames the friendly Client to `WhatsAppClient`, and the friendly Client
-  has a `messages` namespace. The criterion's intent was to catch the _raw_ type
-  surviving under the new name; the raw one is identifiable by `watch()`. Rewrite
-  it against `watch`, or against the shape.
-- It cites `WhatsAppClientCore` at `src/runtime/client.ts:278`. It is at **407**;
-  #106's merge moved it. (`contracts.ts:738` and `index.ts:55-106,96` are still
-  exact.)
-
-**1d. #108 and #111 already carry `[!IMPORTANT]` banners** saying their action
-surface is superseded and "nothing below that names `conversation.*` is
-executable as written". #111's live matrix still literally calls
-`conversation.send.text()` at step 7 and "the opened friendly conversation" at
-step 5. Both need re-specifying against `client.messages.*` **at their own
-dispatch**, which is what their banners already instruct.
+The correction, in both places: the retired raw contract is identifiable by
+`watch()`, so the criterion is written against `watch` and against the friendly
+shape, never against `messages`.
 
 ### Phase 2 — prove the Client against a real phone, before packaging it
 
@@ -162,8 +135,15 @@ The **full** #111 genuinely cannot run first — it needs pairing (#109) and sen
 > process against the same files and assert the durable state reconstructs and no
 > live presence/connection does.
 > Explicitly **not** covering sends, pairing-as-a-feature, or unlink.
-> #127 blocks #107. **#107's body has not yet been edited to record that
-> dependency** — do it as part of item 1c.
+> #127 blocks #107, and #107's body records the dependency as of 2026-08-05.
+
+Pairing #127's account is a **one-time** human cost, not a per-run one. The
+profile directory under `.proof-private/` is durable, `libsqlBackend()` persists
+the credentials, and `createWhatsAppRuntime` hands that store to the session
+(`src/runtime/runtime.ts:714`), so every later run resumes without a scan. See
+"A linked test account is a one-time human cost" in `docs/standing-decisions.md`;
+#111's pairing and unlink rows are the only ones that need an unlinked start,
+and they take their own throwaway profile.
 
 **Harness assessment — extend, do not rebuild.**
 
@@ -184,13 +164,18 @@ anything destructive.
 
 ### Phase 3 — then the existing chain
 
+Run `pnpm state` for the live order; the list below is why each node sits where
+it does, not a record of what is currently open.
+
 7. **#107** — the public cut (after 1c and #127).
-8. **#108** — sends. Re-spec first, per its banner.
+8. **#108** — sends. Re-specified against `client.messages.*` on 2026-08-05;
+   its banner is gone and the surface in the body is the executable one.
 9. **#109** — pairing and unlink.
-10. **#111** — the full real-account proof. Re-spec first, per its banner.
-11. **#119** — blocks #112 and is only `needs-triage`. Someone must specify it
-    before the release gate can move; nothing will surface that until #112.
-12. **#112** → **#113** — release candidate, then publish.
+10. **#111** — the full real-account proof. Re-specified against
+    `client.messages.*` on 2026-08-05, and its live matrix now resumes a durable
+    profile instead of pairing again.
+11. **#112** → **#113** — release candidate, then publish. #119 closed in
+    PR #129 on 2026-08-04, so #111 is #112's only blocker.
 
 Open but not blocking: **#121** (message retention is unbounded — the code that
 grows without limit is now on `master`, so this stopped being hypothetical) and

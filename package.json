@@ -39,6 +39,7 @@
     "dev": "vp pack --watch",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "check": "vp check",
+    "state": "node --experimental-strip-types tests/execution-state.ts",
     "proof": "node --experimental-strip-types tests/proof.ts",
     "proof:pack": "pnpm build && node --experimental-strip-types tests/packed-imports.ts",
     "prepublishOnly": "vp run build",

@@ -18,9 +18,12 @@ DAG.
   from that exact reviewed head and targets the predecessor PR. All other
   blockers must be closed, and the child may not merge before its predecessor.
 - Pull requests are implementation and review surfaces, never new work intake.
-- After every stack handoff and merge, the orchestrator reads GitHub again,
-  prints the whole DAG with merged, in-flight, frontier, and blocked nodes, and
-  dispatches only the newly executable frontier.
+- After every stack handoff and merge, the orchestrator runs `pnpm state`,
+  which re-derives the whole DAG — frontier, blocked nodes with the blockers
+  they wait on, and open pull requests — from the `## Blocked by` edges on the
+  issues themselves, and dispatches only the newly executable frontier. It
+  never reads the graph out of a document. A frontier node that lacks a
+  `ready-for-agent` or `ready-for-human` label is reported and not dispatched.
 
 ## Lane shape
 

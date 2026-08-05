@@ -15,6 +15,14 @@ Use the canonical `needs-triage`, `needs-info`, `ready-for-agent`,
 This is a single-context repository. Read `CONTEXT.md` and relevant decisions
 under `docs/adr/` when present. See `docs/agents/domain.md`.
 
+### Execution state
+
+Run `pnpm state`. It derives the frontier, the blocked nodes, and the open pull
+requests from the `## Blocked by` edges GitHub already holds. No document
+records which node is next; the one that used to disagreed with the graph
+within a day. Standing decisions that do not change when an issue closes live
+in `docs/standing-decisions.md`.
+
 ### Unattended frontier execution
 
 When asked to execute the issue DAG autonomously, follow
