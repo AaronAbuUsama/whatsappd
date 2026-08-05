@@ -1,0 +1,43 @@
+name: Feature or change request
+description: A capability whatsappd should have, or a contract it should state differently.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every new issue starts at `needs-triage`. A request that survives triage
+        becomes `ready-for-agent` only once its contract is specified well
+        enough that an unattended agent could not satisfy it the wrong way —
+        see `docs/agents/frontier-execution.md`.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What you are unable to do today, and what you had to write instead.
+        Describe the situation rather than the API you have in mind — the shape
+        is the part worth arguing about.
+    validations:
+      required: true
+
+  - type: textarea
+    id: contract
+    attributes:
+      label: Proposed contract
+      description: >
+        What the new surface should guarantee, including what it does when it
+        fails. `docs/sdk-capabilities.md` lists what already exists and what is
+        planned; `CONTEXT.md` carries the domain language to use here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you considered instead
+      description: >
+        Including whether this belongs in an application consuming whatsappd
+        rather than in whatsappd itself. ADR-0006 and ADR-0007 draw that line.
+    validations:
+      required: false

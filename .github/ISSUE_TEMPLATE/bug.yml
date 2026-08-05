@@ -1,0 +1,74 @@
+name: Bug report
+description: Something whatsappd does that contradicts what it says it does.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every new issue starts at `needs-triage` — the maintainer moves it to
+        `ready-for-agent`, `ready-for-human`, or `needs-info` from there. See
+        `docs/agents/triage-labels.md`.
+
+        **Do not paste real WhatsApp data.** Phone numbers, message text, and
+        credential files identify people who did not file this issue. Redact
+        them before you paste.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behavior, not the suspected cause.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: >
+        Where possible, cite the README section, ADR, or type signature that
+        promises the behavior you expected. An issue that names the broken
+        promise is one an agent can act on without guessing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: >
+        Ideally a `createTestWhatsAppSession()` snippet from `whatsappd/testing`
+        — it needs no WhatsApp account and runs the real awaited subscription
+        contract. If the fault only appears against a live account, say so and
+        describe the account shape instead.
+      render: typescript
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: whatsappd version
+      placeholder: 0.2.2
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      placeholder: v22.22.3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend in use
+      options:
+        - No backend (session only)
+        - memoryBackend()
+        - libsqlBackend()
+        - Custom backend
+    validations:
+      required: true
