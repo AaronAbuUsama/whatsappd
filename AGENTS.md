@@ -30,6 +30,15 @@ lease, libSQL recovery, credential rotation, and releasing. Read the fault
 disposition table in `docs/runbooks/README.md` before acting on any incident —
 acting against the disposition is how a 30-second reconnect becomes a QR scan.
 
+### Real WhatsApp accounts are linked on this machine
+
+Two of them, resumable with no human, holding real conversations with real
+people. Before writing anything that sends, reads their databases, or logs
+anything derived from them, read
+[`docs/runbooks/real-account-testing.md`](docs/runbooks/real-account-testing.md).
+Sends are restricted to an allowlist; a message to the wrong chat id reaches a
+stranger from the owner's own number and cannot be recalled.
+
 ### Unattended frontier execution
 
 When asked to execute the issue DAG autonomously, follow

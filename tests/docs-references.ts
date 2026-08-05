@@ -45,6 +45,7 @@ const DOCS = [
   "docs/runbooks/credential-rotation.md",
   "docs/runbooks/release.md",
   "docs/runbooks/ci-alerts.md",
+  "docs/runbooks/real-account-testing.md",
 ];
 
 /**
