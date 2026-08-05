@@ -42,7 +42,7 @@ import { keyToRef, refToKey, toContent, toOptions } from "./outbound.ts";
 
 /** How many recent raw messages to retain for quote resolution. */
 const RECENT_CAP = 500;
-import type { BaileysAuth } from "./authState.ts";
+import type { BaileysAuth } from "./auth-state.ts";
 
 /** Canonical web companion identity required by WhatsApp pairing-code registration. */
 export const PAIRING_BROWSER = Browsers.ubuntu("Chrome");

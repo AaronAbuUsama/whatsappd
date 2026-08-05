@@ -15,7 +15,7 @@ import type { MessageRef, SendOptions } from "./model/outbound.ts";
 import { isTerminal } from "./model/index.ts";
 import type { AuthStrategy, CredentialStore } from "./ports.ts";
 import { settle } from "./outcome.ts";
-import { loadAuth } from "./baileys/authState.ts";
+import { loadAuth } from "./baileys/auth-state.ts";
 import { openSocket, type BaileysConn, type RawEvent } from "./baileys/socket.ts";
 import {
   createSubscriptionDispatcher,

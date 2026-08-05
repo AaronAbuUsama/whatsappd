@@ -46,6 +46,12 @@ jobs:
       # instructions rather than improvising. #128 repaired exactly this drift
       # by hand.
       - run: pnpm check:docs
+      # Copy-paste and unused dependencies, both measured rather than assumed:
+      # duplication sits at 0.15% against a 0.3% gate, and the dependency graph
+      # is clean. Thresholds set at today's numbers are what make the next
+      # regression visible.
+      - run: pnpm check:dupes
+      - run: pnpm check:unused
       - run: pnpm build
       # `pnpm pack` archives whatever `dist/` already holds, so this proof has
       # to build first or it inspects an artifact older than the change under
