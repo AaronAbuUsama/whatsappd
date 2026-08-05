@@ -1,5 +1,5 @@
 import { expect, test } from "./_expect.ts";
-import { loadAuth } from "../src/baileys/authState.ts";
+import { loadAuth } from "../src/baileys/auth-state.ts";
 import type { CredentialStore } from "../src/ports.ts";
 
 /** In-memory KV store — the smallest possible CredentialStore. */

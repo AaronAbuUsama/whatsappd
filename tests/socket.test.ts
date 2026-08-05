@@ -16,7 +16,7 @@ import {
   toMessagingHistoryStatusEvents,
   toMessagesUpsertEvents,
 } from "../src/baileys/socket.ts";
-import { loadAuth } from "../src/baileys/authState.ts";
+import { loadAuth } from "../src/baileys/auth-state.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import { baseMessage, SELF } from "./fixtures.ts";
 

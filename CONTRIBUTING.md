@@ -53,13 +53,28 @@ is opt-in and never runs in CI.
 ## Before you open a pull request
 
 ```bash
-pnpm check      # format, lint, and type-check
+pnpm check         # format, lint, and type-check
 pnpm test
+pnpm check:docs    # every path and script name the agent docs cite still exists
+pnpm check:dupes   # copy-paste detection
+pnpm check:unused  # unused files, exports, and dependencies
 pnpm build
-pnpm proof:pack # builds, packs, and inspects the tarball a consumer receives
+pnpm proof:pack    # builds, packs, and inspects the tarball a consumer receives
 ```
 
-CI runs exactly these on Node 22 and 24. `pnpm check --fix` also runs on staged
+CI runs exactly these on Node 22 and 24.
+
+The size and shape limits in `vite.config.ts` are set just above what the
+codebase already contains, so they bind the next file rather than demand a
+refactor of the current one. Where a file is over, the exception names it with
+its measured value instead of switching the rule off — `src/runtime/libsql.ts`
+is capped at 1500 lines, not exempted. If your change needs a limit raised, say
+why in the PR; the number moving is the point at which someone decides.
+
+Complexity is deliberately looser at the protocol boundary. `toInbound`,
+`context`, and `transition` are exhaustive switches over a closed protocol
+union, where the branch count _is_ the specification, and splitting them hides
+which cases are handled. `pnpm check --fix` also runs on staged
 files at commit time, so formatting is usually already settled.
 
 Add a changeset for anything a consumer would notice:
