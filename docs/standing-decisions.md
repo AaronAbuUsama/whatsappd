@@ -141,10 +141,10 @@ not a stronger claim, only a more expensive one.
 **Two profiles were linked on 2026-08-05, on two distinct numbers**, which makes
 the test peer a second real account rather than a self-send:
 
-| Profile   | Primary phone | Role                                         |
-| --------- | ------------- | -------------------------------------------- |
-| `ios`     | iPhone        | peer; the account behind the #18 P4 receipts |
-| `android` | Android       | subject; also the #50 platform arm           |
+| Profile   | Primary phone      | Role                                         |
+| --------- | ------------------ | -------------------------------------------- |
+| `ios`     | iPhone             | peer; the account behind the #18 P4 receipts |
+| `android` | Samsung Galaxy S25 | subject; also the #50 platform arm           |
 
 `android` is the subject for anything that publishes a receipt. Its mirror is
 small enough to assert against, and a proof whose fixtures are someone's actual
