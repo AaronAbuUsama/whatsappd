@@ -245,6 +245,37 @@ It carries the `error` when the session died on its own, and none when it was
 stopped deliberately — so a runtime that failed is never mistaken for a quiet
 account.
 
+## Observability
+
+A session reports what it is doing through `metrics`, a synchronous hook that
+receives connection transitions, inbound messages, updates, contacts, presence,
+groups, sends, and reconnect attempts. It carries shapes and counts — a message
+event names its `kind` and whether it arrived live, never its text or its
+sender — so the hook can be pointed at a metrics backend without routing private
+content there.
+
+```ts
+const session = createSession({
+  store,
+  auth: qrAuth(),
+  metrics: (event) => {
+    if (event.type === "transition") gauge("whatsapp.phase", event.to);
+    if (event.type === "reconnect") counter("whatsapp.reconnect", event.attempt);
+  },
+});
+```
+
+A hook that throws is caught and logged rather than allowed to break the
+connection, so an unreachable metrics backend degrades the telemetry and
+nothing else.
+
+Logging is separate. The library logs at `warn` by default — set `WA_LOG_LEVEL`
+to change it — and the logger it builds censors message bodies, addresses, and
+credentials, because the errors it reports come from the protocol layer and can
+arrive carrying the payload that failed to send. Passing your own `logger` opts
+out of that entirely and gives you exactly what you configured; see
+[ADR-0031](docs/adr/0031-the-default-logger-censors-what-it-cannot-vouch-for.md).
+
 ## Deterministic application tests
 
 ```ts
