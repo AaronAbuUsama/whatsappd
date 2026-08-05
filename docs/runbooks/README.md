@@ -7,13 +7,14 @@ embeds whatsappd — the library runs in-process inside an application-owned
 worker (ADR-0006), so the failing thing is always _your_ worker, and these
 describe what the library does underneath it.
 
-| Runbook                                            | When you need it                                              |
-| -------------------------------------------------- | ------------------------------------------------------------- |
-| [`session-faults.md`](session-faults.md)           | A session disconnected, keeps reconnecting, or went quiet     |
-| [`stuck-account-lease.md`](stuck-account-lease.md) | `AccountAlreadyClaimedError` on a worker that should own it   |
-| [`libsql-recovery.md`](libsql-recovery.md)         | The libSQL database is corrupt, locked, or moved              |
-| [`credential-rotation.md`](credential-rotation.md) | Credentials are dead, leaked, or an account must be re-paired |
-| [`release.md`](release.md)                         | Publishing a version, or a release that failed halfway        |
+| Runbook                                            | When you need it                                               |
+| -------------------------------------------------- | -------------------------------------------------------------- |
+| [`session-faults.md`](session-faults.md)           | A session disconnected, keeps reconnecting, or went quiet      |
+| [`stuck-account-lease.md`](stuck-account-lease.md) | `AccountAlreadyClaimedError` on a worker that should own it    |
+| [`libsql-recovery.md`](libsql-recovery.md)         | The libSQL database is corrupt, locked, or moved               |
+| [`credential-rotation.md`](credential-rotation.md) | Credentials are dead, leaked, or an account must be re-paired  |
+| [`release.md`](release.md)                         | Publishing a version, or a release that failed halfway         |
+| [`ci-alerts.md`](ci-alerts.md)                     | A `scheduled-failure` issue, or a nightly or weekly job is red |
 
 ## The one thing to check first
 

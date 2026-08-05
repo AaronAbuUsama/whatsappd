@@ -71,7 +71,35 @@ jobs:
       # regression visible.
       - run: pnpm check:dupes
       - run: pnpm check:unused
-      - run: pnpm build
+      # Build duration is recorded rather than gated. It is genuinely useful --
+      # a build that creeps from one second to thirty is a real regression --
+      # but shared runners vary enough that any threshold tight enough to catch
+      # that would also fail on a noisy neighbour, and a flaky gate gets
+      # disabled rather than investigated. The summary makes the number visible
+      # on every run instead.
+      - name: Build, and record how long it took
+        run: |
+          start=$(date +%s%N)
+          pnpm build
+          elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
+          echo "Build: ${elapsed}ms on Node ${{ matrix.node }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "build_ms=$elapsed" >> "$GITHUB_OUTPUT"
+      # Published size is gated, because unlike duration it is deterministic:
+      # the same commit packs to the same bytes on any runner. Every consumer
+      # downloads this, and the usual way it doubles is a dependency pulled
+      # into the bundle by an import nobody looked at. Measured at 74,532 bytes;
+      # the ceiling leaves room to grow deliberately and not silently.
+      - name: Publish size
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP" >/dev/null
+          VERSION="$(node -p "require('./package.json').version")"
+          bytes=$(wc -c < "$RUNNER_TEMP/whatsappd-$VERSION.tgz")
+          echo "Package: ${bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -gt 120000 ]; then
+            echo "::error::The published tarball is ${bytes} bytes, over the 120000-byte ceiling. Something entered the bundle -- check for a dependency pulled in by a new import."
+            exit 1
+          fi
+          echo "packed ${bytes} bytes, under the 120000-byte ceiling"
       # `pnpm pack` archives whatever `dist/` already holds, so this proof has
       # to build first or it inspects an artifact older than the change under
       # test. The `proof:pack` script owns that build, which is why it does not
