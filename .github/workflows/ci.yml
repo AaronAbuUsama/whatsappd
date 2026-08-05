@@ -39,6 +39,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm test
+      # The agent-facing docs are checked against the repository they describe.
+      # `AGENTS.md` routes an agent onward by bare relative path, so a path that
+      # has moved sends it to read nothing and continue anyway -- and a renamed
+      # script makes the documented proof unrunnable for whoever is following
+      # instructions rather than improvising. #128 repaired exactly this drift
+      # by hand.
+      - run: pnpm check:docs
       - run: pnpm build
       # `pnpm pack` archives whatever `dist/` already holds, so this proof has
       # to build first or it inspects an artifact older than the change under

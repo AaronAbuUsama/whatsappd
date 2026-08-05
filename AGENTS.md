@@ -23,6 +23,13 @@ records which node is next; the one that used to disagreed with the graph
 within a day. Standing decisions that do not change when an issue closes live
 in `docs/standing-decisions.md`.
 
+### Operational runbooks
+
+Production procedures live in `docs/runbooks/`: session faults, a stuck account
+lease, libSQL recovery, credential rotation, and releasing. Read the fault
+disposition table in `docs/runbooks/README.md` before acting on any incident —
+acting against the disposition is how a 30-second reconnect becomes a QR scan.
+
 ### Unattended frontier execution
 
 When asked to execute the issue DAG autonomously, follow
