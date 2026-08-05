@@ -100,6 +100,14 @@ simplification, usually citing the defect that made it necessary. Comments that
 restate the code get deleted; a comment that argues with the code below it is a
 defect in its own right (see `docs/client-stack-defect-ledger.md`).
 
+## Running it in production
+
+`docs/runbooks/` holds the operational procedures: session faults, a stuck
+account lease, libSQL recovery, credential rotation, and releasing. They are
+written for whoever is holding the pager, and they start from the fault
+disposition table — `retryable`, `logged_out`, `suspended` — because acting
+against the disposition is the most common way to make an incident worse.
+
 ## Issues
 
 Issues are the only intake surface — pull requests are for implementation and
