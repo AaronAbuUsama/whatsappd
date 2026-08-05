@@ -5,5 +5,13 @@ dist
 !.vscode/
 !.vscode/settings.json
 !.vscode/extensions.json
+.idea/
 .wa-auth/
 .proof-private/
+
+# Local environment. `.env.example` is the tracked template and is re-included
+# below, so adding a real value to it is a visible mistake rather than a silent
+# one.
+.env
+.env.*
+!.env.example
