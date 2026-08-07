@@ -22,7 +22,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,9 +32,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Docs whose references are load-bearing for an agent starting cold. */
 const DOCS = [
   "AGENTS.md",
+  "CONTEXT.md",
   "README.md",
   "CONTRIBUTING.md",
   "docs/agents/domain.md",
+  "docs/agents/handoff-0.3-client-stack.md",
   "docs/agents/issue-tracker.md",
   "docs/agents/triage-labels.md",
   "docs/agents/frontier-execution.md",
@@ -47,6 +49,38 @@ const DOCS = [
   "docs/runbooks/ci-alerts.md",
   "docs/runbooks/real-account-testing.md",
 ];
+
+const markdownFiles = async (directory: string): Promise<readonly string[]> =>
+  (await readdir(path.join(root, directory)))
+    .filter((entry) => entry.endsWith(".md"))
+    .map((entry) => `${directory}/${entry}`);
+
+const completeAgentDocs = [
+  "AGENTS.md",
+  "CONTEXT.md",
+  "README.md",
+  "CONTRIBUTING.md",
+  ...(await markdownFiles("docs/agents")),
+  ...(await markdownFiles("docs/runbooks")),
+].sort();
+
+const assertCompleteAgentDocs = (documents: readonly string[]): void =>
+  assert.deepEqual(
+    [...documents].sort(),
+    completeAgentDocs,
+    "DOCS must cover every root, agent, and runbook document; do not shrink the list to stay green",
+  );
+
+assert.throws(
+  () =>
+    assertCompleteAgentDocs(DOCS.filter((doc) => doc !== "docs/runbooks/real-account-testing.md")),
+  /do not shrink the list to stay green/,
+);
+assertCompleteAgentDocs(DOCS);
+assert.ok(
+  DOCS.includes("docs/runbooks/real-account-testing.md"),
+  "the real-account safety runbook is load-bearing agent documentation",
+);
 
 /**
  * Paths inside backticks that look like repository locations: `docs/adr/`,

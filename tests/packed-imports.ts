@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +11,7 @@ import ts from "typescript";
 const execFile = promisify(execFileCallback);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-packed-"));
+const README_FENCE_MARKER = "<!-- packed-client-typecheck -->";
 
 const EXPECTED_ROOT_EXPORTS = [
   "AcceptedWhatsAppBatch",
@@ -177,6 +178,111 @@ const digests = async (directory: string): Promise<Record<string, string>> =>
     ),
   );
 
+const readmeClientSource = async (): Promise<string> => {
+  const readme = await readFile(path.join(root, "README.md"), "utf8");
+  const marker = readme.indexOf(README_FENCE_MARKER);
+  assert.notEqual(marker, -1, "README is missing the packed Client fence marker");
+  const opening = readme.indexOf("```ts\n", marker);
+  assert.notEqual(opening, -1, "README Client example has no TypeScript fence");
+  const sourceStart = opening + "```ts\n".length;
+  const closing = readme.indexOf("\n```", sourceStart);
+  assert.notEqual(closing, -1, "README Client example has no closing fence");
+  const source = `${readme.slice(sourceStart, closing)}\n`;
+  assert.match(source, /\bconst c: WhatsAppClient = client;/);
+  return source;
+};
+
+interface PackedScenarioReceipt {
+  readonly pid: number;
+  readonly mode: "write" | "read";
+  readonly durableDigest: string;
+  readonly durableDigests: Readonly<Record<string, string>>;
+  readonly accountDurable: {
+    readonly accountId: string;
+    readonly lastConnectedAt?: number;
+    readonly lastDisconnectedAt?: number;
+  };
+  readonly pageMessageCount: number;
+  readonly mediaDigest: string;
+  readonly connectionPresent: boolean;
+  readonly identityPresent: boolean;
+  readonly presenceRestored: boolean;
+  readonly closeOrder: readonly string[];
+  readonly envKeys: readonly string[];
+}
+
+const assertExplicitEnvironment = (
+  receipt: PackedScenarioReceipt,
+  allowedEnvironment: Readonly<Record<string, string>>,
+): void => {
+  const allowedKeys = new Set([...Object.keys(allowedEnvironment), "__CF_USER_TEXT_ENCODING"]);
+  assert.deepEqual(
+    receipt.envKeys.filter((key) => !allowedKeys.has(key)),
+    [],
+    "the packed child received a parent environment key outside the explicit allowlist",
+  );
+};
+
+const runPackedScenario = async (
+  mode: PackedScenarioReceipt["mode"],
+  directory: string,
+  salt: string,
+): Promise<PackedScenarioReceipt> => {
+  const allowedEnvironment = {
+    ...(process.env.HOME && { HOME: process.env.HOME }),
+    ...(process.env.PATH && { PATH: process.env.PATH }),
+    ...(process.env.TMPDIR && { TMPDIR: process.env.TMPDIR }),
+    PACKED_SCENARIO_DIRECTORY: directory,
+    PACKED_SCENARIO_MODE: mode,
+    PACKED_SCENARIO_SALT: salt,
+  };
+  const { stdout, stderr } = await execFile(process.execPath, ["packed-consumer-scenario.mjs"], {
+    cwd: consumer,
+    env: allowedEnvironment,
+  });
+  assert.equal(stderr, "", `packed ${mode} child wrote diagnostics`);
+  const receipt = JSON.parse(stdout) as PackedScenarioReceipt;
+  assert.throws(
+    () =>
+      assertExplicitEnvironment(
+        { ...receipt, envKeys: [...receipt.envKeys, "PACKED_PARENT_CANARY"] },
+        allowedEnvironment,
+      ),
+    /outside the explicit allowlist/,
+  );
+  assertExplicitEnvironment(receipt, allowedEnvironment);
+  return receipt;
+};
+
+const assertPackedReconstruction = (
+  first: PackedScenarioReceipt,
+  second: PackedScenarioReceipt,
+): void => {
+  assert.notEqual(first.pid, second.pid, "packed reconstruction reused one OS process");
+  assert.deepEqual(
+    first.accountDurable,
+    second.accountDurable,
+    "the replacement reconstructed different durable account state",
+  );
+  assert.deepEqual(
+    first.durableDigests,
+    second.durableDigests,
+    "the replacement reconstructed different durable namespace state",
+  );
+  assert.equal(
+    first.durableDigest,
+    second.durableDigest,
+    "the replacement reconstructed a different durable digest",
+  );
+  assert.equal(first.pageMessageCount, second.pageMessageCount);
+  assert.equal(first.mediaDigest, second.mediaDigest);
+  assert.deepEqual(first.closeOrder, ["client", "runtime", "backend"]);
+  assert.deepEqual(second.closeOrder, ["client", "runtime", "backend"]);
+  assert.equal(second.connectionPresent, false, "the replacement reconstructed a connection");
+  assert.equal(second.identityPresent, false, "the replacement reconstructed an identity");
+  assert.equal(second.presenceRestored, false, "the replacement reconstructed presence");
+};
+
 try {
   await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: root });
   const archive = (await readdir(consumer)).find((file) => file.endsWith(".tgz"));
@@ -206,11 +312,62 @@ try {
       private: true,
       type: "module",
       dependencies: {
+        "@libsql/client": "0.15.15",
         whatsappd: `file:./${archive}`,
       },
     }),
   );
   await execFile("pnpm", ["install", "--ignore-scripts"], { cwd: consumer });
+  const installedPackage = await realpath(path.join(consumer, "node_modules/whatsappd"));
+  assert.equal(
+    installedPackage.startsWith(`${root}${path.sep}`),
+    false,
+    "the fresh consumer resolved whatsappd from the workspace instead of its packed node_modules",
+  );
+
+  const readmeSource = await readmeClientSource();
+  await writeFile(path.join(consumer, "readme-client.ts"), readmeSource);
+  await writeFile(
+    path.join(consumer, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "es2023",
+        module: "nodenext",
+        moduleResolution: "nodenext",
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        verbatimModuleSyntax: true,
+      },
+      files: ["readme-client.ts"],
+    }),
+  );
+  const compiler = path.join(root, "node_modules/.bin/tsgo");
+  const invalidReadmeSource = readmeSource.replace(
+    "const c: WhatsAppClient = client;",
+    "const c: WhatsAppClient = 1;",
+  );
+  assert.notEqual(
+    invalidReadmeSource,
+    readmeSource,
+    "README typecheck control did not alter source",
+  );
+  await writeFile(path.join(consumer, "readme-client.ts"), invalidReadmeSource);
+  await assert.rejects(
+    execFile(compiler, ["--noEmit", "--project", "tsconfig.json"], { cwd: consumer }),
+    (error: unknown) => {
+      const diagnostics =
+        error && typeof error === "object" && "stdout" in error ? String(error.stdout) : "";
+      return /TS2322/u.test(diagnostics);
+    },
+    "the consumer typecheck did not reject an invalid README-derived assignment",
+  );
+  await writeFile(path.join(consumer, "readme-client.ts"), readmeSource);
+  const typecheck = await execFile(compiler, ["--noEmit", "--project", "tsconfig.json"], {
+    cwd: consumer,
+  });
+  assert.equal(typecheck.stdout, "", "the README consumer typecheck wrote diagnostics");
+  assert.equal(typecheck.stderr, "", "the README consumer typecheck wrote diagnostics");
 
   const packageJson = JSON.parse(
     await readFile(path.join(consumer, "node_modules/whatsappd/package.json"), "utf8"),
@@ -487,6 +644,55 @@ try {
     `,
   );
   await execFile(process.execPath, ["verify.mjs"], { cwd: consumer });
+
+  await writeFile(
+    path.join(consumer, "packed-consumer-scenario.mjs"),
+    await readFile(path.join(root, "tests/packed-consumer-scenario.mjs")),
+  );
+  const scenarioDirectory = path.join(consumer, "scenario-state");
+  const scenarioSalt = randomBytes(16).toString("hex");
+  const first = await runPackedScenario("write", scenarioDirectory, scenarioSalt);
+  const second = await runPackedScenario("read", scenarioDirectory, scenarioSalt);
+  assert.throws(
+    () => assertPackedReconstruction(first, { ...second, pid: first.pid }),
+    /reused one OS process/,
+  );
+  assert.throws(
+    () =>
+      assertPackedReconstruction(first, {
+        ...second,
+        durableDigest: first.durableDigest.replace(/^./u, (head) => (head === "0" ? "1" : "0")),
+      }),
+    /different durable digest/,
+  );
+  assert.throws(
+    () => assertPackedReconstruction(first, { ...second, connectionPresent: true }),
+    /reconstructed a connection/,
+  );
+  assertPackedReconstruction(first, second);
+  process.stdout.write(
+    `${JSON.stringify({
+      packedConsumer: {
+        typecheckDiagnostics: 0,
+        source: "README.md#packed-client-typecheck",
+        packageResolvedThroughNodeModules: true,
+      },
+      reconstruction: {
+        firstPid: first.pid,
+        secondPid: second.pid,
+        distinctPids: true,
+        durableDigest: second.durableDigest,
+        durableDigestEqual: true,
+        pageMessageCount: second.pageMessageCount,
+        mediaDigest: second.mediaDigest,
+        connectionPresent: second.connectionPresent,
+        identityPresent: second.identityPresent,
+        presenceRestored: second.presenceRestored,
+        explicitEnvironmentAllowlist: true,
+        closeOrder: second.closeOrder,
+      },
+    })}\n`,
+  );
 } finally {
   await rm(consumer, { recursive: true, force: true });
 }
