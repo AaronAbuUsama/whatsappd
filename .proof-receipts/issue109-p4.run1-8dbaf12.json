@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "issue": 109,
+  "scope": "Unattended resume, fresh no-socket classification, and linked pair refusal",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "pairing-proof-run-start",
+    "gitHead": "8dbaf12d39df10e235801fd2829101785a37735d",
+    "sourceTreeHash": "052fde9bb8a1cac2084551f7071394319dd64142",
+    "proofHarnessSha256": "01dfdcd1abb3c7467c6a2be988fd2d747da8cd25b2ce36fcaa63e92791d0a59e",
+    "treeClean": true,
+    "startedAt": "2026-08-07T19:29:54.722Z",
+    "finalizedAt": "2026-08-07T19:30:12.594Z",
+    "command": "pnpm proof:pairing < /dev/null"
+  },
+  "matrix": [
+    {
+      "id": "fresh-needs-pairing-no-socket",
+      "verdict": "observed",
+      "captureSite": "runtime-client-and-diagnostics",
+      "evidence": {
+        "interactive": false,
+        "freshLinkState": "needs_pairing",
+        "observationMs": 10250,
+        "netSocketCount": 0,
+        "tlsSocketCount": 0,
+        "netControlCount": 1,
+        "tlsControlCount": 1
+      }
+    },
+    {
+      "id": "linked-resume-no-challenge",
+      "verdict": "observed",
+      "captureSite": "client-account-observer",
+      "evidence": {
+        "linkMode": "resumed",
+        "resumeMs": 7212,
+        "challengeEventCount": 0,
+        "challengeProduced": false
+      }
+    },
+    {
+      "id": "linked-pair-rejected",
+      "verdict": "observed",
+      "captureSite": "operation-store-and-diagnostics",
+      "evidence": {
+        "pairOperationCount": 0,
+        "secondSocketCount": 0,
+        "sessionStillOnline": true
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "knownValueControlCount": 3,
+    "freeFormFields": 1,
+    "digestFields": 1,
+    "nonEmpty": true,
+    "floorPassed": true
+  }
+}
