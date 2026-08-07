@@ -599,11 +599,21 @@ export function buildClientProofReceipt(
 }
 
 export function writeClientProofReceiptExclusive(
+  root: string,
   file: string,
   receipt: Record<string, unknown>,
 ): void {
+  const formatted = execFileSync(
+    path.join(root, "node_modules", ".bin", "vp"),
+    ["fmt", "--stdin-filepath=.proof-receipts/receipt.json"],
+    {
+      cwd: root,
+      input: `${JSON.stringify(receipt, null, 2)}\n`,
+      encoding: "utf8",
+    },
+  );
   try {
-    writeFileSync(file, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx" });
+    writeFileSync(file, formatted, { flag: "wx" });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       throw new Error(`refusing to overwrite existing receipt ${file}`);
@@ -629,7 +639,7 @@ export function writeClientProofReceipt(
     outDir,
     `issue127-p4.run${runNumber}-${store.runStart.gitHead.slice(0, 7)}.json`,
   );
-  writeClientProofReceiptExclusive(file, receipt);
+  writeClientProofReceiptExclusive(root, file, receipt);
   const written = JSON.parse(readFileSync(file, "utf8")) as unknown;
   const scan = scanClientProofReceipt(written, store.knownValues);
   if (

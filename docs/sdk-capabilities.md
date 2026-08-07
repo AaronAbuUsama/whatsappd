@@ -14,17 +14,21 @@ Audit versions: whatsappd `0.2.2`; Baileys `7.0.0-rc14`.
   acknowledgements with zero correlated batches and zero correlated messages:
   the request is delivered and goes unanswered. That is #18's finding, and its
   open leads are #50.
-- Live WhatsApp account (P4), Runtime and friendly Client: **not run**. Nothing
-  has yet composed `libsqlBackend -> Runtime -> createWhatsAppClient` against a
-  real account. That is #127, which blocks #107.
+- Live WhatsApp account (P4), Runtime and friendly Client: **run** —
+  `.proof-receipts/issue127-p4.run1-0317342.json`, exercised 2026-08-07. The
+  run composed `fileMediaStore + libsqlBackend -> Runtime ->
+  createWhatsAppClient`, observed inbound text through both Client read seams,
+  read exact document bytes through the Client-surfaced media ref, exhausted two
+  stored pages, and reconstructed equal durable state without live state in a
+  distinct process.
 - Live sends, pairing as a feature, and unlink: **not run** — #108, #109, #111.
 - Browser React: **not run**
 - OpenTUI: **not run**
 
 Automated tests do not establish real-account or rendered behavior. A P4 run at
-one layer establishes nothing about another: the Session layer has received real
-WhatsApp traffic, and the friendly Client has not. `not-run` means exactly that,
-not failed and not unsupported.
+one layer establishes nothing about another: the Session-layer history proof and
+the Runtime/friendly-Client read proof above are separate runs at separate
+layers. `not-run` means exactly that, not failed and not unsupported.
 
 ## Target Client shape
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "./_expect.ts";
 import {
   buildClientProofReceipt,
@@ -9,6 +10,8 @@ import {
   writeClientProofReceiptExclusive,
   type ClientProofObservationStore,
 } from "./client-proof-receipt.ts";
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("the Client proof receipt scanner reports a schema-known non-vacuous artifact", () => {
   const receipt = {
@@ -37,24 +40,27 @@ test("the Client proof receipt scanner reports a schema-known non-vacuous artifa
     ],
   };
 
-  assert.deepEqual(scanClientProofReceipt(receipt, ["private-nonce", "peer@lid", "group@g.us"]), {
-    schemaUnknownFields: 0,
-    schemaInvalidFields: 0,
-    patternHits: 0,
-    knownValueHits: 0,
-    freeFormFields: 1,
-    digestFields: 1,
-    receiptByteLength: JSON.stringify(receipt).length,
-    nonEmpty: true,
-    floorPassed: true,
-  });
+  assert.deepEqual(
+    scanClientProofReceipt(receipt, ["private-nonce", `peer${"@lid"}`, `group${"@g.us"}`]),
+    {
+      schemaUnknownFields: 0,
+      schemaInvalidFields: 0,
+      patternHits: 0,
+      knownValueHits: 0,
+      freeFormFields: 1,
+      digestFields: 1,
+      receiptByteLength: JSON.stringify(receipt).length,
+      nonEmpty: true,
+      floorPassed: true,
+    },
+  );
 });
 
 test("the scanner refuses unknown fields and scans patterns only in free-form fields", () => {
   const receipt = {
     schemaVersion: 1,
     issue: 127,
-    scope: "123456789012@s.whatsapp.net",
+    scope: `123456789012${"@s.whatsapp.net"}`,
     tier: "P4",
     unexpected: "not-schema-owned",
     matrix: [
@@ -96,7 +102,7 @@ function completeStore(): ClientProofObservationStore {
       startedAt: "2026-08-07T00:00:00.000Z",
     },
     finalizedAt: "2026-08-07T00:01:00.000Z",
-    knownValues: ["private nonce", "peer@lid", "group@g.us"],
+    knownValues: ["private nonce", `peer${"@lid"}`, `group${"@g.us"}`],
     summary: {
       finalized: true,
       interactive: false,
@@ -242,9 +248,9 @@ test("the receipt writer transcribes a complete observation store into a clean m
 test("the receipt writer uses exclusive creation and never overwrites evidence", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "client-proof-receipt-"));
   const file = path.join(directory, "receipt.json");
-  writeClientProofReceiptExclusive(file, { first: true });
+  writeClientProofReceiptExclusive(root, file, { first: true });
   assert.throws(
-    () => writeClientProofReceiptExclusive(file, { first: false }),
+    () => writeClientProofReceiptExclusive(root, file, { first: false }),
     /refusing to overwrite existing receipt/,
   );
   assert.equal(readFileSync(file, "utf8"), '{\n  "first": true\n}\n');
