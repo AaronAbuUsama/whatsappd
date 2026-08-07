@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { BinaryInput, MessageRef, Outbound, SendOptions } from "../model/outbound.ts";
 import type { Unsubscribe } from "../subscription.ts";
+import { bytesOfBinaryInput } from "./binary-input.ts";
 import type { MediaStore } from "./contracts.ts";
 import type { OperationSession } from "./operation-session.ts";
 
@@ -110,6 +111,7 @@ export interface WhatsAppOperationStore {
   ): Unsubscribe;
   recoverExpired(accountId: string): Promise<number>;
   claimNext(accountId: string, ttlMs: number): Promise<WhatsAppOperation | undefined>;
+  releaseClaim(accountId: string, operationId: string, attemptId: string): Promise<boolean>;
   start(accountId: string, operationId: string, attemptId: string, ttlMs: number): Promise<boolean>;
   succeed(
     accountId: string,
@@ -194,8 +196,12 @@ function normalizedJson(
   if (seen.has(value)) throw new TypeError("operation input must not contain cycles");
   seen.add(value);
   try {
-    if (Array.isArray(value))
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1)
+        if (!Object.hasOwn(value, index))
+          throw new TypeError(`${path} must not contain sparse arrays`);
       return value.map((item, index) => normalizedJson(item, seen, `${path}[${index}]`));
+    }
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
       throw new TypeError("operation input must contain only plain JSON objects");
     return Object.fromEntries(
@@ -239,7 +245,7 @@ export function sameOperationInput(
 
 export function sanitizeOperationError(error: unknown): SerializedOperationError {
   let name = "Error";
-  let message = "operation failed";
+  const message = "operation failed before Session call";
   let code: string | number | undefined;
   const field = (key: "name" | "message" | "code"): unknown => {
     if (typeof error !== "object" || error === null) return undefined;
@@ -249,10 +255,8 @@ export function sanitizeOperationError(error: unknown): SerializedOperationError
     return undefined;
   };
   const candidateName = field("name");
-  const candidateMessage = field("message");
   const candidateCode = field("code");
   if (typeof candidateName === "string" && candidateName) name = candidateName;
-  if (typeof candidateMessage === "string" && candidateMessage) message = candidateMessage;
   if (
     typeof candidateCode === "string" ||
     (typeof candidateCode === "number" && Number.isFinite(candidateCode))
@@ -472,7 +476,19 @@ export function createOperationExecutor(input: {
       }
       while (active && !stopped) {
         const operation = await input.store.claimNext(input.accountId, ttlMs);
-        if (!operation || stopped || !active) break;
+        if (!operation) break;
+        if (stopped || !active) {
+          if (
+            operation.state.status === "claimed" &&
+            !(await input.store.releaseClaim(
+              input.accountId,
+              operation.id,
+              operation.state.attemptId,
+            ))
+          )
+            await input.store.recoverExpired(input.accountId);
+          break;
+        }
         await executeClaimed(input.store, input.media, input.session, operation, ttlMs);
       }
     }
@@ -503,31 +519,6 @@ export function createOperationExecutor(input: {
 
 export const operationId = (): string => crypto.randomUUID();
 
-async function bytesOf(input: BinaryInput): Promise<Uint8Array> {
-  if (Buffer.isBuffer(input)) return Uint8Array.from(input);
-  if ("url" in input) {
-    const response = await fetch(input.url);
-    if (!response.ok) throw new Error(`media URL returned ${response.status}`);
-    return new Uint8Array(await response.arrayBuffer());
-  }
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-  for await (const chunk of input.stream) {
-    if (!(chunk instanceof Uint8Array))
-      throw new TypeError("media stream must yield Uint8Array chunks");
-    const owned = Uint8Array.from(chunk);
-    chunks.push(owned);
-    byteLength += owned.byteLength;
-  }
-  const bytes = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 export type MediaOutbound = Extract<
   Outbound,
   | { readonly image: BinaryInput }
@@ -553,7 +544,7 @@ export async function stageMediaOutbound(input: {
 }): Promise<{ readonly media: DurableMediaInput }> {
   const message = { id: input.operationId, chatId: "operation-media", fromMe: true } as const;
   if ("image" in input.content) {
-    const bytes = await bytesOf(input.content.image);
+    const bytes = await bytesOfBinaryInput(input.content.image);
     const stored = await input.store.put({
       accountId: input.accountId,
       message,
@@ -569,7 +560,7 @@ export async function stageMediaOutbound(input: {
     };
   }
   if ("video" in input.content) {
-    const bytes = await bytesOf(input.content.video);
+    const bytes = await bytesOfBinaryInput(input.content.video);
     const stored = await input.store.put({
       accountId: input.accountId,
       message,
@@ -588,7 +579,7 @@ export async function stageMediaOutbound(input: {
     };
   }
   if ("audio" in input.content) {
-    const bytes = await bytesOf(input.content.audio);
+    const bytes = await bytesOfBinaryInput(input.content.audio);
     const stored = await input.store.put({
       accountId: input.accountId,
       message,
@@ -607,7 +598,7 @@ export async function stageMediaOutbound(input: {
     };
   }
   if ("document" in input.content) {
-    const bytes = await bytesOf(input.content.document);
+    const bytes = await bytesOfBinaryInput(input.content.document);
     const stored = await input.store.put({
       accountId: input.accountId,
       message,
@@ -625,7 +616,7 @@ export async function stageMediaOutbound(input: {
       },
     };
   }
-  const bytes = await bytesOf(input.content.sticker);
+  const bytes = await bytesOfBinaryInput(input.content.sticker);
   const stored = await input.store.put({
     accountId: input.accountId,
     message,

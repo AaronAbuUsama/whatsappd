@@ -22,7 +22,7 @@ import {
   type WhatsAppOperation,
 } from "../src/index.ts";
 import { sanitizeOperationError } from "../src/runtime/operations.ts";
-import { createTestWhatsAppSession } from "../src/testing.ts";
+import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 
 const CHAT = "operation-target@example.invalid";
 const execFileAsync = promisify(execFile);
@@ -342,6 +342,7 @@ test("an already-aborted submission writes no operation", async () => {
       /cancelled/,
     );
     expect(submissions).toBe(0);
+    expect(await backend.operations.list("personal")).toEqual([]);
     expect(driver.commands.sent.length).toBe(0);
   } finally {
     await client.close();
@@ -416,6 +417,64 @@ test("queued work waits until a reconnect reaches online", async () => {
     await until(() => driver.commands.sent.length === 1);
     expect((await client.operations.get(submitted.id))?.state.status).toBe("succeeded");
   } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
+  }
+});
+
+test("a connection pause after claim requeues the exact attempt before reconnect", async () => {
+  const backend = memoryBackend();
+  const claimNext = backend.operations.claimNext.bind(backend.operations);
+  let releaseClaimResult!: () => void;
+  const mayReturnClaim = new Promise<void>((resolve) => {
+    releaseClaimResult = resolve;
+  });
+  let observeClaim!: () => void;
+  const claimed = new Promise<void>((resolve) => {
+    observeClaim = resolve;
+  });
+  backend.operations.claimNext = async (accountId, ttlMs) => {
+    const operation = await claimNext(accountId, ttlMs);
+    if (operation) {
+      observeClaim();
+      await mayReturnClaim;
+    }
+    return operation;
+  };
+  const driver = createTestWhatsAppSession();
+  let status: Status = { phase: "online" };
+  const session: RuntimeSession = {
+    ...driver.session,
+    get status() {
+      return status;
+    },
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+
+  try {
+    const submitted = await client.messages.send.text(CHAT, "pause-after-claim");
+    await withDeadline(claimed);
+    status = { phase: "connecting" };
+    await driver.emit({ type: "connection", status });
+    releaseClaimResult();
+    await until(async () => {
+      const current = await client.operations.get(submitted.id);
+      return current?.state.status === "queued";
+    });
+    expect(driver.commands.sent.length).toBe(0);
+
+    status = { phase: "online" };
+    await driver.emit({ type: "connection", status });
+    await until(() => driver.commands.sent.length === 1);
+    expect((await client.operations.get(submitted.id))?.state.status).toBe("succeeded");
+  } finally {
+    releaseClaimResult();
     await client.close();
     await runtime.stop().catch(() => {});
   }
@@ -518,6 +577,119 @@ test("both operation stores reject numbers JSON cannot preserve without mutation
   }
 });
 
+test("both operation stores reject sparse arrays before persistence", async () => {
+  const lanes = await operationStores();
+  const sparseMentions: string[] = [];
+  sparseMentions.length = 1;
+
+  try {
+    for (const lane of lanes) {
+      const id = `${lane.name}-sparse`;
+      await assert.rejects(
+        lane.store.submit({
+          accountId: "personal",
+          id,
+          idempotencyKey: id,
+          operation: {
+            type: "send",
+            chatId: CHAT,
+            content: { text: "sparse" },
+            options: { mentions: sparseMentions },
+          },
+        }),
+        /sparse arrays/,
+      );
+      expect(await lane.store.get("personal", id)).toBe(undefined);
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+  }
+});
+
+test("both operation stores preserve finite fractional phone-history timestamps", async () => {
+  const lanes = await operationStores();
+  const timestamp = 1_700_000_000_000.5;
+  const anchor = {
+    ref: { id: "fractional", chatId: CHAT, fromMe: false },
+    timestamp,
+  } as const;
+
+  try {
+    for (const lane of lanes) {
+      const id = `${lane.name}-fractional-history`;
+      const operation = await lane.store.submit({
+        accountId: "personal",
+        id,
+        idempotencyKey: id,
+        operation: { type: "phone_history", anchor, count: 50 },
+      });
+      assert.equal(operation.input.type, "phone_history");
+      if (operation.input.type !== "phone_history")
+        assert.fail("expected a phone-history operation");
+      expect(operation.input.anchor.timestamp).toBe(timestamp);
+      expect((await lane.store.get("personal", id))?.input).toEqual(operation.input);
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+  }
+});
+
+test("phone-history rejects non-finite timestamps before either Adapter writes", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-history-validation-"));
+  const lanes = [
+    {
+      name: "memory",
+      backend: memoryBackend(),
+      async close() {},
+    },
+    {
+      name: "libSQL",
+      backend: libsqlBackend({
+        url: `file:${path.join(directory, "whatsapp.db")}`,
+        accountId: "personal",
+        media: memoryMediaStore(),
+      }),
+      async close() {
+        await this.backend.close();
+      },
+    },
+  ] as const;
+
+  try {
+    for (const lane of lanes) {
+      const driver = createTestWhatsAppSession();
+      const runtime = createWhatsAppRuntime({
+        accountId: "personal",
+        backend: lane.backend,
+        openSession: () => driver.session,
+      });
+      await runtime.start();
+      const client = await createWhatsAppClient(runtime);
+      try {
+        for (const timestamp of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+          await assert.rejects(
+            client.messages.requestPhoneHistory(CHAT, {
+              before: {
+                ref: { id: "invalid-timestamp", chatId: CHAT, fromMe: false },
+                timestamp,
+              },
+            }),
+            /timestamp must be finite/,
+          );
+        }
+        expect(await lane.backend.operations.list("personal")).toEqual([]);
+        expect(driver.commands.historyRequests.length).toBe(0);
+      } finally {
+        await client.close();
+        await runtime.stop().catch(() => {});
+      }
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Client idempotency replays normalized input once through libSQL", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-replay-"));
   const url = `file:${path.join(directory, "whatsapp.db")}`;
@@ -565,6 +737,59 @@ test("Client idempotency replays normalized input once through libSQL", async ()
     oracle.close();
     await backend.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a replay makes no second Session call and only an authoritative echo creates a message", async () => {
+  const backend = memoryBackend();
+  const self = "operation-subject@example.invalid";
+  const driver = createTestWhatsAppSession({ identity: { jid: self } });
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const text = "authoritative-only";
+  client.messages.get(CHAT);
+
+  try {
+    const first = await client.messages.send.text(CHAT, text, {
+      idempotencyKey: "recorded-session-replay",
+    });
+    await until(async () => {
+      const operation = await client.operations.get(first.id);
+      return operation?.state.status === "succeeded";
+    });
+    const sendsBeforeReplay = driver.commands.sent.length;
+    expect(sendsBeforeReplay).toBe(1);
+    expect(client.messages.get(CHAT).messages).toEqual([]);
+
+    const replay = await client.messages.send.text(CHAT, text, {
+      idempotencyKey: "recorded-session-replay",
+    });
+    expect(replay.id).toBe(first.id);
+    expect(driver.commands.sent.length).toBe(sendsBeforeReplay);
+    expect(client.messages.get(CHAT).messages).toEqual([]);
+
+    const sent = driver.commands.sent[0];
+    assert.ok(sent);
+    await driver.emit({
+      type: "message",
+      message: textMessage({
+        id: sent.result.id,
+        chatId: CHAT,
+        text,
+        fromMe: true,
+        sender: self,
+      }),
+    });
+    const retained = client.messages.get(CHAT).messages;
+    expect(retained.map((message) => message.messageId)).toEqual([sent.result.id]);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
   }
 });
 
@@ -783,14 +1008,14 @@ test("error sanitization tolerates hostile Error property accessors", () => {
   });
   expect(sanitizeOperationError(error)).toEqual({
     name: "Error",
-    message: "operation failed",
+    message: "operation failed before Session call",
   });
 });
 
 test("error sanitization drops non-finite numeric codes", () => {
   expect(sanitizeOperationError({ name: "Error", message: "safe", code: Number.NaN })).toEqual({
     name: "Error",
-    message: "safe",
+    message: "operation failed before Session call",
   });
 });
 
@@ -824,7 +1049,7 @@ test("a validation fault before the Session call is failed and sanitized", async
     assert.equal(terminal?.state.status, "failed");
     expect(terminal.state.error).toEqual({
       name: "TypeError",
-      message: "send text must not be empty",
+      message: "operation failed before Session call",
     });
     expect(terminal.state.error instanceof Error).toBe(false);
     expect("stack" in terminal.state.error).toBe(false);
@@ -867,7 +1092,7 @@ test("libSQL persists only sanitized pre-execution error fields", async () => {
     const error = JSON.parse(rawError) as Record<string, unknown>;
     expect(error).toEqual({
       name: "TypeError",
-      message: "send text must not be empty",
+      message: "operation failed before Session call",
     });
     expect(Object.keys(error).sort()).toEqual(["message", "name"]);
     expect(driver.commands.sent.length).toBe(0);
@@ -1065,6 +1290,30 @@ test("claimed and executing leases expire asymmetrically in both Adapters", asyn
       expect(await lane.store.claimNext("personal", 100)).toBe(undefined);
       offUncertain();
       expect(uncertainStates).toEqual(["queued", "claimed", "executing", "outcome_unknown"]);
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+  }
+});
+
+test("both operation stores release only the exact claimed attempt", async () => {
+  const lanes = await operationStores();
+  try {
+    for (const lane of lanes) {
+      await submit(lane.store, "release-claim");
+      const claimed = await lane.store.claimNext("personal", 100);
+      assert.equal(claimed?.state.status, "claimed");
+      expect(await lane.store.releaseClaim("personal", "release-claim", "different-attempt")).toBe(
+        false,
+      );
+      expect((await lane.store.get("personal", "release-claim"))?.state.status).toBe("claimed");
+      expect(
+        await lane.store.releaseClaim("personal", "release-claim", claimed.state.attemptId),
+      ).toBe(true);
+      expect((await lane.store.get("personal", "release-claim"))?.state.status).toBe("queued");
+      const replacement = await lane.store.claimNext("personal", 100);
+      assert.equal(replacement?.state.status, "claimed");
+      expect(replacement.state.attemptId === claimed.state.attemptId).toBe(false);
     }
   } finally {
     await Promise.all(lanes.map((lane) => lane.close()));

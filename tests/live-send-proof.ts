@@ -286,10 +286,17 @@ async function parentRun(): Promise<void> {
         return observation.matchingMessages === 1 ? observation : undefined;
       });
 
+      const sendsBeforeReplay = subject.sessionSendInvocations();
       const replay = await guardedClientSender(subject.client).text(target, body, {
         idempotencyKey: REPLAY_LABEL,
       });
       assert.equal(replay.id, first.id, "the replay returned another operation");
+      const sendsAfterReplay = subject.sessionSendInvocations();
+      assert.equal(
+        sendsAfterReplay,
+        sendsBeforeReplay,
+        "the replay invoked the subject Session send site again",
+      );
       await sleep(SETTLE_MS);
       const afterReplay = await peer.snapshot();
       assert.equal(afterReplay.matchingMessages, 1, "the replay delivered another message");
@@ -299,7 +306,7 @@ async function parentRun(): Promise<void> {
         "the peer inbox changed after the idempotent replay",
       );
       const subjectMatches = matchingMessages(subject.client, chatId, bodyHash);
-      assert.equal(subjectMatches.length, 1, "the subject retained duplicate optimistic/echo rows");
+      assert.equal(subjectMatches.length, 1, "the subject retained duplicate authoritative rows");
 
       const operationsForKey = (await subject.backend.operations.list("android")).filter(
         (operation) => operation.idempotencyKey === REPLAY_LABEL,
@@ -348,8 +355,7 @@ async function parentRun(): Promise<void> {
         peerInboxBeforeSend: beforeSend.inboxCount ?? 0,
         peerInboxAfterSend: afterSend.inboxCount ?? 0,
         peerInboxAfterReplay: afterReplay.inboxCount ?? 0,
-        replaySentNothingFurther:
-          afterReplay.matchingMessages === 1 && afterReplay.inboxCount === afterSend.inboxCount,
+        replaySentNothingFurther: sendsAfterReplay === sendsBeforeReplay,
         refusedTargetSha256: sha256(refusedId),
         refusedTargetLength: refusedId.length,
         refusalReason: refusal.reason,

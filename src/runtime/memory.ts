@@ -18,6 +18,7 @@ import {
   normalizeOperationJson,
   notifyOperationListener,
   operationId,
+  sanitizeOperationError,
   sameOperationInput,
   type OperationClock,
   type SerializedOperationError,
@@ -536,6 +537,19 @@ export function memoryOperationStore(
         });
       });
     },
+    releaseClaim(accountId, operationIdValue, attemptId) {
+      return serialize(async () => {
+        const at = await now();
+        return transition(
+          accountId,
+          operationIdValue,
+          attemptId,
+          "claimed",
+          { status: "queued" },
+          at,
+        );
+      });
+    },
     start(accountId, operationIdValue, attemptId, ttlMs) {
       return serialize(async () => {
         const at = await now();
@@ -574,7 +588,9 @@ export function memoryOperationStore(
     },
     fail(accountId, operationIdValue, attemptId, error: SerializedOperationError) {
       return serialize(async () => {
-        const normalized = normalizeOperationJson(error) as SerializedOperationError;
+        const normalized = normalizeOperationJson(
+          sanitizeOperationError(error),
+        ) as SerializedOperationError;
         const at = await now();
         return transition(
           accountId,

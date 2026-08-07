@@ -8,6 +8,7 @@ import {
   OperationIdempotencyConflictError,
   notifyOperationListener,
   operationId,
+  sanitizeOperationError,
   sameOperationInput,
   type DurableOutbound,
   type OperationClock,
@@ -226,7 +227,7 @@ function operationInput(value: unknown): WhatsAppOperationInput {
           type: "phone_history",
           anchor: {
             ref: messageRef(anchor.ref, "phone_history ref"),
-            timestamp: integer(anchor.timestamp, "phone_history timestamp"),
+            timestamp: finiteNumber(anchor.timestamp, "phone_history timestamp"),
           },
           count: integer(input.count, "phone_history count"),
         });
@@ -520,6 +521,18 @@ export function libsqlOperationStore(
       if (claimed) publish(claimed);
       return claimed;
     },
+    releaseClaim(accountId, operationIdValue, attemptId) {
+      return changed(accountId, operationIdValue, async (transaction, at) => {
+        const result = await transaction.execute({
+          sql: `UPDATE wa_operations SET status = 'queued', attempt_id = NULL,
+              lease_expires_at = NULL, updated_at = ?
+            WHERE account_id = ? AND operation_id = ? AND status = 'claimed'
+              AND attempt_id = ? AND lease_expires_at > ?`,
+          args: [at, accountId, operationIdValue, attemptId, at],
+        });
+        return result.rowsAffected;
+      });
+    },
     start(accountId, operationIdValue, attemptId, ttlMs) {
       return changed(accountId, operationIdValue, async (transaction, at) => {
         const result = await transaction.execute({
@@ -547,7 +560,7 @@ export function libsqlOperationStore(
     },
     fail(accountId, operationIdValue, attemptId, error) {
       return changed(accountId, operationIdValue, async (transaction, at) => {
-        const normalized = normalizeOperationJson(error);
+        const normalized = normalizeOperationJson(sanitizeOperationError(error));
         const result = await transaction.execute({
           sql: `UPDATE wa_operations SET status = 'failed', error_json = ?,
               attempt_id = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?

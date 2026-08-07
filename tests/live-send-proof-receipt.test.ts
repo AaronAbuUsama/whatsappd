@@ -58,6 +58,19 @@ test("the live-send receipt is schema-owned, non-vacuous and free of known value
   assert.equal(scan.patternHits, 0);
   assert.equal(scan.knownValueHits, 0);
   assert.equal(scan.floorPassed, true);
+  const sanitization = receipt.sanitization;
+  if (typeof sanitization !== "object" || sanitization === null)
+    assert.fail("receipt sanitization was not an object");
+  for (const [key, value] of Object.entries(scan))
+    assert.equal(
+      Reflect.get(sanitization, key),
+      value,
+      `embedded sanitization metric ${key} did not describe the final receipt`,
+    );
+  assert.equal(
+    Reflect.get(sanitization, "receiptByteLength"),
+    Buffer.byteLength(JSON.stringify(receipt)),
+  );
 
   const unknown = { ...receipt, unexpected: "not-schema-owned" };
   assert.equal(scanLiveSendProofReceipt(unknown, store.knownValues).schemaUnknownFields, 1);

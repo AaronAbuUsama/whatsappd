@@ -376,6 +376,16 @@ provable only if the substrate changes.
   claim the packed Client is allowlist-aware; it records why no equivalent
   package barrier is correct, and what prevents mission code from routing
   around the harness barrier.
+- **#108 has no optimistic Client message record to reconcile.** A durable send
+  creates an operation and calls the Session once; retained messages change
+  only when an authoritative projection event arrives. The live #108 run
+  observed one authoritative echo, not an optimistic record followed by
+  reconciliation, so that optimistic-reconciliation claim is withdrawn rather
+  than inferred from the absence of duplicates. The deterministic
+  recorded-Session proof now asserts zero retained messages before an explicit
+  echo and exactly one after it. `MSG-ACT-08` remains `not-implemented` in
+  `docs/sdk-capabilities.md`; a later message-action design may add optimistic
+  state and a real reconciliation identity.
 - **`account.get()` returns a fresh view per read.** It derives from the clock,
   so it cannot be memoized against a transition. A referentially-stable snapshot
   is what `useSyncExternalStore` needs, and ADR-0023 assigns selectors and hooks

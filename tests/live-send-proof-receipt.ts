@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   receiptField as field,
   scanSchemaDrivenReceipt,
@@ -209,16 +210,21 @@ export function buildLiveSendProofReceipt(input: LiveSendProofObservationStore):
   readonly scan: ReceiptScanReport;
 } {
   const withoutScan = receiptFor(input.runStart, input.finalizedAt, input.summary);
-  const firstScan = scanLiveSendProofReceipt(withoutScan, input.knownValues);
-  const receipt = {
-    ...withoutScan,
-    sanitization: {
-      captureSite: "receipt-writer-in-memory",
-      ...firstScan,
-      knownValueControlCount: input.knownValues.length,
-    },
-  };
-  return { receipt, scan: scanLiveSendProofReceipt(receipt, input.knownValues) };
+  let embedded = scanLiveSendProofReceipt(withoutScan, input.knownValues);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const receipt = {
+      ...withoutScan,
+      sanitization: {
+        captureSite: "receipt-writer-in-memory",
+        ...embedded,
+        knownValueControlCount: input.knownValues.length,
+      },
+    };
+    const scan = scanLiveSendProofReceipt(receipt, input.knownValues);
+    if (isDeepStrictEqual(embedded, scan)) return { receipt, scan };
+    embedded = scan;
+  }
+  throw new Error("receipt sanitization metrics did not converge on the final object");
 }
 
 export function writeLiveSendProofReceipt(

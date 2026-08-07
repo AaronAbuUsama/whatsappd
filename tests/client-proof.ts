@@ -92,6 +92,7 @@ export interface OpenProfile {
   readonly media: MediaStore;
   readonly runtime: WhatsAppRuntime;
   readonly session: WhatsAppSession;
+  readonly sessionSendInvocations: () => number;
   readonly link: LinkSummary;
   readonly identity: string;
   readonly replaceClient: () => Promise<WhatsAppClient>;
@@ -141,14 +142,26 @@ export async function openProfile(profile: "android" | "ios"): Promise<OpenProfi
   });
   const link = createLinkObservation();
   let liveSession: WhatsAppSession | undefined;
+  let sessionSendInvocations = 0;
   const runtime = createWhatsAppRuntime({
     accountId: profile,
     backend,
     openSession(credentials: CredentialStore) {
       const session = createSession({ store: credentials, auth: qrAuth() });
       session.subscribe({ connection: link.observe });
-      liveSession = session;
-      return session;
+      const send = session.send.bind(session);
+      liveSession = new Proxy(session, {
+        get(target, property, receiver) {
+          if (property === "send")
+            return async (...args: Parameters<WhatsAppSession["send"]>) => {
+              sessionSendInvocations += 1;
+              return send(...args);
+            };
+          const value = Reflect.get(target, property, receiver) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      return liveSession;
     },
   });
 
@@ -176,6 +189,7 @@ export async function openProfile(profile: "android" | "ios"): Promise<OpenProfi
       media,
       runtime,
       session: liveSession,
+      sessionSendInvocations: () => sessionSendInvocations,
       link: link.summary(),
       identity,
       async replaceClient() {

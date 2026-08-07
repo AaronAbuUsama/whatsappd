@@ -125,6 +125,8 @@ export function createClientMessageActions(source: ClientRuntimeSource) {
       if (!chatId) throw new TypeError("phone history chatId must not be empty");
       if (request.before.ref.chatId !== chatId)
         throw new TypeError("phone history anchor must belong to chatId");
+      if (!Number.isFinite(request.before.timestamp))
+        throw new TypeError("phone history timestamp must be finite");
       const count = request.count ?? 50;
       if (!Number.isInteger(count) || count < 1 || count > 50)
         throw new RangeError(`count must be an integer in 1..50, got ${count}`);

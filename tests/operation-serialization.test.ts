@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -67,6 +68,7 @@ function jsonViolations(value: unknown, path = "$"): string[] {
 }
 
 function markerOccurrences(haystack: Uint8Array, marker: Uint8Array): number {
+  const bytes = Buffer.from(haystack);
   const encodings = [
     Buffer.from(marker),
     Buffer.from(Buffer.from(marker).toString("base64")),
@@ -74,13 +76,11 @@ function markerOccurrences(haystack: Uint8Array, marker: Uint8Array): number {
   ];
   let occurrences = 0;
   for (const needle of encodings) {
-    for (let offset = 0; offset <= haystack.byteLength - needle.byteLength; offset += 1)
-      if (
-        Buffer.from(haystack)
-          .subarray(offset, offset + needle.byteLength)
-          .equals(needle)
-      )
-        occurrences += 1;
+    let offset = 0;
+    while ((offset = bytes.indexOf(needle, offset)) !== -1) {
+      occurrences += 1;
+      offset += needle.byteLength;
+    }
   }
   return occurrences;
 }
@@ -180,8 +180,89 @@ test("a streamed document is staged once and executed from its opaque media ref"
   }
 });
 
+test("durable URL staging preserves local-file, data-URL, and HTTP BinaryInput forms", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-url-media-"));
+  const localBytes = Buffer.from("local file media");
+  const dataBytes = Buffer.from("data URL media");
+  const httpBytes = Buffer.from("HTTP media");
+  const localFile = path.join(directory, "local.bin");
+  await writeFile(localFile, localBytes);
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/octet-stream" });
+    response.end(httpBytes);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") assert.fail("HTTP media server has no port");
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const cases = [
+    { name: "local", bytes: localBytes, input: { url: localFile } },
+    {
+      name: "data",
+      bytes: dataBytes,
+      input: {
+        url: `data:application/octet-stream;base64,${dataBytes.toString("base64")}`,
+      },
+    },
+    {
+      name: "http",
+      bytes: httpBytes,
+      input: { url: `http://127.0.0.1:${address.port}/media.bin` },
+    },
+  ] as const;
+
+  try {
+    for (const example of cases) {
+      const operation = await client.messages.send.media(
+        CHAT,
+        {
+          document: example.input,
+          fileName: `${example.name}.bin`,
+          mimetype: "application/octet-stream",
+        },
+        { idempotencyKey: `url-${example.name}` },
+      );
+      await until(async () => {
+        const current = await client.operations.get(operation.id);
+        return current?.state.status === "succeeded";
+      });
+    }
+
+    assert.equal(driver.commands.sent.length, cases.length);
+    for (const [index, example] of cases.entries()) {
+      const content = driver.commands.sent[index]?.content;
+      if (!content || !("document" in content)) assert.fail("expected a document send");
+      assert.equal(sha256(content.document as Buffer), sha256(example.bytes));
+    }
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("an already-aborted media send neither drains nor submits", async () => {
   const backend = memoryBackend();
+  const put = backend.media.put.bind(backend.media);
+  let stagedObjects = 0;
+  backend.media.put = async (input) => {
+    stagedObjects += 1;
+    return put(input);
+  };
   const submit = backend.operations.submit.bind(backend.operations);
   let submissions = 0;
   backend.operations.submit = async (input) => {
@@ -221,11 +302,121 @@ test("an already-aborted media send neither drains nor submits", async () => {
       /cancelled before staging/,
     );
     assert.equal(iterations, 0);
+    assert.equal(stagedObjects, 0);
     assert.equal(submissions, 0);
+    assert.deepEqual(await backend.operations.list("personal"), []);
     assert.equal(driver.commands.sent.length, 0);
   } finally {
     await client.close();
     await runtime.stop().catch(() => {});
+  }
+});
+
+test("both operation Adapters redact a planted pre-Session error message", async () => {
+  const secretMarker = randomBytes(32);
+  const secretMessage = `https://example.invalid/media?token=${secretMarker.toString("base64")}`;
+  assert.ok(markerOccurrences(Buffer.from(secretMessage), secretMarker) > 0);
+  const lanes = await serializationStores();
+
+  try {
+    for (const lane of lanes) {
+      const operationId = `${lane.name}-secret-error`;
+      await lane.store.submit({
+        accountId: "personal",
+        id: operationId,
+        idempotencyKey: operationId,
+        operation: { type: "typing", chatId: CHAT, on: true },
+      });
+      const claimed = await lane.store.claimNext("personal", 100);
+      assert.equal(claimed?.state.status, "claimed");
+      await lane.store.fail("personal", operationId, claimed.state.attemptId, {
+        name: "AdapterReadError",
+        message: secretMessage,
+        code: "MEDIA_READ_FAILED",
+      });
+
+      const durable = await lane.store.get("personal", operationId);
+      assert.equal(durable?.state.status, "failed");
+      if (durable?.state.status !== "failed") assert.fail("expected a failed operation");
+      assert.deepEqual(durable.state.error, {
+        name: "AdapterReadError",
+        message: "operation failed before Session call",
+        code: "MEDIA_READ_FAILED",
+      });
+      assert.equal(markerOccurrences(Buffer.from(JSON.stringify(durable)), secretMarker), 0);
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+  }
+});
+
+test("a secret-bearing Media Store error is redacted from the complete durable row", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-error-redaction-"));
+  const url = `file:${path.join(directory, "whatsapp.db")}`;
+  const media = memoryMediaStore();
+  const secretMarker = randomBytes(32);
+  const secretMessage = `/private/profile/${secretMarker.toString("base64")}/media.bin`;
+  assert.ok(markerOccurrences(Buffer.from(secretMessage), secretMarker) > 0);
+  const backend = libsqlBackend({
+    url,
+    accountId: "personal",
+    media: {
+      put: (input) => media.put(input),
+      async read() {
+        throw Object.assign(new Error(secretMessage), {
+          name: "ThirdPartyMediaError",
+          code: "MEDIA_READ_FAILED",
+        });
+      },
+    },
+  });
+  const oracle = createClient({ url });
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+
+  try {
+    const submitted = await client.messages.send.media(
+      CHAT,
+      {
+        document: Buffer.from("staged before adapter failure"),
+        fileName: "failure.bin",
+        mimetype: "application/octet-stream",
+      },
+      { idempotencyKey: "secret-adapter-error" },
+    );
+    await until(async () => {
+      const current = await client.operations.get(submitted.id);
+      return current?.state.status === "failed";
+    });
+    const failed = await client.operations.get(submitted.id);
+    assert.equal(failed?.state.status, "failed");
+    if (failed?.state.status !== "failed") assert.fail("expected a failed operation");
+    assert.deepEqual(failed.state.error, {
+      name: "ThirdPartyMediaError",
+      message: "operation failed before Session call",
+      code: "MEDIA_READ_FAILED",
+    });
+    assert.equal(driver.commands.sent.length, 0);
+
+    const rows = await oracle.execute({
+      sql: "SELECT * FROM wa_operations WHERE account_id = ? AND operation_id = ?",
+      args: ["personal", submitted.id],
+    });
+    const completeDurableRow = Buffer.from(JSON.stringify(rows.rows));
+    assert.ok(completeDurableRow.byteLength > 0);
+    assert.equal(markerOccurrences(completeDurableRow, secretMarker), 0);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
+    oracle.close();
+    await backend.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -285,15 +476,22 @@ test("both operation Adapters refuse secret keys and byte-valued results", async
       });
       const errorClaim = await lane.store.claimNext("personal", 100);
       assert.equal(errorClaim?.state.status, "claimed");
-      await assert.rejects(
-        lane.store.fail("personal", errorId, errorClaim.state.attemptId, {
+      assert.equal(
+        await lane.store.fail("personal", errorId, errorClaim.state.attemptId, {
           name: "Error",
           message: "safe",
           stack: "must not persist",
         } as never),
-        /forbidden key stack/,
+        true,
       );
-      assert.equal((await lane.store.get("personal", errorId))?.state.status, "claimed");
+      const failed = await lane.store.get("personal", errorId);
+      assert.equal(failed?.state.status, "failed");
+      if (failed?.state.status !== "failed") assert.fail("expected a failed operation");
+      assert.deepEqual(failed.state.error, {
+        name: "Error",
+        message: "operation failed before Session call",
+      });
+      assert.equal("stack" in failed.state.error, false);
     }
   } finally {
     await Promise.all(lanes.map((lane) => lane.close()));
@@ -302,7 +500,8 @@ test("both operation Adapters refuse secret keys and byte-valued results", async
 
 test("operation JSON stays structural and excludes media and credential canaries", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-canary-"));
-  const url = `file:${path.join(directory, "whatsapp.db")}`;
+  const databasePath = path.join(directory, "whatsapp.db");
+  const url = `file:${databasePath}`;
   const mediaDirectory = path.join(directory, "media");
   const media = fileMediaStore({ directory: mediaDirectory });
   const backend = libsqlBackend({
@@ -314,6 +513,7 @@ test("operation JSON stays structural and excludes media and credential canaries
   const oracle = createClient({ url });
   const mediaMarker = randomBytes(32);
   const credentialMarker = randomBytes(32);
+  const errorMarker = randomBytes(32);
   const stored = await media.put({
     accountId: "personal",
     message: { id: "canary-media", chatId: CHAT, fromMe: true },
@@ -410,7 +610,7 @@ test("operation JSON stays structural and excludes media and credential canaries
     assert.equal(failed?.state.status, "claimed");
     await backend.operations.fail("personal", failed.id, failed.state.attemptId, {
       name: "TypeError",
-      message: "safe",
+      message: `adapter failure ${errorMarker.toString("base64")}`,
       code: "SAFE",
     });
 
@@ -443,9 +643,7 @@ test("operation JSON stays structural and excludes media and credential canaries
       assert.deepEqual(jsonViolations(JSON.parse(JSON.stringify(operation))), []);
     }
 
-    const rows = await oracle.execute(
-      "SELECT input_json, result_json, error_json FROM wa_operations ORDER BY operation_id",
-    );
+    const rows = await oracle.execute("SELECT * FROM wa_operations ORDER BY operation_id");
     const rawOperationJson = Buffer.from(
       rows.rows
         .flatMap((row) => [row.input_json, row.result_json, row.error_json])
@@ -456,8 +654,13 @@ test("operation JSON stays structural and excludes media and credential canaries
       for (const column of [row.input_json, row.result_json, row.error_json])
         if (typeof column === "string") assert.deepEqual(jsonViolations(JSON.parse(column)), []);
 
+    const completeOperationRows = Buffer.from(JSON.stringify(rows.rows));
     assert.equal(markerOccurrences(rawOperationJson, mediaMarker), 0);
     assert.equal(markerOccurrences(rawOperationJson, credentialMarker), 0);
+    assert.equal(markerOccurrences(rawOperationJson, errorMarker), 0);
+    assert.equal(markerOccurrences(completeOperationRows, mediaMarker), 0);
+    assert.equal(markerOccurrences(completeOperationRows, credentialMarker), 0);
+    assert.equal(markerOccurrences(completeOperationRows, errorMarker), 0);
 
     const mediaFiles = await readdir(path.join(mediaDirectory, ".whatsappd-media"), {
       recursive: true,
@@ -480,6 +683,15 @@ test("operation JSON stays structural and excludes media and credential canaries
     const authBytes = Buffer.from(authValue);
     assert.ok(markerOccurrences(authBytes, credentialMarker) > 0);
 
+    const databaseBytes = await readFile(databasePath);
+    const walBytes = await readFile(`${databasePath}-wal`);
+    assert.ok(databaseBytes.byteLength > 0);
+    assert.ok(walBytes.byteLength > 0);
+    const sqlitePersistence = Buffer.concat([databaseBytes, walBytes]);
+    assert.equal(markerOccurrences(sqlitePersistence, mediaMarker), 0);
+    assert.equal(markerOccurrences(sqlitePersistence, errorMarker), 0);
+    assert.ok(markerOccurrences(sqlitePersistence, credentialMarker) > 0);
+
     assert.equal(
       jsonViolations({
         stack: true,
@@ -498,6 +710,7 @@ test("operation JSON stays structural and excludes media and credential canaries
     assert.ok(
       markerOccurrences(Buffer.from(credentialMarker.toString("base64")), credentialMarker) > 0,
     );
+    assert.ok(markerOccurrences(Buffer.from(errorMarker.toString("base64")), errorMarker) > 0);
   } finally {
     oracle.close();
     await backend.close();
