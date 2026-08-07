@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "issue": 108,
+  "scope": "durable-live-send",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "live-send-proof-run-start",
+    "gitHead": "591a1c32b94df336e2e17fea4d4d882c7a1605e8",
+    "sourceTreeHash": "14be59a837cb94e47a363316b3ab015d98d76376",
+    "treeClean": true,
+    "startedAt": "2026-08-07T16:07:43.579Z",
+    "finalizedAt": "2026-08-07T16:08:09.090Z",
+    "command": "pnpm proof:live-send < /dev/null"
+  },
+  "matrix": [
+    {
+      "id": "real-account-durable-send-once",
+      "verdict": "observed",
+      "captureSite": "android-client-operation-and-retained-messages",
+      "evidence": {
+        "subjectLinkMode": "resumed",
+        "peerLinkMode": "resumed",
+        "targetKind": "allowlisted-group",
+        "bodySha256": "4c0fad6f830755395830963b03f04d67295e5d17916ca52c51452578f5af9081",
+        "bodyLength": 52,
+        "replayLabelSha256": "4db0f391e022b0ced615c3d31790f69acb1ed9213332ec4dd2b2f7ccd33de245",
+        "replayLabelLength": 26,
+        "operationIdSha256": "e65a4ec4dfca0cb35ab8b16778a58db4792d64f69b6644e5d6fb389e6458930e",
+        "operationIdLength": 36,
+        "statusTimeline": ["queued", "claimed", "executing", "succeeded"],
+        "operationCountForKey": 1,
+        "replayReturnedSameOperation": true,
+        "messageRefPresent": true,
+        "messageRefIdSha256": "a8767ed01d1a9864b384c6106e0da008188d397994504eebfe950e018af00fab",
+        "messageRefIdLength": 22,
+        "messageRefFromMe": true,
+        "subjectMatchingMessages": 1,
+        "subjectMessageRefMatches": true,
+        "peerMatchingMessages": 1,
+        "peerInboxBeforeSend": 0,
+        "peerInboxAfterSend": 1,
+        "peerInboxAfterReplay": 1,
+        "replaySentNothingFurther": true
+      }
+    },
+    {
+      "id": "allowlist-fails-closed-after-live-send",
+      "verdict": "observed",
+      "captureSite": "ios-peer-client-live-inbox",
+      "evidence": {
+        "targetSha256": "e4e467661f711ca71a8c0a62220288b3666d67623e9a5542ecdb3c37e7f139e0",
+        "targetLength": 34,
+        "refusalReason": "target_not_allowlisted",
+        "peerInboxBeforeRefusal": 1,
+        "peerInboxAfterRefusal": 1,
+        "peerInboxUnchanged": true
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "freeFormFields": 1,
+    "digestFields": 5,
+    "receiptByteLength": 1750,
+    "nonEmpty": true,
+    "floorPassed": true,
+    "knownValueControlCount": 8
+  }
+}
