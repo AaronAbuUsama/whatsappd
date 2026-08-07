@@ -24,14 +24,20 @@ const RECEIPT_SCHEMA = new Map<string, FieldSchema>([
   ["/schemaVersion", field("count")],
   ["/issue", field("count")],
   ["/scope", field("free_form")],
-  ["/tier", field("enum", ["P4"])],
-  ["/provenance/captureSite", field("enum", ["client-proof-run-start"])],
+  ["/tier", field("enum", ["P1", "P4"])],
+  [
+    "/provenance/captureSite",
+    field("enum", ["client-proof-run-start", "client-proof-guard-run-start"]),
+  ],
   ["/provenance/gitHead", field("git_sha")],
   ["/provenance/sourceTreeHash", field("hash")],
   ["/provenance/treeClean", field("boolean")],
   ["/provenance/startedAt", field("iso8601")],
   ["/provenance/finalizedAt", field("iso8601")],
-  ["/provenance/command", field("enum", ["pnpm proof:client < /dev/null"])],
+  [
+    "/provenance/command",
+    field("enum", ["pnpm proof:client < /dev/null", "pnpm proof:client:guard"]),
+  ],
   [
     "/matrix/*/id",
     field("enum", [
@@ -45,6 +51,7 @@ const RECEIPT_SCHEMA = new Map<string, FieldSchema>([
       "page-boundary",
       "cold-process",
       "cold-no-live-state",
+      "allowlist-unlisted-target-refused",
     ]),
   ],
   ["/matrix/*/verdict", field("enum", ["observed", "not_observed", "failed"])],
@@ -62,6 +69,7 @@ const RECEIPT_SCHEMA = new Map<string, FieldSchema>([
       "client-pages-then-store-oracle",
       "replacement-child-result",
       "replacement-client-factory",
+      "recorded-session-command-log",
     ]),
   ],
   [
@@ -127,6 +135,10 @@ const RECEIPT_SCHEMA = new Map<string, FieldSchema>([
   ["/matrix/*/evidence/presenceObservationsRestored", field("count")],
   ["/matrix/*/evidence/lastConnectedAtPresent", field("boolean")],
   ["/matrix/*/evidence/lastDisconnectedAtPresent", field("boolean")],
+  ["/matrix/*/evidence/targetSha256", field("digest")],
+  ["/matrix/*/evidence/targetLength", field("length")],
+  ["/matrix/*/evidence/refusalReason", field("enum", ["target_not_allowlisted"])],
+  ["/matrix/*/evidence/sessionSendInvocations", field("count")],
   ["/sanitization/captureSite", field("enum", ["receipt-writer-in-memory"])],
   ["/sanitization/schemaUnknownFields", field("count")],
   ["/sanitization/schemaInvalidFields", field("count")],
@@ -273,6 +285,14 @@ export interface ClientProofRunStart {
   readonly startedAt: string;
 }
 
+export interface ClientGuardProofRunStart {
+  readonly captureSite: "client-proof-guard-run-start";
+  readonly gitHead: string;
+  readonly sourceTreeHash: string;
+  readonly treeClean: boolean;
+  readonly startedAt: string;
+}
+
 export interface ClientProofSummary {
   readonly finalized: true;
   readonly interactive: false;
@@ -351,6 +371,18 @@ export interface ClientProofObservationStore {
   readonly knownValues: readonly string[];
 }
 
+export interface ClientGuardProofObservationStore {
+  readonly runStart: ClientGuardProofRunStart;
+  readonly finalizedAt?: string;
+  readonly knownValues: readonly string[];
+  readonly guard?: {
+    readonly targetSha256: string;
+    readonly targetLength: number;
+    readonly refusalReason: "target_not_allowlisted" | "allowlist_file_absent";
+    readonly sessionSendInvocations: number;
+  };
+}
+
 export interface CurrentRepoState {
   readonly gitHead: string;
   readonly treeClean: boolean;
@@ -365,6 +397,16 @@ export function captureClientProofRunStart(root: string): ClientProofRunStart {
     captureSite: "client-proof-run-start",
     gitHead: git(root, ["rev-parse", "HEAD"]),
     sourceTreeHash: git(root, ["rev-parse", "HEAD:src"]),
+    treeClean: git(root, ["status", "--porcelain"]).length === 0,
+    startedAt: new Date().toISOString(),
+  };
+}
+
+export function captureClientGuardProofRunStart(root: string): ClientGuardProofRunStart {
+  return {
+    captureSite: "client-proof-guard-run-start",
+    gitHead: git(root, ["rev-parse", "HEAD"]),
+    sourceTreeHash: git(root, ["rev-parse", "HEAD^{tree}"]),
     treeClean: git(root, ["status", "--porcelain"]).length === 0,
     startedAt: new Date().toISOString(),
   };
@@ -554,42 +596,53 @@ export function buildClientProofReceipt(
   store: ClientProofObservationStore,
   current: CurrentRepoState,
 ): Record<string, unknown> {
+  return sanitizedReceipt(baseReceipt(store, current), store.knownValues);
+}
+
+function validateKnownValues(knownValues: readonly string[]): void {
   if (
-    store.knownValues.length < 3 ||
-    store.knownValues.some((value) => value.length === 0) ||
-    new Set(store.knownValues).size !== store.knownValues.length
+    knownValues.length < 3 ||
+    knownValues.some((value) => value.length === 0) ||
+    new Set(knownValues).size !== knownValues.length
   ) {
     throw new Error("refusing receipt: known-value negative control is incomplete");
   }
+}
+
+function sanitizedReceipt(
+  base: Record<string, unknown>,
+  knownValues: readonly string[],
+): Record<string, unknown> {
+  validateKnownValues(knownValues);
   const receipt = {
-    ...baseReceipt(store, current),
+    ...base,
     sanitization: {
       captureSite: "receipt-writer-in-memory",
       schemaUnknownFields: 0,
       schemaInvalidFields: 0,
       patternHits: 0,
       knownValueHits: 0,
-      knownValueControlCount: store.knownValues.length,
+      knownValueControlCount: knownValues.length,
       freeFormFields: 0,
       digestFields: 0,
       nonEmpty: true,
       floorPassed: true,
     },
   };
-  const firstScan = scanClientProofReceipt(receipt, store.knownValues);
+  const firstScan = scanClientProofReceipt(receipt, knownValues);
   receipt.sanitization = {
     captureSite: "receipt-writer-in-memory",
     schemaUnknownFields: firstScan.schemaUnknownFields,
     schemaInvalidFields: firstScan.schemaInvalidFields,
     patternHits: firstScan.patternHits,
     knownValueHits: firstScan.knownValueHits,
-    knownValueControlCount: store.knownValues.length,
+    knownValueControlCount: knownValues.length,
     freeFormFields: firstScan.freeFormFields,
     digestFields: firstScan.digestFields,
     nonEmpty: firstScan.nonEmpty,
     floorPassed: firstScan.floorPassed,
   };
-  const finalScan = scanClientProofReceipt(receipt, store.knownValues);
+  const finalScan = scanClientProofReceipt(receipt, knownValues);
   if (
     finalScan.schemaUnknownFields !== 0 ||
     finalScan.schemaInvalidFields !== 0 ||
@@ -600,6 +653,50 @@ export function buildClientProofReceipt(
     throw new Error(`refusing unsanitized receipt: ${JSON.stringify(finalScan)}`);
   }
   return receipt;
+}
+
+export function buildClientGuardProofReceipt(
+  store: ClientGuardProofObservationStore,
+  current: CurrentRepoState,
+): Record<string, unknown> {
+  if (!store.runStart.treeClean || !current.treeClean) {
+    throw new Error("refusing receipt: the run or current worktree is dirty");
+  }
+  if (store.runStart.gitHead !== current.gitHead) {
+    throw new Error("refusing receipt: current head does not match the captured run head");
+  }
+  if (!store.finalizedAt) {
+    throw new Error("refusing receipt: the run is not finalized");
+  }
+  if (
+    store.guard?.refusalReason !== "target_not_allowlisted" ||
+    store.guard.sessionSendInvocations !== 0 ||
+    store.guard.targetLength === 0
+  ) {
+    throw new Error("refusing receipt: guard observation is incomplete");
+  }
+  return sanitizedReceipt(
+    {
+      schemaVersion: 1,
+      issue: 127,
+      scope: "Allowlist guard refusal verification with a recorded Session",
+      tier: "P1",
+      provenance: {
+        ...store.runStart,
+        finalizedAt: store.finalizedAt,
+        command: "pnpm proof:client:guard",
+      },
+      matrix: [
+        {
+          id: "allowlist-unlisted-target-refused",
+          verdict: "observed",
+          captureSite: "recorded-session-command-log",
+          evidence: store.guard,
+        },
+      ],
+    },
+    store.knownValues,
+  );
 }
 
 export function writeClientProofReceiptExclusive(
@@ -642,6 +739,38 @@ export function writeClientProofReceipt(
   const file = path.join(
     outDir,
     `issue127-p4.run${runNumber}-${store.runStart.gitHead.slice(0, 7)}.json`,
+  );
+  writeClientProofReceiptExclusive(root, file, receipt);
+  const written = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  const scan = scanClientProofReceipt(written, store.knownValues);
+  if (
+    scan.schemaUnknownFields !== 0 ||
+    scan.schemaInvalidFields !== 0 ||
+    scan.patternHits !== 0 ||
+    scan.knownValueHits !== 0 ||
+    !scan.floorPassed
+  ) {
+    throw new Error(`written receipt failed sanitization: ${JSON.stringify(scan)}`);
+  }
+  return { file, scan };
+}
+
+export function writeClientGuardProofReceipt(
+  root: string,
+  store: ClientGuardProofObservationStore,
+): { readonly file: string; readonly scan: ReceiptScanReport } {
+  const current = {
+    gitHead: git(root, ["rev-parse", "HEAD"]),
+    treeClean: git(root, ["status", "--porcelain"]).length === 0,
+  };
+  const receipt = buildClientGuardProofReceipt(store, current);
+  const outDir = path.join(root, ".proof-receipts");
+  mkdirSync(outDir, { recursive: true });
+  const runNumber =
+    1 + readdirSync(outDir).filter((name) => name.startsWith("issue127-p1.run")).length;
+  const file = path.join(
+    outDir,
+    `issue127-p1.run${runNumber}-${store.runStart.gitHead.slice(0, 7)}.json`,
   );
   writeClientProofReceiptExclusive(root, file, receipt);
   const written = JSON.parse(readFileSync(file, "utf8")) as unknown;

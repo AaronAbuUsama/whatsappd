@@ -5,9 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "./_expect.ts";
 import {
+  buildClientGuardProofReceipt,
   buildClientProofReceipt,
   scanClientProofReceipt,
   writeClientProofReceiptExclusive,
+  type ClientGuardProofObservationStore,
   type ClientProofObservationStore,
 } from "./client-proof-receipt.ts";
 
@@ -60,7 +62,7 @@ test("the scanner refuses unknown fields and scans patterns only in free-form fi
   const receipt = {
     schemaVersion: 1,
     issue: 127,
-    scope: `123456789012${"@s.whatsapp.net"}`,
+    scope: "123456789012@s.whatsapp.net",
     tier: "P4",
     unexpected: "not-schema-owned",
     matrix: [
@@ -280,4 +282,90 @@ test("the receipt writer uses exclusive creation and never overwrites evidence",
     /refusing to overwrite existing receipt/,
   );
   assert.equal(readFileSync(file, "utf8"), '{\n  "first": true\n}\n');
+});
+
+function completeGuardStore(): ClientGuardProofObservationStore {
+  return {
+    runStart: {
+      captureSite: "client-proof-guard-run-start",
+      gitHead: "f07af9827087d07462dc47203fba198052d4cef0",
+      sourceTreeHash: "1".repeat(40),
+      treeClean: true,
+      startedAt: "2026-08-07T07:00:00.000Z",
+    },
+    finalizedAt: "2026-08-07T07:00:01.000Z",
+    knownValues: [
+      "generated-target-held-in-memory",
+      "generated-scan-canary-held-in-memory",
+      "generated-control-held-in-memory",
+    ],
+    guard: {
+      targetSha256: "c".repeat(64),
+      targetLength: 28,
+      refusalReason: "target_not_allowlisted",
+      sessionSendInvocations: 0,
+    },
+  };
+}
+
+test("the guard receipt records a refusal before any recorded Session send without recording the target", () => {
+  const store = completeGuardStore();
+  const receipt = buildClientGuardProofReceipt(store, {
+    gitHead: store.runStart.gitHead,
+    treeClean: true,
+  });
+  const serialized = JSON.stringify(receipt);
+
+  assert.deepEqual(receipt.matrix, [
+    {
+      id: "allowlist-unlisted-target-refused",
+      verdict: "observed",
+      captureSite: "recorded-session-command-log",
+      evidence: store.guard,
+    },
+  ]);
+  assert.equal(serialized.includes(store.knownValues[0]!), false);
+  assert.deepEqual(scanClientProofReceipt(receipt, store.knownValues), {
+    schemaUnknownFields: 0,
+    schemaInvalidFields: 0,
+    patternHits: 0,
+    knownValueHits: 0,
+    freeFormFields: 1,
+    digestFields: 1,
+    receiptByteLength: serialized.length,
+    nonEmpty: true,
+    floorPassed: true,
+  });
+});
+
+test("the guard receipt refuses a send invocation, a different refusal, or dishonest provenance", () => {
+  const store = completeGuardStore();
+  const current = { gitHead: store.runStart.gitHead, treeClean: true };
+
+  assert.throws(
+    () =>
+      buildClientGuardProofReceipt(
+        {
+          ...store,
+          guard: { ...store.guard!, sessionSendInvocations: 1 },
+        },
+        current,
+      ),
+    /guard observation is incomplete/,
+  );
+  assert.throws(
+    () =>
+      buildClientGuardProofReceipt(
+        {
+          ...store,
+          guard: { ...store.guard!, refusalReason: "allowlist_file_absent" },
+        },
+        current,
+      ),
+    /guard observation is incomplete/,
+  );
+  assert.throws(
+    () => buildClientGuardProofReceipt(store, { gitHead: "f".repeat(40), treeClean: true }),
+    /current head does not match/,
+  );
 });
