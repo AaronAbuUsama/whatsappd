@@ -20,7 +20,6 @@
  * @packageDocumentation
  */
 import type { PresenceKind } from "../model/presence.ts";
-import type { SendOptions } from "../model/outbound.ts";
 import type { Status, WaIdentity } from "../model/status.ts";
 import type { Unsubscribe } from "../subscription.ts";
 import type {
@@ -43,7 +42,9 @@ import {
   type ClientClaim,
   type WhatsAppRuntime,
 } from "./runtime.ts";
-import { awaitOperationSubmission, operationId, type WhatsAppOperation } from "./operations.ts";
+import { type MediaOutbound, type WhatsAppOperation } from "./operations.ts";
+import { createClientSend, type ClientSendOptions } from "./client-operations.ts";
+export type { ClientOperationOptions, ClientSendOptions } from "./client-operations.ts";
 
 /**
  * Order two WhatsApp identifiers by code unit.
@@ -375,13 +376,6 @@ export interface ClientSubscribeOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface ClientOperationOptions {
-  readonly idempotencyKey?: string;
-  readonly signal?: AbortSignal;
-}
-
-export interface ClientSendOptions extends ClientOperationOptions, SendOptions {}
-
 /**
  * Observe one namespace.
  *
@@ -458,6 +452,11 @@ export interface WhatsAppClient {
   readonly messages: ClientNamespace & {
     readonly send: {
       text(chatId: string, text: string, options?: ClientSendOptions): Promise<WhatsAppOperation>;
+      media(
+        chatId: string,
+        content: MediaOutbound,
+        options?: ClientSendOptions,
+      ): Promise<WhatsAppOperation>;
     };
     /**
      * What is held for one chat. Never touches storage.
@@ -1178,25 +1177,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
 
     messages: {
       subscribe: subscribeTo("messages"),
-      send: {
-        async text(chatId, text, options) {
-          const id = operationId();
-          const { idempotencyKey = operationId(), signal, ...sendOptions } = options ?? {};
-          return awaitOperationSubmission(
-            source.submitOperation({
-              id,
-              idempotencyKey,
-              operation: {
-                type: "send",
-                chatId,
-                content: { text },
-                ...(Object.keys(sendOptions).length > 0 && { options: sendOptions }),
-              },
-            }),
-            signal,
-          );
-        },
-      },
+      send: createClientSend(source),
       get: (chatId) => viewOf(entryFor(chatId)),
       older(chatId) {
         // Nothing to page against, and nothing that could ever announce the

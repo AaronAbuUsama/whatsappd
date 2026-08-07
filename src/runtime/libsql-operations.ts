@@ -4,6 +4,7 @@ import { transact } from "./libsql-transaction.ts";
 import {
   fanoutOperationListeners,
   normalizeOperationInput,
+  normalizeOperationJson,
   OperationIdempotencyConflictError,
   notifyOperationListener,
   operationId,
@@ -26,6 +27,12 @@ function text(value: unknown, label: string): string {
 
 function integer(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value))
+    throw new Error(`invalid libSQL operation ${label}`);
+  return value;
+}
+
+function finiteNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value))
     throw new Error(`invalid libSQL operation ${label}`);
   return value;
 }
@@ -89,10 +96,89 @@ function operationInput(value: unknown): WhatsAppOperationInput {
         } else {
           exactKeys(content, ["media"], "send media content");
           const media = object(content.media, "send media");
-          exactKeys(media, ["ref", "byteLength"], "send media");
+          exactKeys(
+            media,
+            [
+              "kind",
+              "ref",
+              "byteLength",
+              "caption",
+              "gifPlayback",
+              "ptt",
+              "seconds",
+              "mimetype",
+              "fileName",
+            ],
+            "send media",
+          );
           const byteLength = integer(media.byteLength, "send media byteLength");
           if (byteLength < 0) throw new Error("invalid libSQL operation send media byteLength");
-          normalizedContent = { media: { ref: text(media.ref, "send media ref"), byteLength } };
+          const base = {
+            ref: text(media.ref, "send media ref"),
+            byteLength,
+          };
+          switch (media.kind) {
+            case "image":
+              normalizedContent = {
+                media: {
+                  kind: "image",
+                  ...base,
+                  ...(media.caption !== undefined && {
+                    caption: text(media.caption, "send media caption"),
+                  }),
+                },
+              };
+              break;
+            case "video":
+              normalizedContent = {
+                media: {
+                  kind: "video",
+                  ...base,
+                  ...(media.caption !== undefined && {
+                    caption: text(media.caption, "send media caption"),
+                  }),
+                  ...(media.gifPlayback !== undefined && {
+                    gifPlayback: boolean(media.gifPlayback, "send media gifPlayback"),
+                  }),
+                },
+              };
+              break;
+            case "audio":
+              normalizedContent = {
+                media: {
+                  kind: "audio",
+                  ...base,
+                  ...(media.ptt !== undefined && {
+                    ptt: boolean(media.ptt, "send media ptt"),
+                  }),
+                  ...(media.seconds !== undefined && {
+                    seconds: finiteNumber(media.seconds, "send media seconds"),
+                  }),
+                  ...(media.mimetype !== undefined && {
+                    mimetype: text(media.mimetype, "send media mimetype"),
+                  }),
+                },
+              };
+              break;
+            case "document":
+              normalizedContent = {
+                media: {
+                  kind: "document",
+                  ...base,
+                  fileName: text(media.fileName, "send media fileName"),
+                  mimetype: text(media.mimetype, "send media mimetype"),
+                  ...(media.caption !== undefined && {
+                    caption: text(media.caption, "send media caption"),
+                  }),
+                },
+              };
+              break;
+            case "sticker":
+              normalizedContent = { media: { kind: "sticker", ...base } };
+              break;
+            default:
+              throw new Error("invalid libSQL operation send media kind");
+          }
         }
         const options =
           input.options === undefined
@@ -193,7 +279,7 @@ function operation(row: Row): WhatsAppOperation {
     case "succeeded":
       state = {
         status,
-        result: parsed(row.result_json, "result_json"),
+        result: normalizeOperationJson(parsed(row.result_json, "result_json")),
         completedAt:
           completedAt ??
           (() => {
@@ -412,24 +498,26 @@ export function libsqlOperationStore(
     },
     succeed(accountId, operationIdValue, attemptId, result) {
       return changed(accountId, operationIdValue, async (transaction, at) => {
+        const normalized = normalizeOperationJson(result);
         const updated = await transaction.execute({
           sql: `UPDATE wa_operations SET status = 'succeeded', result_json = ?,
               attempt_id = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
             WHERE account_id = ? AND operation_id = ? AND status = 'executing'
               AND attempt_id = ? AND lease_expires_at > ?`,
-          args: [JSON.stringify(result), at, at, accountId, operationIdValue, attemptId, at],
+          args: [JSON.stringify(normalized), at, at, accountId, operationIdValue, attemptId, at],
         });
         return updated.rowsAffected;
       });
     },
     fail(accountId, operationIdValue, attemptId, error) {
       return changed(accountId, operationIdValue, async (transaction, at) => {
+        const normalized = normalizeOperationJson(error);
         const result = await transaction.execute({
           sql: `UPDATE wa_operations SET status = 'failed', error_json = ?,
               attempt_id = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
             WHERE account_id = ? AND operation_id = ? AND status = 'claimed'
               AND attempt_id = ? AND lease_expires_at > ?`,
-          args: [JSON.stringify(error), at, at, accountId, operationIdValue, attemptId, at],
+          args: [JSON.stringify(normalized), at, at, accountId, operationIdValue, attemptId, at],
         });
         return result.rowsAffected;
       });

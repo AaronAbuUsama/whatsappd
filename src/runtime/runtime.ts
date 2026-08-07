@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 import { isOnline, isTerminal, type Status, type WaIdentity } from "../model/status.ts";
-import { refOf } from "../model/outbound.ts";
+import { refOf, type Outbound, type SendOptions } from "../model/outbound.ts";
 import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
@@ -37,6 +37,8 @@ import {
 } from "./contracts.ts";
 import {
   createOperationExecutor,
+  stageMediaOutbound,
+  type MediaOperationSubmission,
   type OperationExecutor,
   type WhatsAppOperation,
   type WhatsAppOperationInput,
@@ -136,8 +138,8 @@ export interface RuntimeSession {
   stop?(): Promise<void>;
   send?(
     to: string,
-    content: { readonly text: string },
-    options?: import("../model/outbound.ts").SendOptions,
+    content: Outbound,
+    options?: SendOptions,
   ): Promise<import("../model/outbound.ts").MessageRef>;
   /**
    * The linked account's own identity, once this session knows it.
@@ -250,6 +252,7 @@ export interface ClientRuntimeSource {
     readonly idempotencyKey: string;
     readonly operation: WhatsAppOperationInput;
   }): Promise<WhatsAppOperation>;
+  submitMediaOperation(input: MediaOperationSubmission): Promise<WhatsAppOperation>;
   operation(operationId: string): Promise<WhatsAppOperation | undefined>;
   onOperation(operationId: string, listener: (operation: WhatsAppOperation) => void): Unsubscribe;
 }
@@ -755,6 +758,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     operationExecutor = createOperationExecutor({
       accountId,
       store: backend.operations,
+      media: backend.media,
       session: opened,
       attemptTtlMs: operationAttemptTtlMs,
       onError(error) {
@@ -884,6 +888,27 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
         id: input.id,
         idempotencyKey: input.idempotencyKey,
         operation: input.operation,
+      });
+      setImmediate(() => operationExecutor?.wake());
+      return operation;
+    },
+    async submitMediaOperation(input) {
+      const content = await stageMediaOutbound({
+        accountId,
+        operationId: input.idempotencyKey,
+        content: input.content,
+        store: backend.media,
+      });
+      const operation = await backend.operations.submit({
+        accountId,
+        id: input.id,
+        idempotencyKey: input.idempotencyKey,
+        operation: {
+          type: "send",
+          chatId: input.chatId,
+          content,
+          ...(input.options && { options: input.options }),
+        },
       });
       setImmediate(() => operationExecutor?.wake());
       return operation;

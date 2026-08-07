@@ -74,6 +74,7 @@ export { OperationIdempotencyConflictError } from "./runtime/operations.ts";
 export type {
   DurableMediaInput,
   DurableOutbound,
+  MediaOutbound,
   OperationClock,
   SerializedOperationError,
   WhatsAppOperation,

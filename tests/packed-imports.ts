@@ -56,6 +56,7 @@ const EXPECTED_ROOT_EXPORTS = [
   "LibsqlBackendOptions",
   "MediaHandle",
   "MediaMeta",
+  "MediaOutbound",
   "MediaStore",
   "MessageContext",
   "MessageFlags",

@@ -15,6 +15,7 @@ import {
   OperationIdempotencyConflictError,
   fanoutOperationListeners,
   normalizeOperationInput,
+  normalizeOperationJson,
   notifyOperationListener,
   operationId,
   sameOperationInput,
@@ -531,6 +532,7 @@ export function memoryOperationStore(
     },
     succeed(accountId, operationIdValue, attemptId, result) {
       return serialize(async () => {
+        const normalized = normalizeOperationJson(result);
         const at = await now();
         return transition(
           accountId,
@@ -539,7 +541,7 @@ export function memoryOperationStore(
           "executing",
           {
             status: "succeeded",
-            result: copy(result),
+            result: copy(normalized),
             completedAt: at,
           },
           at,
@@ -548,6 +550,7 @@ export function memoryOperationStore(
     },
     fail(accountId, operationIdValue, attemptId, error: SerializedOperationError) {
       return serialize(async () => {
+        const normalized = normalizeOperationJson(error) as SerializedOperationError;
         const at = await now();
         return transition(
           accountId,
@@ -556,7 +559,7 @@ export function memoryOperationStore(
           "claimed",
           {
             status: "failed",
-            error: copy(error),
+            error: copy(normalized),
             completedAt: at,
           },
           at,

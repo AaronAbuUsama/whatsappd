@@ -205,6 +205,12 @@ test("operation accessors preserve send options and release abortable subscripti
 
 test("an already-aborted submission writes no operation", async () => {
   const backend = memoryBackend();
+  const submit = backend.operations.submit.bind(backend.operations);
+  let submissions = 0;
+  backend.operations.submit = async (input) => {
+    submissions += 1;
+    return submit(input);
+  };
   const driver = createTestWhatsAppSession();
   const runtime = createWhatsAppRuntime({
     accountId: "personal",
@@ -221,6 +227,7 @@ test("an already-aborted submission writes no operation", async () => {
       client.messages.send.text(CHAT, "hello", { signal: controller.signal }),
       /cancelled/,
     );
+    expect(submissions).toBe(0);
     expect(driver.commands.sent.length).toBe(0);
   } finally {
     await client.close();
@@ -378,7 +385,7 @@ test("both operation stores reject numbers JSON cannot preserve without mutation
               type: "send",
               chatId: CHAT,
               content: {
-                media: { ref: "media-ref", byteLength: Number.NaN },
+                media: { kind: "sticker", ref: "media-ref", byteLength: Number.NaN },
               },
             },
           }),
@@ -443,7 +450,7 @@ test("Client idempotency replays normalized input once through libSQL", async ()
 
 test("six typed divergent inputs throw the exported conflict without mutation", async () => {
   const media = (ref: string): DurableOutbound => ({
-    media: { ref, byteLength: 4 },
+    media: { kind: "sticker", ref, byteLength: 4 },
   });
   const quote = { id: "quote", chatId: CHAT, fromMe: false };
   const cases: ReadonlyArray<{
@@ -657,6 +664,13 @@ test("error sanitization tolerates hostile Error property accessors", () => {
   expect(sanitizeOperationError(error)).toEqual({
     name: "Error",
     message: "operation failed",
+  });
+});
+
+test("error sanitization drops non-finite numeric codes", () => {
+  expect(sanitizeOperationError({ name: "Error", message: "safe", code: Number.NaN })).toEqual({
+    name: "Error",
+    message: "safe",
   });
 });
 

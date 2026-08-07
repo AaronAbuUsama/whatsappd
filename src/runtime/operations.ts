@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { MessageRef, SendOptions } from "../model/outbound.ts";
+import type { BinaryInput, MessageRef, Outbound, SendOptions } from "../model/outbound.ts";
 import type { Unsubscribe } from "../subscription.ts";
+import type { MediaStore } from "./contracts.ts";
 
 export interface OperationClock {
   now(): number | Promise<number>;
@@ -13,10 +14,36 @@ export interface SerializedOperationError {
   readonly code?: string | number;
 }
 
-export interface DurableMediaInput {
+interface DurableMediaBase {
   readonly ref: string;
   readonly byteLength: number;
 }
+
+export type DurableMediaInput =
+  | (DurableMediaBase & {
+      readonly kind: "image";
+      readonly caption?: string;
+    })
+  | (DurableMediaBase & {
+      readonly kind: "video";
+      readonly caption?: string;
+      readonly gifPlayback?: boolean;
+    })
+  | (DurableMediaBase & {
+      readonly kind: "audio";
+      readonly ptt?: boolean;
+      readonly seconds?: number;
+      readonly mimetype?: string;
+    })
+  | (DurableMediaBase & {
+      readonly kind: "document";
+      readonly fileName: string;
+      readonly mimetype: string;
+      readonly caption?: string;
+    })
+  | (DurableMediaBase & {
+      readonly kind: "sticker";
+    });
 
 export type DurableOutbound = { readonly text: string } | { readonly media: DurableMediaInput };
 
@@ -112,6 +139,18 @@ export class OperationIdempotencyConflictError extends Error {
 
 const owned = <T>(value: T): T => structuredClone(value);
 
+const FORBIDDEN_OPERATION_KEYS = new Set([
+  "stack",
+  "creds",
+  "noisekey",
+  "signedidentitykey",
+  "signedprekey",
+  "pairingcode",
+  "bytes",
+  "stream",
+  "buffer",
+]);
+
 export function notifyOperationListener(
   listener: (operation: WhatsAppOperation) => void,
   operation: WhatsAppOperation,
@@ -134,7 +173,11 @@ export function fanoutOperationListeners(
     if (listeners.has(listener)) notifyOperationListener(listener, operation);
 }
 
-function normalizedJson(value: unknown, seen = new WeakSet<object>()): unknown {
+function normalizedJson(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  path = "operation JSON",
+): unknown {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError("operation input numbers must be finite");
     return Object.is(value, -0) ? 0 : value;
@@ -145,22 +188,31 @@ function normalizedJson(value: unknown, seen = new WeakSet<object>()): unknown {
   if (seen.has(value)) throw new TypeError("operation input must not contain cycles");
   seen.add(value);
   try {
-    if (Array.isArray(value)) return value.map((item) => normalizedJson(item, seen));
+    if (Array.isArray(value))
+      return value.map((item, index) => normalizedJson(item, seen, `${path}[${index}]`));
     if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
       throw new TypeError("operation input must contain only plain JSON objects");
     return Object.fromEntries(
       Object.entries(value)
         .filter(([, nested]) => nested !== undefined)
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, nested]) => [key, normalizedJson(nested, seen)]),
+        .map(([key, nested]) => {
+          if (FORBIDDEN_OPERATION_KEYS.has(key.toLowerCase()))
+            throw new TypeError(`operation JSON contains forbidden key ${key}`);
+          return [key, normalizedJson(nested, seen, `${path}.${key}`)];
+        }),
     );
   } finally {
     seen.delete(value);
   }
 }
 
+export function normalizeOperationJson(value: unknown): unknown {
+  return normalizedJson(value);
+}
+
 export function normalizeOperationInput(input: WhatsAppOperationInput): WhatsAppOperationInput {
-  const normalized = normalizedJson(input) as WhatsAppOperationInput;
+  const normalized = normalizeOperationJson(input) as WhatsAppOperationInput;
   if (normalized.type !== "send" || normalized.options === undefined) return normalized;
   const options = normalized.options as {
     quote?: MessageRef;
@@ -195,7 +247,11 @@ export function sanitizeOperationError(error: unknown): SerializedOperationError
   const candidateCode = field("code");
   if (typeof candidateName === "string" && candidateName) name = candidateName;
   if (typeof candidateMessage === "string" && candidateMessage) message = candidateMessage;
-  if (typeof candidateCode === "string" || typeof candidateCode === "number") code = candidateCode;
+  if (
+    typeof candidateCode === "string" ||
+    (typeof candidateCode === "number" && Number.isFinite(candidateCode))
+  )
+    code = candidateCode;
   return owned({ name, message, ...(code !== undefined && { code }) });
 }
 
@@ -208,11 +264,12 @@ function operationAbortReason(signal: AbortSignal): unknown {
 }
 
 export async function awaitOperationSubmission(
-  submission: Promise<WhatsAppOperation>,
+  submit: () => Promise<WhatsAppOperation>,
   signal: AbortSignal | undefined,
 ): Promise<WhatsAppOperation> {
-  if (!signal) return submission;
+  if (!signal) return submit();
   if (signal.aborted) throw operationAbortReason(signal);
+  const submission = submit();
   return new Promise((resolve, reject) => {
     const abort = (): void => reject(operationAbortReason(signal));
     signal.addEventListener("abort", abort, { once: true });
@@ -223,7 +280,7 @@ export async function awaitOperationSubmission(
 }
 
 export interface OperationSession {
-  send?(to: string, content: { readonly text: string }, options?: SendOptions): Promise<MessageRef>;
+  send?(to: string, content: Outbound, options?: SendOptions): Promise<MessageRef>;
 }
 
 export interface OperationExecutor {
@@ -236,20 +293,64 @@ export interface OperationExecutor {
 type ExecutableOperationInput = {
   readonly type: "send";
   readonly chatId: string;
-  readonly content: { readonly text: string };
+  readonly content: DurableOutbound;
   readonly options?: SendOptions;
 };
 
 function validate(input: WhatsAppOperationInput): asserts input is ExecutableOperationInput {
-  if (input.type !== "send" || !("text" in input.content))
+  if (input.type !== "send")
     throw new TypeError(`operation type ${input.type} is not executable yet`);
   if (!input.chatId) throw new TypeError("send chatId must not be empty");
-  if (typeof input.content.text !== "string" || input.content.text.length === 0)
+  if ("text" in input.content && input.content.text.length === 0)
     throw new TypeError("send text must not be empty");
+}
+
+function mediaOutbound(media: DurableMediaInput, bytes: Uint8Array): Outbound {
+  const binary = Buffer.from(bytes);
+  switch (media.kind) {
+    case "image":
+      return { image: binary, ...(media.caption !== undefined && { caption: media.caption }) };
+    case "video":
+      return {
+        video: binary,
+        ...(media.caption !== undefined && { caption: media.caption }),
+        ...(media.gifPlayback !== undefined && { gifPlayback: media.gifPlayback }),
+      };
+    case "audio":
+      return {
+        audio: binary,
+        ...(media.ptt !== undefined && { ptt: media.ptt }),
+        ...(media.seconds !== undefined && { seconds: media.seconds }),
+        ...(media.mimetype !== undefined && { mimetype: media.mimetype }),
+      };
+    case "document":
+      return {
+        document: binary,
+        fileName: media.fileName,
+        mimetype: media.mimetype,
+        ...(media.caption !== undefined && { caption: media.caption }),
+      };
+    case "sticker":
+      return { sticker: binary };
+  }
+}
+
+async function executableOutbound(
+  accountId: string,
+  store: MediaStore,
+  content: DurableOutbound,
+): Promise<Outbound> {
+  if ("text" in content) return content;
+  const bytes = await store.read({ accountId, ref: content.media.ref });
+  if (!bytes) throw new Error("durable media reference is missing");
+  if (bytes.byteLength !== content.media.byteLength)
+    throw new Error("durable media byte length does not match its operation metadata");
+  return mediaOutbound(content.media, bytes);
 }
 
 async function executeClaimed(
   store: WhatsAppOperationStore,
+  media: MediaStore,
   session: OperationSession,
   operation: WhatsAppOperation,
   ttlMs: number,
@@ -257,10 +358,10 @@ async function executeClaimed(
   if (operation.state.status !== "claimed") return;
   const { attemptId } = operation.state;
   const operationInput = operation.input;
-  const send = (...args: Parameters<NonNullable<OperationSession["send"]>>) =>
-    session.send!(...args);
+  let content: Outbound;
   try {
     validate(operationInput);
+    content = await executableOutbound(operation.accountId, media, operationInput.content);
     if (!session.send) throw new TypeError("runtime session does not support sends");
     if (!(await store.start(operation.accountId, operation.id, attemptId, ttlMs))) {
       await store.recoverExpired(operation.accountId);
@@ -281,7 +382,7 @@ async function executeClaimed(
 
   let result: MessageRef;
   try {
-    result = await send(operationInput.chatId, operationInput.content, operationInput.options);
+    result = await session.send(operationInput.chatId, content, operationInput.options);
   } catch {
     if (
       !(await store.markUnknown(
@@ -314,6 +415,7 @@ async function executeClaimed(
 export function createOperationExecutor(input: {
   readonly accountId: string;
   readonly store: WhatsAppOperationStore;
+  readonly media: MediaStore;
   readonly session: OperationSession;
   readonly attemptTtlMs?: number;
   readonly onError?: (error: unknown) => void;
@@ -348,7 +450,7 @@ export function createOperationExecutor(input: {
       while (active && !stopped) {
         const operation = await input.store.claimNext(input.accountId, ttlMs);
         if (!operation || stopped || !active) break;
-        await executeClaimed(input.store, input.session, operation, ttlMs);
+        await executeClaimed(input.store, input.media, input.session, operation, ttlMs);
       }
     }
   })();
@@ -377,3 +479,135 @@ export function createOperationExecutor(input: {
 }
 
 export const operationId = (): string => crypto.randomUUID();
+
+async function bytesOf(input: BinaryInput): Promise<Uint8Array> {
+  if (Buffer.isBuffer(input)) return Uint8Array.from(input);
+  if ("url" in input) {
+    const response = await fetch(input.url);
+    if (!response.ok) throw new Error(`media URL returned ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  for await (const chunk of input.stream) {
+    if (!(chunk instanceof Uint8Array))
+      throw new TypeError("media stream must yield Uint8Array chunks");
+    const owned = Uint8Array.from(chunk);
+    chunks.push(owned);
+    byteLength += owned.byteLength;
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+export type MediaOutbound = Extract<
+  Outbound,
+  | { readonly image: BinaryInput }
+  | { readonly video: BinaryInput }
+  | { readonly audio: BinaryInput }
+  | { readonly document: BinaryInput }
+  | { readonly sticker: BinaryInput }
+>;
+
+export interface MediaOperationSubmission {
+  readonly id: string;
+  readonly idempotencyKey: string;
+  readonly chatId: string;
+  readonly content: MediaOutbound;
+  readonly options?: SendOptions;
+}
+
+export async function stageMediaOutbound(input: {
+  readonly accountId: string;
+  readonly operationId: string;
+  readonly content: MediaOutbound;
+  readonly store: MediaStore;
+}): Promise<{ readonly media: DurableMediaInput }> {
+  const message = { id: input.operationId, chatId: "operation-media", fromMe: true } as const;
+  if ("image" in input.content) {
+    const bytes = await bytesOf(input.content.image);
+    const stored = await input.store.put({
+      accountId: input.accountId,
+      message,
+      kind: "image",
+      bytes,
+    });
+    return {
+      media: {
+        kind: "image",
+        ...stored,
+        ...(input.content.caption !== undefined && { caption: input.content.caption }),
+      },
+    };
+  }
+  if ("video" in input.content) {
+    const bytes = await bytesOf(input.content.video);
+    const stored = await input.store.put({
+      accountId: input.accountId,
+      message,
+      kind: "video",
+      bytes,
+    });
+    return {
+      media: {
+        kind: "video",
+        ...stored,
+        ...(input.content.caption !== undefined && { caption: input.content.caption }),
+        ...(input.content.gifPlayback !== undefined && {
+          gifPlayback: input.content.gifPlayback,
+        }),
+      },
+    };
+  }
+  if ("audio" in input.content) {
+    const bytes = await bytesOf(input.content.audio);
+    const stored = await input.store.put({
+      accountId: input.accountId,
+      message,
+      kind: "audio",
+      bytes,
+      ...(input.content.mimetype !== undefined && { mimetype: input.content.mimetype }),
+    });
+    return {
+      media: {
+        kind: "audio",
+        ...stored,
+        ...(input.content.ptt !== undefined && { ptt: input.content.ptt }),
+        ...(input.content.seconds !== undefined && { seconds: input.content.seconds }),
+        ...(input.content.mimetype !== undefined && { mimetype: input.content.mimetype }),
+      },
+    };
+  }
+  if ("document" in input.content) {
+    const bytes = await bytesOf(input.content.document);
+    const stored = await input.store.put({
+      accountId: input.accountId,
+      message,
+      kind: "document",
+      bytes,
+      mimetype: input.content.mimetype,
+    });
+    return {
+      media: {
+        kind: "document",
+        ...stored,
+        fileName: input.content.fileName,
+        mimetype: input.content.mimetype,
+        ...(input.content.caption !== undefined && { caption: input.content.caption }),
+      },
+    };
+  }
+  const bytes = await bytesOf(input.content.sticker);
+  const stored = await input.store.put({
+    accountId: input.accountId,
+    message,
+    kind: "sticker",
+    bytes,
+  });
+  return { media: { kind: "sticker", ...stored } };
+}
