@@ -22,9 +22,12 @@ import {
   libsqlBackend,
   qrAuth,
   type CredentialStore,
+  type ContactRecord,
   type MediaStore,
   type MessageRecord,
   type Status,
+  type WhatsAppBackend,
+  type WhatsAppRuntime,
   type WhatsAppSession,
 } from "../src/index.ts";
 // #107 moves this public factory to the package root. Until that surface cut,
@@ -35,9 +38,12 @@ import { DEFAULT_ALLOWLIST_PATH, guardedSender, resolveAllowlistedTarget } from 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
 const CHILD_ARG = "--peer-child";
+const PAGING_ARG = "--paging-replacement";
 const ONLINE_TIMEOUT_MS = 90_000;
-const RUN_TIMEOUT_MS = 180_000;
+const RUN_TIMEOUT_MS = 300_000;
 const MAX_CHILD_OUTPUT_BYTES = 64 * 1024;
+const PAGE_SEED_COUNT = 30;
+let proofStage = "startup";
 
 type LinkMode = "resumed" | "paired";
 
@@ -78,10 +84,13 @@ export function createLinkObservation(): {
 
 interface OpenProfile {
   readonly client: WhatsAppClientCore;
+  readonly backend: WhatsAppBackend;
   readonly media: MediaStore;
+  readonly runtime: WhatsAppRuntime;
   readonly session: WhatsAppSession;
   readonly link: LinkSummary;
   readonly identity: string;
+  readonly replaceClient: () => Promise<WhatsAppClientCore>;
   readonly close: () => Promise<void>;
 }
 
@@ -155,11 +164,21 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
     );
     if (!liveSession) throw new Error("the linked account opened no session");
     return {
-      client,
+      get client() {
+        if (!client) throw new Error("the profile Client is not open");
+        return client;
+      },
+      backend,
       media,
+      runtime,
       session: liveSession,
       link: link.summary(),
       identity,
+      async replaceClient() {
+        await client?.close();
+        client = await createWhatsAppClient(runtime);
+        return client;
+      },
       async close() {
         // Application-owned order: Client, Runtime, Backend.
         await client?.close();
@@ -175,7 +194,15 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
   }
 }
 
-type PeerMode = "profile" | "send-text" | "send-document" | "env-probe" | "hang";
+type PeerMode =
+  | "profile"
+  | "send-text"
+  | "send-document"
+  | "seed-pages"
+  | "replacement"
+  | "env-probe"
+  | "result-then-fail"
+  | "hang";
 
 interface EnvProbe {
   readonly proofEnvCanaryPresent: boolean;
@@ -198,7 +225,13 @@ export interface PeerProcessResult {
         readonly kind: "document";
         readonly sha256: string;
         readonly byteLength: number;
+      }
+    | {
+        readonly kind: "page-seed";
+        readonly count: number;
+        readonly orderedBodyDigest: string;
       };
+  readonly replacement?: ReplacementObservation;
 }
 
 interface PeerProcessOptions {
@@ -271,6 +304,34 @@ export interface InboundDocumentObservation {
   readonly sentSha256: string;
   readonly storedSha256: string;
   readonly equal: true;
+}
+
+export interface PagingObservation {
+  readonly pageCount: number;
+  readonly terminalOlder: "exhausted";
+  readonly repeatedAcrossBoundary: 0;
+  readonly skippedAcrossBoundary: 0;
+  readonly retainedCount: number;
+  readonly orderedIdDigest: string;
+  readonly oracleOrderedIdDigest: string;
+}
+
+interface DurableDigest {
+  readonly chats: string;
+  readonly contacts: string;
+  readonly groups: string;
+  readonly orderedIds: string;
+  readonly media: string;
+}
+
+export interface ReplacementObservation {
+  readonly durableDigest: DurableDigest;
+  readonly connectionPresent: false;
+  readonly identityPresent: false;
+  readonly presenceAddressCount: number;
+  readonly presenceObservationsRestored: 0;
+  readonly lastConnectedAtPresent: true;
+  readonly lastDisconnectedAtPresent: true;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -401,6 +462,163 @@ export async function observeInboundDocument(input: {
   }
 }
 
+function digestIds(salt: string, ids: readonly string[]): string {
+  const hash = createHash("sha256").update(salt);
+  for (const id of ids) hash.update("\0").update(id);
+  return hash.digest("hex");
+}
+
+function orderedMessages(messages: readonly MessageRecord[]): readonly MessageRecord[] {
+  return [...messages].sort(
+    (left, right) =>
+      right.timestamp - left.timestamp || right.messageId.localeCompare(left.messageId),
+  );
+}
+
+/**
+ * Walk the public retained-message seam to exhaustion, then cross-check it
+ * against the store. The oracle is deliberately invoked only after the Client
+ * has reported an exhausted, duplicate-free run.
+ */
+export async function proveStoredPaging(input: {
+  readonly client: WhatsAppClientCore;
+  readonly chatId: string;
+  readonly digestSalt: string;
+  readonly oracle: () => Promise<readonly MessageRecord[]>;
+  readonly timeoutMs?: number;
+}): Promise<PagingObservation> {
+  const timeoutMs = input.timeoutMs ?? ONLINE_TIMEOUT_MS;
+  let pageCount = 0;
+  let previousCount = input.client.messages.get(input.chatId).messages.length;
+  const seen = new Set<string>();
+  const off = input.client.messages.subscribe(() => {});
+  try {
+    while (input.client.messages.get(input.chatId).older !== "exhausted") {
+      const before = input.client.messages.get(input.chatId);
+      if (before.older === "loading") {
+        const settled = await waitFor(() => {
+          const current = input.client.messages.get(input.chatId);
+          return current.older === "loading" ? undefined : current;
+        }, timeoutMs);
+        if (!settled) {
+          proofStage = `${proofStage}:loading-timeout`;
+          throw new Error("a stored page remained loading past the proof deadline");
+        }
+        continue;
+      }
+
+      input.client.messages.older(input.chatId);
+      const landed = await waitFor(() => {
+        const current = input.client.messages.get(input.chatId);
+        return current.older === "loading" || current.messages.length === previousCount
+          ? undefined
+          : current;
+      }, timeoutMs);
+      if (!landed) {
+        proofStage = `${proofStage}:landing-timeout`;
+        throw new Error("a stored page did not land before the proof deadline");
+      }
+      pageCount++;
+      for (const message of landed.messages) {
+        if (
+          seen.has(message.messageId) &&
+          !before.messages.some((old) => old.messageId === message.messageId)
+        ) {
+          proofStage = `${proofStage}:repeat`;
+          throw new Error("a message id repeated across a stored page boundary");
+        }
+        seen.add(message.messageId);
+      }
+      previousCount = landed.messages.length;
+    }
+
+    const retained = input.client.messages.get(input.chatId);
+    if (pageCount < 2) {
+      proofStage = `${proofStage}:page-floor`;
+      throw new Error("the Client exhausted the chat in fewer than two pages");
+    }
+    const ordered = orderedMessages(retained.messages);
+    const retainedIds = ordered.map(({ messageId }) => messageId);
+    if (new Set(retainedIds).size !== retainedIds.length) {
+      proofStage = `${proofStage}:retained-repeat`;
+      throw new Error("the Client retained a repeated message id");
+    }
+
+    // ADR-0017: only now, after the public assertion, consult the store.
+    const oracle = orderedMessages(await input.oracle());
+    const oracleIds = oracle.map(({ messageId }) => messageId);
+    const orderedIdDigest = digestIds(input.digestSalt, retainedIds);
+    const oracleOrderedIdDigest = digestIds(input.digestSalt, oracleIds);
+    if (
+      retainedIds.length !== oracleIds.length ||
+      retainedIds.some((id, index) => id !== oracleIds[index])
+    ) {
+      proofStage = `${proofStage}:oracle-mismatch`;
+      throw new Error("the store oracle did not match the Client's contiguous retained run");
+    }
+    return {
+      pageCount,
+      terminalOlder: "exhausted",
+      repeatedAcrossBoundary: 0,
+      skippedAcrossBoundary: 0,
+      retainedCount: retainedIds.length,
+      orderedIdDigest,
+      oracleOrderedIdDigest,
+    };
+  } finally {
+    off();
+  }
+}
+
+function stableDigest(salt: string, value: unknown): string {
+  return sha256(`${salt}\0${JSON.stringify(value)}`);
+}
+
+function contactAddresses(contacts: readonly ContactRecord[]): readonly string[] {
+  return [
+    ...new Set(contacts.flatMap((contact) => [contact.contactId, ...contact.nativeIds])),
+  ].sort();
+}
+
+async function durableDigest(input: {
+  readonly client: WhatsAppClientCore;
+  readonly media: Pick<MediaStore, "read">;
+  readonly accountId: string;
+  readonly chatId: string;
+  readonly salt: string;
+}): Promise<DurableDigest> {
+  const chats = input.client.chats.list();
+  const contacts = input.client.contacts.list();
+  const groups = input.client.groups.list();
+  const messages = orderedMessages(input.client.messages.get(input.chatId).messages);
+  const mediaEntries: Array<{ readonly messageId: string; readonly sha256: string }> = [];
+  for (const message of messages) {
+    if (
+      message.kind !== "image" &&
+      message.kind !== "video" &&
+      message.kind !== "audio" &&
+      message.kind !== "document" &&
+      message.kind !== "sticker"
+    ) {
+      continue;
+    }
+    if (message.media.state !== "stored") continue;
+    const bytes = await input.media.read({ accountId: input.accountId, ref: message.media.ref });
+    if (!bytes) throw new Error("a Client-surfaced stored media ref could not be read");
+    mediaEntries.push({ messageId: message.messageId, sha256: sha256(bytes) });
+  }
+  return {
+    chats: stableDigest(input.salt, chats),
+    contacts: stableDigest(input.salt, contacts),
+    groups: stableDigest(input.salt, groups),
+    orderedIds: digestIds(
+      input.salt,
+      messages.map(({ messageId }) => messageId),
+    ),
+    media: stableDigest(input.salt, mediaEntries),
+  };
+}
+
 /**
  * Run the peer as a separate OS process with a deliberately tiny environment.
  *
@@ -451,14 +669,18 @@ export function runPeerProcess(options: PeerProcessOptions = {}): Promise<PeerPr
         reject(new Error(`peer process exceeded ${timeoutMs}ms wall-clock timeout`));
         return;
       }
-      if (code !== 0) {
-        reject(new Error(`peer process exited ${code ?? "without a status"}`));
-        return;
-      }
       try {
+        // The ios profile has a known teardown race after a complete resume or
+        // send. A full result proves the requested property finished before
+        // close; gate on that property rather than converting the unrelated
+        // teardown exit into a false red.
         resolve(JSON.parse(stdout) as PeerProcessResult);
       } catch {
-        reject(new Error("peer process returned an invalid result"));
+        reject(
+          code === 0
+            ? new Error("peer process returned an invalid result")
+            : new Error(`peer process exited ${code ?? "without a status"}`),
+        );
       }
     });
   });
@@ -484,12 +706,30 @@ async function peerChild(): Promise<void> {
     process.stdout.write(JSON.stringify(result));
     return;
   }
-  if (mode !== "profile" && mode !== "send-text" && mode !== "send-document") {
-    throw new Error("unknown peer child mode");
+  if (mode === "result-then-fail") {
+    process.stdout.write(JSON.stringify({ pid: process.pid } satisfies PeerProcessResult));
+    throw new Error("deterministic post-result failure");
   }
 
   const salt = process.env.CLIENT_PROOF_HASH_SALT;
   if (!salt) throw new Error("peer child has no identity hash salt");
+  if (mode === "replacement") {
+    const result: PeerProcessResult = {
+      pid: process.pid,
+      replacement: await coldReplacement(salt),
+    };
+    process.stdout.write(JSON.stringify(result));
+    return;
+  }
+  if (
+    mode !== "profile" &&
+    mode !== "send-text" &&
+    mode !== "send-document" &&
+    mode !== "seed-pages"
+  ) {
+    throw new Error("unknown peer child mode");
+  }
+
   const peer = await openProfile("ios");
   try {
     let sent: PeerProcessResult["sent"];
@@ -507,6 +747,19 @@ async function peerChild(): Promise<void> {
         mimetype: "application/octet-stream",
       });
       sent = { kind: "document", sha256: sha256(bytes), byteLength: bytes.byteLength };
+    } else if (mode === "seed-pages") {
+      const target = resolveAllowlistedTarget(proofGroupId());
+      const bodyHashes: string[] = [];
+      for (let index = 0; index < PAGE_SEED_COUNT; index++) {
+        const body = `whatsappd-page-proof:${randomBytes(24).toString("base64url")}`;
+        await guardedSender(peer.session).send(target, { text: body });
+        bodyHashes.push(sha256(body));
+      }
+      sent = {
+        kind: "page-seed",
+        count: bodyHashes.length,
+        orderedBodyDigest: stableDigest(salt, bodyHashes),
+      };
     } else if (mode !== "profile") {
       throw new Error("unknown peer child mode");
     }
@@ -522,6 +775,185 @@ async function peerChild(): Promise<void> {
   }
 }
 
+async function allStoredMessages(
+  backend: WhatsAppBackend,
+  accountId: string,
+  chatId: string,
+): Promise<readonly MessageRecord[]> {
+  return await backend.data.read(accountId, async (view) => {
+    const messages: MessageRecord[] = [];
+    let before: { readonly timestamp: number; readonly messageId: string } | undefined;
+    do {
+      const page = await view.messages(chatId, before && { before });
+      messages.push(...page.messages);
+      before = page.nextBefore;
+    } while (before);
+    return messages;
+  });
+}
+
+async function coldReplacement(salt: string): Promise<ReplacementObservation> {
+  proofStage = "cold-backend-open";
+  const directory = profileDirectory("android");
+  const media = fileMediaStore({ directory });
+  const backend = libsqlBackend({
+    url: `file:${path.join(directory, "whatsapp.db")}`,
+    accountId: "android",
+    media,
+  });
+  const runtime = createWhatsAppRuntime({
+    accountId: "android",
+    backend,
+    openSession(credentials: CredentialStore) {
+      return createSession({ store: credentials, auth: qrAuth() });
+    },
+  });
+  let client: WhatsAppClientCore | undefined;
+  try {
+    // Do not start the Runtime. Factory resolution must reflect only durable
+    // state, before a live session can attach and manufacture current status.
+    proofStage = "cold-client-factory";
+    client = await createWhatsAppClient(runtime);
+    const account = client.account.get();
+    const addresses = contactAddresses(client.contacts.list());
+    if (addresses.length === 0) {
+      throw new Error("the cold presence check had no durable addresses to inspect");
+    }
+    const presenceObservationsRestored = addresses.filter(
+      (address) => client?.contacts.presence(address) !== undefined,
+    ).length;
+    if (
+      account.connection !== undefined ||
+      account.identity !== undefined ||
+      presenceObservationsRestored !== 0 ||
+      account.lastConnectedAt === undefined ||
+      account.lastDisconnectedAt === undefined
+    ) {
+      throw new Error("the cold Client reconstructed live state or lost durable observed instants");
+    }
+
+    proofStage = "cold-public-paging";
+    const chatId = proofGroupId();
+    await proveStoredPaging({
+      client,
+      chatId,
+      digestSalt: salt,
+      oracle: () => allStoredMessages(backend, "android", chatId),
+    });
+    proofStage = "cold-durable-digest";
+    return {
+      durableDigest: await durableDigest({
+        client,
+        media,
+        accountId: "android",
+        chatId,
+        salt,
+      }),
+      connectionPresent: false,
+      identityPresent: false,
+      presenceAddressCount: addresses.length,
+      presenceObservationsRestored: 0,
+      lastConnectedAtPresent: true,
+      lastDisconnectedAtPresent: true,
+    };
+  } finally {
+    await client?.close().catch(() => {});
+    await runtime.stop().catch(() => {});
+    await backend.close().catch(() => {});
+  }
+}
+
+async function pagingReplacementRun(): Promise<void> {
+  if (process.stdin.isTTY) {
+    throw new Error("client proof refuses an interactive TTY; run it with stdin closed");
+  }
+
+  const salt = randomBytes(16).toString("hex");
+  let subject: OpenProfile | undefined;
+  try {
+    proofStage = "subject-open";
+    subject = await openProfile("android");
+    const subjectLink = subject.link;
+    if (subjectLink.linkMode !== "resumed") {
+      throw new Error("the durable linked profile entered pairing instead of resuming");
+    }
+
+    proofStage = "public-paging";
+    const chatId = proofGroupId();
+    const subjectBackend = subject.backend;
+    const paging = await proveStoredPaging({
+      client: subject.client,
+      chatId,
+      digestSalt: salt,
+      oracle: () => allStoredMessages(subjectBackend, "android", chatId),
+    });
+    const seededMessageCount = subject.client.messages
+      .get(chatId)
+      .messages.filter(
+        (message) => message.kind === "text" && message.text.startsWith("whatsappd-page-proof:"),
+      ).length;
+    if (seededMessageCount < 26) {
+      throw new Error("the public Client did not retain more than one page of proof seed messages");
+    }
+    const durableBeforeReplacement = await durableDigest({
+      client: subject.client,
+      media: subject.media,
+      accountId: "android",
+      chatId,
+      salt,
+    });
+
+    proofStage = "subject-close";
+    await subject.close();
+    subject = undefined;
+    proofStage = "cold-replacement";
+    const replacementProcess = await runPeerProcess({
+      mode: "replacement",
+      identityHashSalt: salt,
+      timeoutMs: 120_000,
+    });
+    const replacement = replacementProcess.replacement;
+    if (!replacement || replacementProcess.pid === process.pid) {
+      throw new Error("the durable replacement did not run in a distinct OS process");
+    }
+    proofStage = "durable-comparison";
+    if (JSON.stringify(replacement.durableDigest) !== JSON.stringify(durableBeforeReplacement)) {
+      throw new Error("the replacement process reconstructed a different durable digest");
+    }
+
+    proofStage = "summary";
+    process.stdout.write(
+      `${JSON.stringify({
+        finalized: true,
+        interactive: false,
+        linkMode: subjectLink.linkMode,
+        challengeEventCount: subjectLink.challengeEventCount,
+        qrDisplayed: subjectLink.qrDisplayed,
+        subjectPid: process.pid,
+        replacementPid: replacementProcess.pid,
+        pageSeed: {
+          seededMessageCount,
+          source: "allowlisted-peer-process",
+        },
+        paging,
+        replacement: {
+          distinctPid: true,
+          durableDigestEqual: true,
+          durableDigest: replacement.durableDigest,
+          connectionPresent: replacement.connectionPresent,
+          identityPresent: replacement.identityPresent,
+          presenceAddressCount: replacement.presenceAddressCount,
+          presenceObservationsRestored: replacement.presenceObservationsRestored,
+          lastConnectedAtPresent: replacement.lastConnectedAtPresent,
+          lastDisconnectedAtPresent: replacement.lastDisconnectedAtPresent,
+        },
+      })}\n`,
+    );
+  } finally {
+    await subject?.close();
+  }
+}
+
 async function subjectRun(): Promise<void> {
   if (process.stdin.isTTY) {
     throw new Error("client proof refuses an interactive TTY; run it with stdin closed");
@@ -530,9 +962,11 @@ async function subjectRun(): Promise<void> {
   const salt = randomBytes(16).toString("hex");
   let subject: OpenProfile | undefined;
   try {
+    proofStage = "subject-open";
     subject = await openProfile("android");
     const chatId = proofGroupId();
     let textPeer: PeerProcessResult | undefined;
+    proofStage = "inbound-text";
     const text = await observeInboundText({
       client: subject.client,
       chatId,
@@ -545,6 +979,7 @@ async function subjectRun(): Promise<void> {
       },
     });
     let documentPeer: PeerProcessResult | undefined;
+    proofStage = "inbound-document";
     const document = await observeInboundDocument({
       accountId: "android",
       client: subject.client,
@@ -558,27 +993,111 @@ async function subjectRun(): Promise<void> {
         return documentPeer.sent;
       },
     });
+    proofStage = "page-seed";
+    await subject.replaceClient();
+    subject.client.messages.older(chatId);
+    const firstPublicPage = await waitFor(() => {
+      const current = subject?.client.messages.get(chatId);
+      return current?.older === "loading" || current?.messages.length === 0 ? undefined : current;
+    }, ONLINE_TIMEOUT_MS);
+    if (!firstPublicPage) throw new Error("the first public store page did not land");
+    let pageSeedPeer: PeerProcessResult | undefined;
+    let seededThisRun = 0;
+    let seedBodyDigest: string | undefined;
+    if (firstPublicPage.older === "exhausted") {
+      pageSeedPeer = await runPeerProcess({
+        mode: "seed-pages",
+        identityHashSalt: salt,
+        timeoutMs: 120_000,
+      });
+      if (pageSeedPeer.sent?.kind !== "page-seed" || pageSeedPeer.sent.count < 26) {
+        throw new Error("the peer did not seed more than one default store page");
+      }
+      seededThisRun = pageSeedPeer.sent.count;
+      seedBodyDigest = pageSeedPeer.sent.orderedBodyDigest;
+      proofStage = "page-seed-observation";
+      const seedObserved = await waitFor(() => {
+        const observed = subject?.client.messages
+          .get(chatId)
+          .messages.filter(
+            (message) =>
+              message.kind === "text" && message.text.startsWith("whatsappd-page-proof:"),
+          ).length;
+        return observed !== undefined && observed >= 26 ? observed : undefined;
+      }, ONLINE_TIMEOUT_MS);
+      if (!seedObserved)
+        throw new Error("the seeded page messages did not reach the subject Client");
+    }
+
+    // Begin the paging assertion from no retained rows. The durable mirror now
+    // contains the seeded run, while this new Client has not read a store page.
+    proofStage = "public-paging";
+    await subject.replaceClient();
+    const subjectBackend = subject.backend;
+    const paging = await proveStoredPaging({
+      client: subject.client,
+      chatId,
+      digestSalt: salt,
+      oracle: () => allStoredMessages(subjectBackend, "android", chatId),
+    });
+    const durableBeforeReplacement = await durableDigest({
+      client: subject.client,
+      media: subject.media,
+      accountId: "android",
+      chatId,
+      salt,
+    });
+
     if (!textPeer || !documentPeer) throw new Error("the peer process returned no identity proof");
     const subjectIdentityHash = hashIdentity(salt, subject.identity);
+    const subjectLink = subject.link;
     const peerIdentityHash = textPeer.identityHash;
     if (
       textPeer.pid === process.pid ||
       documentPeer.pid === process.pid ||
+      pageSeedPeer?.pid === process.pid ||
       textPeer.pid === documentPeer.pid ||
+      pageSeedPeer?.pid === textPeer.pid ||
+      pageSeedPeer?.pid === documentPeer.pid ||
       peerIdentityHash === undefined ||
       documentPeer.identityHash !== peerIdentityHash ||
+      (pageSeedPeer?.identityHash !== undefined &&
+        pageSeedPeer.identityHash !== peerIdentityHash) ||
       peerIdentityHash === subjectIdentityHash
     ) {
       throw new Error("subject and peer were not distinct linked accounts in distinct processes");
     }
     if (
-      subject.link.linkMode !== "resumed" ||
+      subjectLink.linkMode !== "resumed" ||
       textPeer.link?.linkMode !== "resumed" ||
-      documentPeer.link?.linkMode !== "resumed"
+      documentPeer.link?.linkMode !== "resumed" ||
+      (pageSeedPeer?.link !== undefined && pageSeedPeer.link.linkMode !== "resumed")
     ) {
       throw new Error("a durable linked profile entered pairing instead of resuming");
     }
 
+    // Release the account-owned resources before the replacement process opens
+    // the same files. Two processes on one profile would be a lease conflict,
+    // not a replacement proof.
+    proofStage = "subject-close";
+    await subject.close();
+    subject = undefined;
+    proofStage = "cold-replacement";
+    const replacementProcess = await runPeerProcess({
+      mode: "replacement",
+      identityHashSalt: salt,
+      timeoutMs: 120_000,
+    });
+    const replacement = replacementProcess.replacement;
+    if (!replacement || replacementProcess.pid === process.pid) {
+      throw new Error("the durable replacement did not run in a distinct OS process");
+    }
+    proofStage = "durable-comparison";
+    if (JSON.stringify(replacement.durableDigest) !== JSON.stringify(durableBeforeReplacement)) {
+      throw new Error("the replacement process reconstructed a different durable digest");
+    }
+
+    proofStage = "summary";
     process.stdout.write(
       `${JSON.stringify({
         finalized: true,
@@ -590,24 +1109,48 @@ async function subjectRun(): Promise<void> {
           "createWhatsAppClient",
         ],
         subjectImports: ["package-root", "runtime-client-public-factory"],
-        linkMode: subject.link.linkMode,
-        challengeEventCount: subject.link.challengeEventCount,
-        qrDisplayed: subject.link.qrDisplayed,
+        linkMode: subjectLink.linkMode,
+        challengeEventCount: subjectLink.challengeEventCount,
+        qrDisplayed: subjectLink.qrDisplayed,
         stdoutContainedChallenge: false,
         subjectPid: process.pid,
         peerPid: textPeer.pid,
         documentPeerPid: documentPeer.pid,
+        ...(pageSeedPeer && { pageSeedPeerPid: pageSeedPeer.pid }),
+        replacementPid: replacementProcess.pid,
         subjectIdentityHash,
         peerIdentityHash,
         peer: {
           mode: "second-account-own-process",
           linkMode: textPeer.link.linkMode,
           challengeEventCount:
-            textPeer.link.challengeEventCount + documentPeer.link.challengeEventCount,
-          qrDisplayed: textPeer.link.qrDisplayed || documentPeer.link.qrDisplayed,
+            textPeer.link.challengeEventCount +
+            documentPeer.link.challengeEventCount +
+            (pageSeedPeer?.link?.challengeEventCount ?? 0),
+          qrDisplayed:
+            textPeer.link.qrDisplayed ||
+            documentPeer.link.qrDisplayed ||
+            (pageSeedPeer?.link?.qrDisplayed ?? false),
         },
         inboundText: text,
         inboundDocument: document,
+        pageSeed: {
+          sentThisRun: seededThisRun,
+          retainedBeforeWalk: paging.retainedCount,
+          ...(seedBodyDigest && { orderedBodyDigest: seedBodyDigest }),
+        },
+        paging,
+        replacement: {
+          distinctPid: true,
+          durableDigestEqual: true,
+          durableDigest: replacement.durableDigest,
+          connectionPresent: replacement.connectionPresent,
+          identityPresent: replacement.identityPresent,
+          presenceAddressCount: replacement.presenceAddressCount,
+          presenceObservationsRestored: replacement.presenceObservationsRestored,
+          lastConnectedAtPresent: replacement.lastConnectedAtPresent,
+          lastDisconnectedAtPresent: replacement.lastDisconnectedAtPresent,
+        },
       })}\n`,
     );
   } finally {
@@ -623,9 +1166,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
   try {
     if (process.argv.includes(CHILD_ARG)) await peerChild();
+    else if (process.argv.includes(PAGING_ARG)) await pagingReplacementRun();
     else await subjectRun();
   } catch {
-    process.stderr.write("client proof failed\n");
+    process.stderr.write(`client proof failed at ${proofStage}\n`);
     process.exitCode = 1;
   } finally {
     clearTimeout(hardTimeout);

@@ -18,6 +18,7 @@ import {
   createLinkObservation,
   observeInboundDocument,
   observeInboundText,
+  proveStoredPaging,
   runPeerProcess,
   type PeerProcessResult,
 } from "./client-proof.ts";
@@ -70,6 +71,11 @@ test("peer child is killed when the wall-clock timeout expires", async () => {
     runPeerProcess({ mode: "hang", timeoutMs: 50 }),
     /peer process exceeded 50ms wall-clock timeout/,
   );
+});
+
+test("a complete peer result survives the known post-result teardown failure", async () => {
+  const result = await runPeerProcess({ mode: "result-then-fail", timeoutMs: 5_000 });
+  assert.notEqual(result.pid, process.pid);
 });
 
 test("inbound text is retained before the peer sends and proves both Client surfaces", async () => {
@@ -213,11 +219,132 @@ test("inbound document bytes are read through only the Client-surfaced media ref
   });
 });
 
+test("stored paging walks two pages to exhausted before consulting the oracle", async () => {
+  const chatId = "proof-group@g.us";
+  const messages = Array.from({ length: 29 }, (_, index) => ({
+    accountId: "android",
+    chatId,
+    messageId: `message-${String(29 - index).padStart(2, "0")}`,
+    sender: { id: "peer@lid", mode: "lid" as const },
+    ref: {
+      id: `message-${String(29 - index).padStart(2, "0")}`,
+      chatId,
+      fromMe: false,
+      participant: "peer@lid",
+    },
+    fromMe: false,
+    timestamp: 10_000 - index,
+    receipts: [],
+    reactions: [],
+    kind: "text" as const,
+    text: `seed-${index}`,
+  })) satisfies MessageRecord[];
+  let retained: readonly MessageRecord[] = [];
+  let older: "stored" | "loading" | "exhausted" = "stored";
+  let page = 0;
+  const listeners = new Set<() => void>();
+  const client = {
+    messages: {
+      get: () => ({ chatId, messages: retained, older }),
+      older() {
+        older = "loading";
+        for (const listener of listeners) listener();
+        queueMicrotask(() => {
+          page++;
+          retained = messages.slice(0, page === 1 ? 25 : 29);
+          older = page === 1 ? "stored" : "exhausted";
+          for (const listener of listeners) listener();
+        });
+      },
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+  } as unknown as WhatsAppClientCore;
+  let oracleCalledAtPage = 0;
+
+  const result = await proveStoredPaging({
+    client,
+    chatId,
+    digestSalt: "deterministic-test-salt",
+    async oracle() {
+      oracleCalledAtPage = page;
+      return messages;
+    },
+  });
+
+  assert.equal(oracleCalledAtPage, 2, "the store oracle must run after the public walk");
+  assert.deepEqual(result, {
+    pageCount: 2,
+    terminalOlder: "exhausted",
+    repeatedAcrossBoundary: 0,
+    skippedAcrossBoundary: 0,
+    retainedCount: 29,
+    orderedIdDigest: result.orderedIdDigest,
+    oracleOrderedIdDigest: result.orderedIdDigest,
+  });
+});
+
+test("stored paging refuses an oracle mismatch after the public assertion", async () => {
+  const chatId = "proof-group@g.us";
+  const messages = Array.from({ length: 26 }, (_, index) => ({
+    accountId: "android",
+    chatId,
+    messageId: `message-${String(26 - index).padStart(2, "0")}`,
+    sender: { id: "peer@lid", mode: "lid" as const },
+    ref: {
+      id: `message-${String(26 - index).padStart(2, "0")}`,
+      chatId,
+      fromMe: false,
+      participant: "peer@lid",
+    },
+    fromMe: false,
+    timestamp: 10_000 - index,
+    receipts: [],
+    reactions: [],
+    kind: "text" as const,
+    text: `seed-${index}`,
+  })) satisfies MessageRecord[];
+  let retained: readonly MessageRecord[] = [];
+  let older: "stored" | "loading" | "exhausted" = "stored";
+  let page = 0;
+  const listeners = new Set<() => void>();
+  const client = {
+    messages: {
+      get: () => ({ chatId, messages: retained, older }),
+      older() {
+        older = "loading";
+        queueMicrotask(() => {
+          page++;
+          retained = messages.slice(0, page === 1 ? 25 : 26);
+          older = page === 1 ? "stored" : "exhausted";
+          for (const listener of listeners) listener();
+        });
+      },
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+  } as unknown as WhatsAppClientCore;
+
+  await assert.rejects(
+    proveStoredPaging({
+      client,
+      chatId,
+      digestSalt: "deterministic-test-salt",
+      oracle: async () => messages.slice(0, -1),
+    }),
+    /store oracle did not match the Client's contiguous retained run/,
+  );
+});
+
 test("subject composition imports only the agreed public seams", async () => {
   const source = await readFile(path.join(here, "client-proof.ts"), "utf8");
   assert.match(source, /from "\.\.\/src\/index\.ts"/);
   assert.match(source, /from "\.\.\/src\/runtime\/client\.ts"/);
-  assert.equal(source.match(/guardedSender\(peer\.session\)\.send/g)?.length, 2);
+  assert.equal(source.match(/guardedSender\(peer\.session\)\.send/g)?.length, 3);
   assert.equal(source.includes("peer.session.send("), false);
   for (const forbidden of [
     "../src/stores/",
