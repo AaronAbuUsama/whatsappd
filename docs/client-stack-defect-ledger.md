@@ -387,15 +387,16 @@ provable only if the substrate changes.
   not, so the file contradicted itself for one commit. That is C10 applied to
   the ledger instead of by it: the cheap path is editing the site you happen to
   be looking at. One fact, one home, and a pointer from anywhere else.
-- `submitMediaOperation` stages media into the Media Store before
-  `operations.submit()` (`runtime.ts:895`), which is what ADR-0015 requires and
-  is not to be inverted — the bytes are durable before anything can claim they
-  were accepted. The cost is that a divergent-input idempotency conflict throws
-  after the staging write, leaving an immutable media object no operation
-  references and nothing deletes. ADR-0015 line 34 already names the mitigation,
-  adapters "need idempotent keys and orphan cleanup", and only the first half
-  exists. The missing half is a Media Store reconciliation capability, not a
-  looser durable-before-submit boundary.
+- `submitMediaOperation` in `src/runtime/runtime.ts` stages media into the Media
+  Store via `stageMediaOutbound` before `operations.submit()`, which is what
+  ADR-0015 requires and is not to be inverted — the bytes are durable before
+  anything can claim they were accepted. The cost is that a divergent-input
+  idempotency conflict throws after the staging write, leaving an immutable
+  media object no operation references and nothing deletes. The
+  `## Consequences` section of ADR-0015 already names the mitigation, adapters
+  "need idempotent keys and orphan cleanup", and only the first half exists. The
+  missing half is a Media Store reconciliation capability, not a looser
+  durable-before-submit boundary.
 
 ## #106 / the `messages` namespace — review rounds
 
