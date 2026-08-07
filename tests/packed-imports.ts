@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { assertPackedProofReceiptSanitized } from "./packed-proof-receipt.ts";
 
 const execFile = promisify(execFileCallback);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -192,6 +193,38 @@ const readmeClientSource = async (): Promise<string> => {
   return source;
 };
 
+const runtimeJSDocSource = async (): Promise<string> => {
+  const runtimeSource = await readFile(path.join(root, "src/runtime/runtime.ts"), "utf8");
+  const declaration = runtimeSource.indexOf("export function createWhatsAppRuntime");
+  assert.notEqual(declaration, -1, "createWhatsAppRuntime declaration is missing");
+  const commentStart = runtimeSource.lastIndexOf("/**", declaration);
+  assert.notEqual(commentStart, -1, "createWhatsAppRuntime has no public JSDoc");
+  const comment = runtimeSource.slice(commentStart, declaration);
+  const example = comment.indexOf("* @example");
+  assert.notEqual(example, -1, "createWhatsAppRuntime JSDoc has no example");
+  const opening = comment.indexOf("* ```ts\n", example);
+  assert.notEqual(opening, -1, "createWhatsAppRuntime example has no TypeScript fence");
+  const sourceStart = opening + "* ```ts\n".length;
+  const closing = comment.indexOf("\n * ```", sourceStart);
+  assert.notEqual(closing, -1, "createWhatsAppRuntime example has no closing fence");
+  const source = comment
+    .slice(sourceStart, closing)
+    .split("\n")
+    .map((line) => line.replace(/^ \* ?/u, ""))
+    .join("\n");
+  assert.match(source, /\bawait createWhatsAppClient\(runtime\);/u);
+  return `import {
+  createSession,
+  createWhatsAppClient,
+  createWhatsAppRuntime,
+  memoryBackend,
+  qrAuth,
+} from "whatsappd";
+
+${source}
+`;
+};
+
 interface PackedScenarioReceipt {
   readonly pid: number;
   readonly mode: "write" | "read";
@@ -207,7 +240,10 @@ interface PackedScenarioReceipt {
   readonly connectionPresent: boolean;
   readonly identityPresent: boolean;
   readonly presenceRestored: boolean;
-  readonly closeOrder: readonly string[];
+  readonly liveConnectionPresent: boolean;
+  readonly liveIdentityPresent: boolean;
+  readonly livePresenceObserved: boolean;
+  readonly closeOrder: readonly ("client" | "runtime" | "backend")[];
   readonly envKeys: readonly string[];
 }
 
@@ -276,14 +312,30 @@ const assertPackedReconstruction = (
   );
   assert.equal(first.pageMessageCount, second.pageMessageCount);
   assert.equal(first.mediaDigest, second.mediaDigest);
-  assert.deepEqual(first.closeOrder, ["client", "runtime", "backend"]);
-  assert.deepEqual(second.closeOrder, ["client", "runtime", "backend"]);
+  assert.equal(first.liveConnectionPresent, true, "the live Client never observed a connection");
+  assert.equal(first.liveIdentityPresent, true, "the live Client never observed an identity");
+  assert.equal(first.livePresenceObserved, true, "the live Client never observed presence");
+  assert.deepEqual(
+    first.closeOrder,
+    ["client", "runtime", "backend"],
+    "the write child did not close in application-owned order",
+  );
+  assert.deepEqual(
+    second.closeOrder,
+    ["client", "runtime", "backend"],
+    "the replacement did not close in application-owned order",
+  );
   assert.equal(second.connectionPresent, false, "the replacement reconstructed a connection");
   assert.equal(second.identityPresent, false, "the replacement reconstructed an identity");
   assert.equal(second.presenceRestored, false, "the replacement reconstructed presence");
 };
 
 try {
+  const packedReceiptScan = assertPackedProofReceiptSanitized(
+    JSON.parse(
+      await readFile(path.join(root, ".proof-receipts/issue107-p6.run1-906e1b2.json"), "utf8"),
+    ),
+  );
   await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: root });
   const archive = (await readdir(consumer)).find((file) => file.endsWith(".tgz"));
   assert.ok(archive, "pnpm pack did not produce an archive");
@@ -327,6 +379,7 @@ try {
 
   const readmeSource = await readmeClientSource();
   await writeFile(path.join(consumer, "readme-client.ts"), readmeSource);
+  await writeFile(path.join(consumer, "runtime-javadoc.ts"), await runtimeJSDocSource());
   await writeFile(
     path.join(consumer, "tsconfig.json"),
     JSON.stringify({
@@ -339,7 +392,7 @@ try {
         skipLibCheck: true,
         verbatimModuleSyntax: true,
       },
-      files: ["readme-client.ts"],
+      files: ["readme-client.ts", "runtime-javadoc.ts"],
     }),
   );
   const compiler = path.join(root, "node_modules/.bin/tsgo");
@@ -653,6 +706,7 @@ try {
   const scenarioSalt = randomBytes(16).toString("hex");
   const first = await runPackedScenario("write", scenarioDirectory, scenarioSalt);
   const second = await runPackedScenario("read", scenarioDirectory, scenarioSalt);
+  assertPackedReconstruction(first, second);
   assert.throws(
     () => assertPackedReconstruction(first, { ...second, pid: first.pid }),
     /reused one OS process/,
@@ -669,7 +723,6 @@ try {
     () => assertPackedReconstruction(first, { ...second, connectionPresent: true }),
     /reconstructed a connection/,
   );
-  assertPackedReconstruction(first, second);
   process.stdout.write(
     `${JSON.stringify({
       packedConsumer: {
@@ -690,7 +743,13 @@ try {
         presenceRestored: second.presenceRestored,
         explicitEnvironmentAllowlist: true,
         closeOrder: second.closeOrder,
+        liveStatePositiveControls: {
+          connectionPresent: first.liveConnectionPresent,
+          identityPresent: first.liveIdentityPresent,
+          presenceObserved: first.livePresenceObserved,
+        },
       },
+      receiptSanitization: packedReceiptScan,
     })}\n`,
   );
 } finally {

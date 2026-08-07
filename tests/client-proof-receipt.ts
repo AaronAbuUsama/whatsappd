@@ -1,26 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import {
+  receiptField as field,
+  scanSchemaDrivenReceipt,
+  type ReceiptFieldSchema,
+  type ReceiptScanReport,
+} from "./proof-receipt-scan.ts";
 
-type FieldType =
-  | "hash"
-  | "digest"
-  | "count"
-  | "length"
-  | "boolean"
-  | "enum"
-  | "iso8601"
-  | "git_sha"
-  | "free_form";
-
-interface FieldSchema {
-  readonly type: FieldType;
-  readonly values?: readonly string[];
-}
-
-const field = (type: FieldType, values?: readonly string[]): FieldSchema => ({ type, values });
-
-const RECEIPT_SCHEMA = new Map<string, FieldSchema>([
+const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/schemaVersion", field("count")],
   ["/issue", field("count")],
   ["/scope", field("free_form")],
@@ -151,130 +139,11 @@ const RECEIPT_SCHEMA = new Map<string, FieldSchema>([
   ["/sanitization/floorPassed", field("boolean")],
 ]);
 
-export interface ReceiptScanReport {
-  readonly schemaUnknownFields: number;
-  readonly schemaInvalidFields: number;
-  readonly patternHits: number;
-  readonly knownValueHits: number;
-  readonly freeFormFields: number;
-  readonly digestFields: number;
-  readonly receiptByteLength: number;
-  readonly nonEmpty: boolean;
-  readonly floorPassed: boolean;
-}
-
-interface PrimitiveLeaf {
-  readonly path: string;
-  readonly value: string | number | boolean | null;
-}
-
-function primitiveLeaves(value: unknown, pointer = ""): PrimitiveLeaf[] {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return [{ path: pointer, value }];
-  }
-  if (Array.isArray(value)) {
-    if (value.length === 0) return [{ path: pointer, value: null }];
-    return value.flatMap((entry, index) => primitiveLeaves(entry, `${pointer}/${index}`));
-  }
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>);
-    if (entries.length === 0) return [{ path: pointer, value: null }];
-    return entries.flatMap(([key, entry]) =>
-      primitiveLeaves(entry, `${pointer}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`),
-    );
-  }
-  return [{ path: pointer, value: null }];
-}
-
-function schemaPath(pointer: string): string {
-  return pointer.replace(/\/\d+(?=\/|$)/g, "/*");
-}
-
-function validIso8601(value: string): boolean {
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
-}
-
-function fieldIsValid(schema: FieldSchema, value: PrimitiveLeaf["value"]): boolean {
-  switch (schema.type) {
-    case "hash":
-      return typeof value === "string" && /^[a-f0-9]{40}$/u.test(value);
-    case "digest":
-      return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
-    case "count":
-    case "length":
-      return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-    case "boolean":
-      return typeof value === "boolean";
-    case "enum":
-      return typeof value === "string" && schema.values?.includes(value) === true;
-    case "iso8601":
-      return typeof value === "string" && validIso8601(value);
-    case "git_sha":
-      return typeof value === "string" && /^[a-f0-9]{40}$/u.test(value);
-    case "free_form":
-      return typeof value === "string";
-  }
-}
-
-function freeFormPatternHits(value: string): number {
-  let hits = 0;
-  if (/\d{7,}/u.test(value.replace(/[\s\-().+]/gu, ""))) hits++;
-  if (/@(s\.whatsapp\.net|g\.us|lid|broadcast|newsletter)/u.test(value)) hits++;
-  if (/[A-Za-z0-9+/_-]{32,}={0,2}/u.test(value)) hits++;
-  if (/(?:[A-Za-z0-9+/_-]+={0,2},){2,}[A-Za-z0-9+/_-]+={0,2}/u.test(value)) hits++;
-  if (value.includes(".proof-private")) hits++;
-  return hits;
-}
-
 export function scanClientProofReceipt(
   receipt: unknown,
   knownValues: readonly string[],
 ): ReceiptScanReport {
-  const serialized = JSON.stringify(receipt);
-  const leaves = primitiveLeaves(receipt);
-  let schemaUnknownFields = 0;
-  let schemaInvalidFields = 0;
-  let patternHits = 0;
-  let freeFormFields = 0;
-  let digestFields = 0;
-
-  for (const leaf of leaves) {
-    const schema = RECEIPT_SCHEMA.get(schemaPath(leaf.path));
-    if (!schema) {
-      schemaUnknownFields++;
-      continue;
-    }
-    if (!fieldIsValid(schema, leaf.value)) schemaInvalidFields++;
-    if (schema.type === "free_form") {
-      freeFormFields++;
-      if (typeof leaf.value === "string") patternHits += freeFormPatternHits(leaf.value);
-    }
-    if (schema.type === "digest") digestFields++;
-  }
-
-  const knownValueHits = knownValues.filter(
-    (value) => value.length > 0 && serialized.includes(value),
-  ).length;
-  const receiptByteLength = Buffer.byteLength(serialized);
-  const nonEmpty = receiptByteLength > 2 && leaves.length > 0;
-  const floorPassed = nonEmpty && freeFormFields > 0 && digestFields > 0;
-  return {
-    schemaUnknownFields,
-    schemaInvalidFields,
-    patternHits,
-    knownValueHits,
-    freeFormFields,
-    digestFields,
-    receiptByteLength,
-    nonEmpty,
-    floorPassed,
-  };
+  return scanSchemaDrivenReceipt(receipt, knownValues, RECEIPT_SCHEMA);
 }
 
 export interface ClientProofRunStart {

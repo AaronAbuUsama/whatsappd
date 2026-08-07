@@ -35,6 +35,7 @@ const DOCS = [
   "CONTEXT.md",
   "README.md",
   "CONTRIBUTING.md",
+  "docs/standing-decisions.md",
   "docs/agents/domain.md",
   "docs/agents/handoff-0.3-client-stack.md",
   "docs/agents/issue-tracker.md",
@@ -60,6 +61,7 @@ const completeAgentDocs = [
   "CONTEXT.md",
   "README.md",
   "CONTRIBUTING.md",
+  "docs/standing-decisions.md",
   ...(await markdownFiles("docs/agents")),
   ...(await markdownFiles("docs/runbooks")),
 ].sort();
@@ -134,6 +136,9 @@ const isRepositoryReference = (value: string): boolean => {
   return first !== undefined && trackedRootEntries.has(first);
 };
 
+/** Tombstones may name one retired path only in the document recording its replacement. */
+const KNOWN_RETIRED_REFERENCES = new Set(["docs/standing-decisions.md\0docs/EXECUTION-STATE.md"]);
+
 const failures: string[] = [];
 const record = (doc: string, message: string): void => {
   failures.push(`${doc}: ${message}`);
@@ -161,6 +166,7 @@ for (const doc of DOCS) {
 
   for (const [, reference] of text.matchAll(BACKTICKED_PATH)) {
     if (!reference || !isRepositoryReference(reference)) continue;
+    if (KNOWN_RETIRED_REFERENCES.has(`${doc}\0${reference}`)) continue;
     // A path is written either from the repository root or beside the doc that
     // names it; both conventions appear here, and both are legitimate.
     if (existsSync(path.join(root, reference)) || existsSync(path.join(directory, reference))) {

@@ -96,6 +96,13 @@ const durableReceipt = async (client) => {
 };
 
 let client;
+let result;
+let liveState = {
+  connectionPresent: false,
+  identityPresent: false,
+  presenceObserved: false,
+};
+const closeOrder = [];
 try {
   if (mode === "write") {
     await runtime.start();
@@ -147,6 +154,15 @@ try {
         },
       },
     });
+    const liveAccount = client.account.get();
+    liveState = {
+      connectionPresent: liveAccount.connection !== undefined,
+      identityPresent: liveAccount.identity !== undefined,
+      presenceObserved: client.contacts.presence(CHAT) !== undefined,
+    };
+    assert.equal(liveState.connectionPresent, true);
+    assert.equal(liveState.identityPresent, true);
+    assert.equal(liveState.presenceObserved, true);
     await driver.emit({ type: "connection", status: { phase: "disconnected" } });
     // Exercise the awaited live Client before application-owned teardown, then
     // take the digest from a cold Client after Runtime closure has committed its
@@ -170,28 +186,35 @@ try {
     assert.equal(account.identity, undefined);
     assert.equal(presenceRestored, false);
   }
-  process.stdout.write(
-    JSON.stringify({
-      pid: process.pid,
-      mode,
-      durableDigest: durable.digest,
-      durableDigests: durable.digests,
-      accountDurable: {
-        accountId: account.accountId,
-        lastConnectedAt: account.lastConnectedAt,
-        lastDisconnectedAt: account.lastDisconnectedAt,
-      },
-      pageMessageCount: durable.pageMessageCount,
-      mediaDigest: durable.mediaDigests[0],
-      connectionPresent: account.connection !== undefined,
-      identityPresent: account.identity !== undefined,
-      presenceRestored,
-      closeOrder: ["client", "runtime", "backend"],
-      envKeys: Object.keys(process.env).sort(),
-    }),
-  );
+  result = {
+    pid: process.pid,
+    mode,
+    durableDigest: durable.digest,
+    durableDigests: durable.digests,
+    accountDurable: {
+      accountId: account.accountId,
+      lastConnectedAt: account.lastConnectedAt,
+      lastDisconnectedAt: account.lastDisconnectedAt,
+    },
+    pageMessageCount: durable.pageMessageCount,
+    mediaDigest: durable.mediaDigests[0],
+    connectionPresent: account.connection !== undefined,
+    identityPresent: account.identity !== undefined,
+    presenceRestored,
+    liveConnectionPresent: liveState.connectionPresent,
+    liveIdentityPresent: liveState.identityPresent,
+    livePresenceObserved: liveState.presenceObserved,
+    envKeys: Object.keys(process.env).sort(),
+  };
 } finally {
-  await client?.close();
+  if (client) {
+    await client.close();
+    closeOrder.push("client");
+  }
   await runtime.stop();
+  closeOrder.push("runtime");
   await backend.close();
+  closeOrder.push("backend");
 }
+assert.ok(result, "packed scenario completed without a result");
+process.stdout.write(JSON.stringify({ ...result, closeOrder }));
