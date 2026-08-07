@@ -23,9 +23,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createWhatsAppClient, createWhatsAppRuntime, memoryBackend } from "../src/index.ts";
 import { createTestWhatsAppSession, type TestWhatsAppSessionDriver } from "../src/testing.ts";
 import {
   DEFAULT_ALLOWLIST_PATH,
+  guardedClientSender,
   guardedSender,
   resolveAllowlistedTargetForTest,
   SendRefusedError,
@@ -34,7 +36,9 @@ import {
 } from "./send-guard.ts";
 import {
   callerControlledAllowlistReachingResolver,
+  handForgedBrandReachingTheClientSendSite,
   handForgedBrandReachingTheSendSite,
+  rawChatIdReachingTheClientSendSite,
   rawChatIdReachingTheSendSite,
 } from "./send-guard-types.ts";
 import { test } from "./_expect.ts";
@@ -437,6 +441,41 @@ test("the `@ts-expect-error` fixtures are refused at run time too", async () => 
   );
   await assert.rejects(() => handForgedBrandReachingTheSendSite(sender), SendRefusedError);
   assert.equal(driver.commands.sent.length, 0, "a fixture the compiler rejects still sent");
+});
+
+test("the durable Client harness accepts only a resolved target and re-checks it before submission", async () => {
+  const sanctioned = syntheticChatId();
+  const scratch = await scratchAllowlist(JSON.stringify({ chats: [sanctioned] }));
+  const driver = createTestWhatsAppSession();
+  const backend = memoryBackend();
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+
+  try {
+    const sender = guardedClientSender(client);
+    assert.throws(() => rawChatIdReachingTheClientSendSite(sender, sanctioned), SendRefusedError);
+    assert.throws(() => handForgedBrandReachingTheClientSendSite(sender), SendRefusedError);
+    assert.equal(driver.commands.sent.length, 0, "a forged Client target reached the Session");
+
+    const target = resolveAllowlistedTargetForTest(sanctioned, scratch.allowlistPath);
+    const operation = await sender.text(target, "sanctioned", {
+      idempotencyKey: "guarded-client-send",
+    });
+    assert.equal(operation.input.type, "send");
+    assert.equal(operation.input.chatId, sanctioned);
+
+    await writeFile(scratch.allowlistPath, JSON.stringify({ chats: [syntheticChatId()] }), "utf8");
+    assert.throws(() => sender.text(target, "withdrawn"), SendRefusedError);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
+    await scratch.cleanup();
+  }
 });
 
 // ── There is no subject-matching code path ───────────────────────────────────

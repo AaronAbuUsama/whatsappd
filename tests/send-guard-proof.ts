@@ -3,10 +3,11 @@
  *
  *   node --experimental-strip-types tests/send-guard-proof.ts
  *
- * `tests/send-guard-types.ts` carries three `@ts-expect-error` directives: one
- * for a caller-controlled allowlist at resolution, one for a raw `chatId:
- * string` at the send site, and one for a hand-forged brand. `pnpm check` being
- * green with them there says the lines beneath them are type errors *today*.
+ * `tests/send-guard-types.ts` carries five `@ts-expect-error` directives: one
+ * for a caller-controlled allowlist at resolution, then raw-string and forged
+ * target attempts against both the Session and durable Client send sites.
+ * `pnpm check` being green with them there says the lines beneath them are type
+ * errors *today*.
  * It does not say the guard is what makes them errors — an unused directive is
  * itself an error, so a green run is consistent with the guard having been
  * weakened and something unrelated failing in its place.
@@ -47,6 +48,14 @@ const CASES = [
   },
   { marker: "guard-fixture:raw-string", what: "a raw chatId string at the send site" },
   { marker: "guard-fixture:forged-brand", what: "a hand-forged brand at the send site" },
+  {
+    marker: "guard-fixture:client-raw-string",
+    what: "a raw chatId string at the durable Client send site",
+  },
+  {
+    marker: "guard-fixture:client-forged-brand",
+    what: "a hand-forged brand at the durable Client send site",
+  },
 ] as const;
 
 interface CheckResult {

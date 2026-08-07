@@ -417,6 +417,7 @@ function guardBypassesIn(source: string): readonly string[] {
   const code = codeWithoutComments(source);
   return [
     ...(/\b(?:\w+\.)?session\s*\.\s*send\s*\(/u.test(code) ? ["raw-session-send"] : []),
+    ...(code.includes("client.messages.send.") ? ["raw-client-send"] : []),
     ...(code.includes("resolveAllowlistedTargetForTest(") ? ["test-allowlist-seam"] : []),
   ];
 }
@@ -444,14 +445,14 @@ test("every real-profile harness uses the production allowlist authority and gua
     if (file.endsWith(".test.ts")) continue;
     const source = await readFile(file, "utf8");
     const code = codeWithoutComments(source);
-    if (!code.includes(".proof-private")) continue;
-    if (!/\b(?:createSession|createWhatsAppRuntime)\s*\(/u.test(code)) continue;
+    if (!code.includes(".proof-private") && !/\bopenProfile\s*\(/u.test(code)) continue;
+    if (!/\b(?:createSession|createWhatsAppRuntime|openProfile)\s*\(/u.test(code)) continue;
     harnesses.push({ file, source });
   }
 
   assert.deepEqual(
     harnesses.map(({ file }) => path.relative(here, file)).sort(),
-    ["client-proof.ts", "history-proof.ts", "proof-profile.ts"],
+    ["client-proof.ts", "history-proof.ts", "live-send-proof.ts", "proof-profile.ts"],
     "the mechanical real-profile harness enumeration changed",
   );
   for (const { file, source } of harnesses) {
@@ -465,9 +466,10 @@ test("every real-profile harness uses the production allowlist authority and gua
   assert.deepEqual(
     guardBypassesIn(`
       await peer.session.send(target, { text: "raw" });
+      await client.messages.send.text(target, "raw");
       resolveAllowlistedTargetForTest(target, callerPath);
     `),
-    ["raw-session-send", "test-allowlist-seam"],
+    ["raw-session-send", "raw-client-send", "test-allowlist-seam"],
     "the harness scan cannot see a planted bypass",
   );
 });

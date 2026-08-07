@@ -22,6 +22,7 @@ import type { MessageRef } from "../src/index.ts";
 import {
   resolveAllowlistedTarget,
   type AllowlistedTarget,
+  type GuardedClientSender,
   type GuardedSender,
 } from "./send-guard.ts";
 
@@ -74,4 +75,22 @@ export async function handForgedBrandReachingTheSendSite(
   // guard-fixture:forged-brand
   // @ts-expect-error a hand-forged brand must not stand in for a target the allowlist has actually cleared.
   return sender.send(forged, { text: "" });
+}
+
+/** A raw mirror id handed to the durable Client send path. */
+export function rawChatIdReachingTheClientSendSite(
+  sender: GuardedClientSender,
+  chatIdFromAMirrorRead: string,
+) {
+  // guard-fixture:client-raw-string
+  // @ts-expect-error the real-profile Client harness must resolve an AllowlistedTarget before durable submission.
+  return sender.text(chatIdFromAMirrorRead, "");
+}
+
+/** A hand-written object handed to the durable Client send path. */
+export function handForgedBrandReachingTheClientSendSite(sender: GuardedClientSender) {
+  const forged = { brand: true };
+  // guard-fixture:client-forged-brand
+  // @ts-expect-error a forged target must not reach the durable Client send path.
+  return sender.text(forged, "");
 }

@@ -86,7 +86,7 @@ export function createLinkObservation(): {
   };
 }
 
-interface OpenProfile {
+export interface OpenProfile {
   readonly client: WhatsAppClient;
   readonly backend: WhatsAppBackend;
   readonly media: MediaStore;
@@ -131,7 +131,7 @@ async function waitForAccount(
   });
 }
 
-async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
+export async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
   const directory = profileDirectory(profile);
   const media = fileMediaStore({ directory });
   const backend = libsqlBackend({
@@ -271,7 +271,7 @@ function sha256(bytes: string | Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function proofGroupId(): string {
+export function proofGroupId(): string {
   const parsed = JSON.parse(readFileSync(DEFAULT_ALLOWLIST_PATH, "utf8")) as unknown;
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("the send allowlist is not an object");

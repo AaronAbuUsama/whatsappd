@@ -47,7 +47,16 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MessageRef, Outbound, SendOptions, WhatsAppSession } from "../src/index.ts";
+import type {
+  ClientSendOptions,
+  MediaOutbound,
+  MessageRef,
+  Outbound,
+  SendOptions,
+  WhatsAppClient,
+  WhatsAppOperation,
+  WhatsAppSession,
+} from "../src/index.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -259,6 +268,47 @@ export interface GuardedSender {
 }
 
 /**
+ * The durable Client send entry point used by real-profile harnesses.
+ *
+ * @remarks
+ * `client.messages.send` remains public and string-addressed because whatsappd
+ * cannot own an embedding application's authorization policy. This wrapper is
+ * the mission harness's application-owned policy boundary: it makes the cheap
+ * path for linked-account proof code accept only a resolved target.
+ */
+export interface GuardedClientSender {
+  text(
+    target: AllowlistedTarget,
+    text: string,
+    options?: ClientSendOptions,
+  ): Promise<WhatsAppOperation>;
+  media(
+    target: AllowlistedTarget,
+    content: MediaOutbound,
+    options?: ClientSendOptions,
+  ): Promise<WhatsAppOperation>;
+}
+
+function checkedTargetId(target: AllowlistedTarget): string {
+  const record = issued.get(target);
+  if (!record) {
+    throw new SendRefusedError(
+      "target_not_resolved_through_the_guard",
+      DEFAULT_ALLOWLIST_PATH,
+      "this target was not produced by resolveAllowlistedTarget, so nothing has checked it",
+    );
+  }
+  if (!sanctionedIds(record.path).has(record.id)) {
+    throw new SendRefusedError(
+      "target_not_allowlisted",
+      record.path,
+      "this target was sanctioned when it was resolved and is not sanctioned now",
+    );
+  }
+  return record.id;
+}
+
+/**
  * Wrap a session so that the only way to send through it is with a resolved
  * target.
  *
@@ -275,22 +325,20 @@ export function guardedSender(session: Pick<WhatsAppSession, "send">): GuardedSe
       // Not `target.id` — there is no such member, and that is the point. A
       // forged brand, a raw string from untyped code, and a cast through
       // `unknown` all miss this map and all stop here, before `session.send`.
-      const record = issued.get(target);
-      if (!record) {
-        throw new SendRefusedError(
-          "target_not_resolved_through_the_guard",
-          DEFAULT_ALLOWLIST_PATH,
-          "this target was not produced by resolveAllowlistedTarget, so nothing has checked it",
-        );
-      }
-      if (!sanctionedIds(record.path).has(record.id)) {
-        throw new SendRefusedError(
-          "target_not_allowlisted",
-          record.path,
-          "this target was sanctioned when it was resolved and is not sanctioned now",
-        );
-      }
-      return session.send(record.id, content, options);
+      return session.send(checkedTargetId(target), content, options);
     },
+  };
+}
+
+/**
+ * Wrap the public durable Client send path with the linked-account proof
+ * harness's owner-controlled destination policy.
+ */
+export function guardedClientSender(client: Pick<WhatsAppClient, "messages">): GuardedClientSender {
+  return {
+    text: (target, text, options) =>
+      client.messages.send.text(checkedTargetId(target), text, options),
+    media: (target, content, options) =>
+      client.messages.send.media(checkedTargetId(target), content, options),
   };
 }

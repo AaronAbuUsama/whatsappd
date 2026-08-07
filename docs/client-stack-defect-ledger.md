@@ -361,6 +361,21 @@ provable only if the substrate changes.
 
 ## Decisions taken here that a later layer may want to revisit
 
+- **The #127 destination guard remains a harness module, not a package export.**
+  This is a deliberate decision for #108 rather than an accidental gap.
+  `.proof-private/send-allowlist.json` names the owner's three sanctioned proof
+  destinations; a published library cannot know or own an embedding
+  application's authorization policy, and exporting this repository-specific
+  resolver would turn private proof infrastructure into product API.
+  `client.messages.send` therefore remains string-addressed as #108 specifies.
+  The real-account harness instead makes its application-owned policy boundary
+  structural with `guardedClientSender()`: its durable send methods accept only
+  the same opaque `AllowlistedTarget` as the Session wrapper, re-check the
+  owner-controlled file immediately before submission, and are pinned by
+  raw-string and forged-brand `@ts-expect-error` controls. This does **not**
+  claim the packed Client is allowlist-aware; it records why no equivalent
+  package barrier is correct, and what prevents mission code from routing
+  around the harness barrier.
 - **`account.get()` returns a fresh view per read.** It derives from the clock,
   so it cannot be memoized against a transition. A referentially-stable snapshot
   is what `useSyncExternalStore` needs, and ADR-0023 assigns selectors and hooks
