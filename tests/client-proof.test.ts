@@ -452,7 +452,13 @@ test("every real-profile harness uses the production allowlist authority and gua
 
   assert.deepEqual(
     harnesses.map(({ file }) => path.relative(here, file)).sort(),
-    ["client-proof.ts", "history-proof.ts", "live-send-proof.ts", "proof-profile.ts"],
+    [
+      "client-proof.ts",
+      "history-proof.ts",
+      "live-send-proof.ts",
+      "pairing-proof.ts",
+      "proof-profile.ts",
+    ],
     "the mechanical real-profile harness enumeration changed",
   );
   for (const { file, source } of harnesses) {

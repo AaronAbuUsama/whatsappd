@@ -10,7 +10,6 @@ import { createClient } from "@libsql/client";
 import { test } from "./_expect.ts";
 import {
   createWhatsAppClient,
-  createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   memoryBackend,
@@ -19,7 +18,10 @@ import {
   type WhatsAppOperationInput,
   type WhatsAppOperationStore,
 } from "../src/index.ts";
-import { createTestWhatsAppSession } from "../src/testing.ts";
+import {
+  createTestWhatsAppRuntime as createWhatsAppRuntime,
+  createTestWhatsAppSession,
+} from "../src/testing.ts";
 
 const CHAT = "operation-media-target@example.invalid";
 const execFileAsync = promisify(execFile);
@@ -573,6 +575,8 @@ test("operation JSON stays structural and excludes media and credential canaries
     { type: "mark_read", refs: [ref] },
     { type: "typing", chatId: CHAT, on: true },
     { type: "phone_history", anchor: { ref, timestamp: 123 }, count: 50 },
+    { type: "pair", method: "qr" },
+    { type: "pair", method: "pairing_code", phoneE164: "+15555550123" },
   ];
   const memory = memoryOperationStore({ clock: { now: () => 1_000 } });
 
@@ -711,6 +715,44 @@ test("operation JSON stays structural and excludes media and credential canaries
       markerOccurrences(Buffer.from(credentialMarker.toString("base64")), credentialMarker) > 0,
     );
     assert.ok(markerOccurrences(Buffer.from(errorMarker.toString("base64")), errorMarker) > 0);
+  } finally {
+    oracle.close();
+    await backend.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("libSQL rejects malformed pair operation JSON", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-pair-json-"));
+  const url = `file:${path.join(directory, "whatsapp.db")}`;
+  const backend = libsqlBackend({
+    url,
+    accountId: "personal",
+    media: memoryMediaStore(),
+  });
+  const oracle = createClient({ url });
+  const submitted = await backend.operations.submit({
+    accountId: "personal",
+    id: "pair-json",
+    idempotencyKey: "pair-json",
+    operation: { type: "pair", method: "qr" },
+  });
+
+  try {
+    for (const input of [
+      { type: "pair", method: "unknown" },
+      { type: "pair", method: "qr", extra: true },
+      { type: "pair", method: "pairing_code", phoneE164: 123 },
+    ]) {
+      await oracle.execute({
+        sql: "UPDATE wa_operations SET input_json = ? WHERE operation_id = ?",
+        args: [JSON.stringify(input), submitted.id],
+      });
+      await assert.rejects(
+        backend.operations.get("personal", submitted.id),
+        /invalid libSQL operation/,
+      );
+    }
   } finally {
     oracle.close();
     await backend.close();

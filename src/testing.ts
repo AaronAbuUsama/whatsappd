@@ -1,8 +1,16 @@
 import { addressOf, type InboundMessage } from "./model/message.ts";
 import type { MessageRef, Outbound, SendOptions } from "./model/outbound.ts";
 import type { WaIdentity } from "./model/status.ts";
+import type { CredentialStore } from "./ports.ts";
+import type { RuntimeSession, WhatsAppRuntimeConfig, WhatsAppRuntime } from "./runtime/runtime.ts";
+import { createWhatsAppRuntimeWithSessionFactory } from "./runtime/runtime.ts";
+import type { RuntimeSessionFactory } from "./runtime/lifecycle.ts";
 import type { WhatsAppSession } from "./session.ts";
-import { createSubscriptionDispatcher, type WhatsAppEvent } from "./subscription.ts";
+import {
+  createSubscriptionDispatcher,
+  type Awaitable,
+  type WhatsAppEvent,
+} from "./subscription.ts";
 
 export interface TextMessageInput {
   readonly id: string;
@@ -75,6 +83,35 @@ export interface TestWhatsAppSessionDriver {
   readonly commands: RecordedSessionCommands;
   emit(event: TestWhatsAppEvent): Promise<void>;
 }
+
+/**
+ * Create a Runtime with deterministic registration and Session opening.
+ *
+ * @remarks
+ * This override lives only on `whatsappd/testing`; production callers use the
+ * built-in Session factory through `createWhatsAppRuntime()`.
+ */
+export function createWhatsAppRuntimeForTesting(
+  config: WhatsAppRuntimeConfig,
+  sessionFactory: RuntimeSessionFactory,
+): WhatsAppRuntime {
+  return createWhatsAppRuntimeWithSessionFactory(config, sessionFactory);
+}
+
+export type TestWhatsAppRuntimeConfig = WhatsAppRuntimeConfig & {
+  readonly openSession: (credentials: CredentialStore) => Awaitable<RuntimeSession>;
+};
+
+/** Create a deterministically registered Runtime over one test Session. */
+export function createTestWhatsAppRuntime(config: TestWhatsAppRuntimeConfig): WhatsAppRuntime {
+  const { openSession, ...runtimeConfig } = config;
+  return createWhatsAppRuntimeForTesting(runtimeConfig, {
+    registration: async () => "registered",
+    open: async (credentials) => openSession(credentials),
+  });
+}
+
+export type { RuntimeSessionFactory, RuntimeRegistration } from "./runtime/lifecycle.ts";
 
 export interface TestWhatsAppSessionOptions {
   /**

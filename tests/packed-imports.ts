@@ -17,6 +17,7 @@ const README_FENCE_MARKER = "<!-- packed-client-typecheck -->";
 const EXPECTED_ROOT_EXPORTS = [
   "AcceptedWhatsAppBatch",
   "AccountAlreadyClaimedError",
+  "AccountAlreadyLinkedError",
   "AccountLease",
   "AccountLeaseStore",
   "AccountNotHeldError",
@@ -29,6 +30,7 @@ const EXPECTED_ROOT_EXPORTS = [
   "ClientChatMessages",
   "ClientNamespace",
   "ClientOperationOptions",
+  "ClientPairInput",
   "ClientSendOptions",
   "ContactRecord",
   "ContactUpdate",
@@ -100,6 +102,7 @@ const EXPECTED_ROOT_EXPORTS = [
   "WhatsAppDataStore",
   "WhatsAppDurableEvent",
   "WhatsAppFault",
+  "WhatsAppLinkState",
   "WhatsAppOperation",
   "WhatsAppOperationInput",
   "WhatsAppOperationState",
@@ -670,9 +673,13 @@ try {
         pairingAuth,
         qrAuth,
       } from "whatsappd";
-      import { createTestWhatsAppSession } from "whatsappd/testing";
+      import {
+        createTestWhatsAppRuntime,
+        createTestWhatsAppSession,
+      } from "whatsappd/testing";
 
       assert.equal(typeof createSession, "function");
+      assert.equal(typeof createTestWhatsAppRuntime, "function");
       assert.equal(typeof createTestWhatsAppSession, "function");
       assert.equal(typeof fileStore, "function");
       assert.equal(typeof memoryStore, "function");

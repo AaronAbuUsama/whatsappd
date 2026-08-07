@@ -8,7 +8,6 @@ import { promisify } from "node:util";
 import { expect, test } from "./_expect.ts";
 import {
   createWhatsAppClient,
-  createWhatsAppRuntime,
   type DurableOutbound,
   libsqlBackend,
   memoryBackend,
@@ -22,7 +21,11 @@ import {
   type WhatsAppOperation,
 } from "../src/index.ts";
 import { sanitizeOperationError } from "../src/runtime/operations.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+import {
+  createTestWhatsAppRuntime as createWhatsAppRuntime,
+  createTestWhatsAppSession,
+  textMessage,
+} from "../src/testing.ts";
 
 const CHAT = "operation-target@example.invalid";
 const execFileAsync = promisify(execFile);

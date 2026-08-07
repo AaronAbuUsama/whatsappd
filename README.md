@@ -91,12 +91,10 @@ pnpm add whatsappd @libsql/client
 
 ```ts
 import {
-  createSession,
   createWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
-  qrAuth,
   type WhatsAppClient,
 } from "whatsappd";
 
@@ -109,7 +107,6 @@ const backend = libsqlBackend({
 const runtime = createWhatsAppRuntime({
   accountId: "personal",
   backend,
-  openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
 });
 
 // Returns once the account is being consumed; the session keeps running.

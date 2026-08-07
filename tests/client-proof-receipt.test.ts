@@ -7,10 +7,12 @@ import { test } from "./_expect.ts";
 import {
   buildClientGuardProofReceipt,
   buildClientProofReceipt,
+  buildPairingProofReceipt,
   scanClientProofReceipt,
   writeClientProofReceiptExclusive,
   type ClientGuardProofObservationStore,
   type ClientProofObservationStore,
+  type PairingProofObservationStore,
 } from "./client-proof-receipt.ts";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -177,6 +179,70 @@ function completeStore(): ClientProofObservationStore {
     },
   };
 }
+
+function completePairingStore(): PairingProofObservationStore {
+  return {
+    runStart: {
+      captureSite: "pairing-proof-run-start",
+      gitHead: "38aab9cd0e17181ece2e0c6f3a8128208ef139e5",
+      sourceTreeHash: "1".repeat(40),
+      proofHarnessSha256: "2".repeat(64),
+      treeClean: true,
+      startedAt: "2026-08-07T00:00:00.000Z",
+    },
+    finalizedAt: "2026-08-07T00:01:00.000Z",
+    knownValues: ["private nonce", `peer${"@lid"}`, `group${"@g.us"}`],
+    summary: {
+      interactive: false,
+      freshLinkState: "needs_pairing",
+      observationMs: 10_250,
+      netSocketCount: 0,
+      tlsSocketCount: 0,
+      netControlCount: 1,
+      tlsControlCount: 1,
+      linkMode: "resumed",
+      resumeMs: 2_500,
+      challengeEventCount: 0,
+      challengeProduced: false,
+      pairOperationCount: 0,
+      secondSocketCount: 0,
+      sessionStillOnline: true,
+    },
+  };
+}
+
+test("the pairing receipt is head-bound, complete, and schema-sanitized", () => {
+  const store = completePairingStore();
+  const current = { gitHead: store.runStart.gitHead, treeClean: true };
+  const receipt = buildPairingProofReceipt(store, current);
+  const scan = scanClientProofReceipt(receipt, store.knownValues);
+  assert.equal(scan.schemaUnknownFields, 0);
+  assert.equal(scan.schemaInvalidFields, 0);
+  assert.equal(scan.patternHits, 0);
+  assert.equal(scan.knownValueHits, 0);
+  assert.equal(scan.floorPassed, true);
+
+  assert.throws(
+    () =>
+      buildPairingProofReceipt(
+        { ...store, runStart: { ...store.runStart, treeClean: false } },
+        current,
+      ),
+    /dirty/,
+  );
+  assert.throws(
+    () => buildPairingProofReceipt(store, { gitHead: "f".repeat(40), treeClean: true }),
+    /does not match/,
+  );
+  assert.throws(
+    () =>
+      buildPairingProofReceipt(
+        { ...store, summary: { ...store.summary!, pairOperationCount: 1 as 0 } },
+        current,
+      ),
+    /incomplete/,
+  );
+});
 
 test("the receipt writer refuses dishonest provenance and missing observations", () => {
   const store = completeStore();

@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import {
   createWhatsAppClient,
-  createWhatsAppRuntime,
   libsqlBackend,
   memoryMediaStore,
   type RuntimeSession,
   type WhatsAppOperation,
 } from "../src/index.ts";
-import { createTestWhatsAppSession } from "../src/testing.ts";
+import {
+  createTestWhatsAppRuntime as createWhatsAppRuntime,
+  createTestWhatsAppSession,
+} from "../src/testing.ts";
 
 type StateName = "queued" | "claimed" | "executing" | "succeeded" | "failed" | "outcome_unknown";
 

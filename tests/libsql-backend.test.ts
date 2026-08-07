@@ -13,13 +13,14 @@ import {
   StaleAccountClaimError,
 } from "../src/index.ts";
 import type { RuntimeFrameClient, CurrentMirrorSnapshot } from "../src/runtime/contracts.ts";
-import {
-  createRuntimeFrameClient,
-  createWhatsAppRuntime as createPublicWhatsAppRuntime,
-  type InProcessWhatsAppRuntime,
-} from "../src/runtime/runtime.ts";
+import { createRuntimeFrameClient, type InProcessWhatsAppRuntime } from "../src/runtime/runtime.ts";
 import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+import {
+  createTestWhatsAppRuntime as createPublicWhatsAppRuntime,
+  createTestWhatsAppSession,
+  textMessage,
+  type TestWhatsAppRuntimeConfig,
+} from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
 
 const ACCOUNT = "personal";
@@ -28,9 +29,8 @@ const ROOM = "room@g.us";
 const AT = 1_700_000_000_000;
 
 /** Reach the source-only raw Runtime seam in tests without widening the package root. */
-const createWhatsAppRuntime = (
-  config: Parameters<typeof createPublicWhatsAppRuntime>[0],
-): InProcessWhatsAppRuntime => createPublicWhatsAppRuntime(config) as InProcessWhatsAppRuntime;
+const createWhatsAppRuntime = (config: TestWhatsAppRuntimeConfig): InProcessWhatsAppRuntime =>
+  createPublicWhatsAppRuntime(config) as InProcessWhatsAppRuntime;
 
 dataStoreConformance("memory data", async () => ({
   data: (await import("../src/runtime/memory.ts")).memoryDataStore(),

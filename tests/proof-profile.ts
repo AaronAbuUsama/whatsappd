@@ -31,10 +31,10 @@ import {
   fileMediaStore,
   libsqlBackend,
   qrAuth,
-  createWhatsAppRuntime,
   createWhatsAppClient,
   type CredentialStore,
 } from "../src/index.ts";
+import { createTestWhatsAppRuntime as createWhatsAppRuntime } from "../src/testing.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const profile = process.argv.slice(2).find((arg) => arg !== "--") ?? "client-read";

@@ -83,6 +83,22 @@ function messageRef(value: unknown, label: string) {
   };
 }
 
+function pairOperationInput(input: Record<string, unknown>): WhatsAppOperationInput {
+  if (input.method === "qr") {
+    exactKeys(input, ["type", "method"], "input_json");
+    return normalizeOperationInput({ type: "pair", method: "qr" });
+  }
+  if (input.method === "pairing_code") {
+    exactKeys(input, ["type", "method", "phoneE164"], "input_json");
+    return normalizeOperationInput({
+      type: "pair",
+      method: "pairing_code",
+      phoneE164: text(input.phoneE164, "pair phoneE164"),
+    });
+  }
+  throw new Error("invalid libSQL operation pair method");
+}
+
 function operationInput(value: unknown): WhatsAppOperationInput {
   try {
     const input = object(value, "input_json");
@@ -232,6 +248,8 @@ function operationInput(value: unknown): WhatsAppOperationInput {
           count: integer(input.count, "phone_history count"),
         });
       }
+      case "pair":
+        return pairOperationInput(input);
       default:
         throw new Error("invalid libSQL operation input type");
     }

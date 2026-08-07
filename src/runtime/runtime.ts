@@ -12,11 +12,8 @@
  *
  * @packageDocumentation
  */
-import { isOnline, isTerminal, type Status, type WaIdentity } from "../model/status.ts";
-import { refOf } from "../model/outbound.ts";
-import type { Update } from "../model/update.ts";
-import type { CredentialStore } from "../ports.ts";
-import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
+import { isOnline, type Status, type WaIdentity } from "../model/status.ts";
+import type { Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import { firstRejection, settle } from "../outcome.ts";
 import {
   AccountAlreadyClaimedError,
@@ -24,7 +21,6 @@ import {
   type AccountLease,
   type AccountLeaseStore,
   type DurableInboundMessage,
-  type DurableUpdate,
   type RuntimeFrameClient,
   type CurrentMirrorView,
   type StoredMessagePage,
@@ -44,83 +40,16 @@ import {
   type WhatsAppOperationInput,
 } from "./operations.ts";
 import type { OperationSession } from "./operation-session.ts";
-
-const captureMessage = async (
-  accountId: string,
-  mediaStore: WhatsAppBackend["media"],
-  message: Parameters<NonNullable<WhatsAppSessionHandlers["message"]>>[0],
-): Promise<DurableInboundMessage> => {
-  switch (message.kind) {
-    case "image":
-    case "video":
-    case "audio":
-    case "document":
-    case "sticker": {
-      const source = message.media;
-      const metadata = {
-        ...(source.mimetype !== undefined && { mimetype: source.mimetype }),
-        ...(source.fileLength !== undefined && { fileLength: source.fileLength }),
-        ...(source.fileName !== undefined && { fileName: source.fileName }),
-        ...(source.seconds !== undefined && { seconds: source.seconds }),
-        ...(source.ptt !== undefined && { ptt: source.ptt }),
-        ...(source.width !== undefined && { width: source.width }),
-        ...(source.height !== undefined && { height: source.height }),
-        ...(source.caption !== undefined && { caption: source.caption }),
-      };
-      let bytes: Uint8Array;
-      try {
-        bytes = await source.download();
-      } catch {
-        return { ...message, media: { ...metadata, state: "failed", reason: "download_failed" } };
-      }
-      try {
-        const stored = await mediaStore.put({
-          accountId,
-          message: refOf(message),
-          kind: message.kind,
-          bytes,
-          ...(metadata.mimetype !== undefined && { mimetype: metadata.mimetype }),
-        });
-        return { ...message, media: { ...metadata, state: "stored", ...stored } };
-      } catch {
-        return { ...message, media: { ...metadata, state: "failed", reason: "store_failed" } };
-      }
-    }
-    default:
-      return message;
-  }
-};
-
-const durableUpdate = async (
-  accountId: string,
-  mediaStore: WhatsAppBackend["media"],
-  update: Update,
-): Promise<DurableUpdate> => {
-  if (update.kind !== "edit") return update;
-  return { ...update, message: await captureMessage(accountId, mediaStore, update.message) };
-};
-
-/**
- * What a connection status durably says about *when*, if anything.
- *
- * @remarks
- * Only the two ends of the lifecycle are facts worth keeping: the account was
- * online at this instant, or it had gone. `connecting`, `pairing` and
- * `authenticated` are transitions — the account is neither reachable nor known
- * to be gone — and stamping either timestamp from one would misreport a
- * reconnect attempt as a disconnection (ADR-0020).
- *
- * `backing_off` counts as gone, and has to: a dropped socket goes straight
- * there rather than through `disconnected` (`src/machine.ts`, `onClose`), so
- * reading only the literal phase would leave the commonest disconnection of all
- * unrecorded and last-disconnected reflecting nothing but deliberate stops.
- */
-const connectionInstant = (status: Status): "connected" | "disconnected" | undefined =>
-  isOnline(status)
-    ? "connected"
-    : status.phase === "disconnected" || status.phase === "backing_off" || isTerminal(status)
-      ? "disconnected"
-      : undefined;
+import {
+  linkStateOf,
+  productionSessionFactory,
+  resumeAuth,
+  submitPairOperation,
+  type RuntimeRegistration,
+  type RuntimeSessionFactory,
+  type WhatsAppLinkState,
+} from "./lifecycle.ts";
+import { captureMessage, connectionInstant, durableUpdate } from "./runtime-ingest.ts";
 
 /**
  * The part of a live session the runtime uses.
@@ -156,16 +85,6 @@ export interface WhatsAppRuntimeConfig {
   readonly accountId: string;
   /** Where this account's credentials, data, lease, and media live. */
   readonly backend: WhatsAppBackend;
-  /**
-   * Open the live session for this account.
-   *
-   * @remarks
-   * Called only once the account lease is held, so a duplicate worker never
-   * reaches WhatsApp. The account's credential store is passed in rather than
-   * read by the caller, so the session and the mirror cannot drift onto
-   * different accounts.
-   */
-  openSession(credentials: CredentialStore): Awaitable<RuntimeSession>;
   /** Identifies this holder in the account lease. @defaultValue a random UUID */
   readonly holderId?: string;
   /** Account-lease TTL, renewed at half this interval. @defaultValue `30_000` */
@@ -243,10 +162,16 @@ export interface ClientRuntimeSource {
   read<T>(fn: (view: CurrentMirrorView) => Promise<T>): Promise<T>;
   identity(): WaIdentity | undefined;
   currentClaim(): ClientClaim | undefined;
+  linkState(): WhatsAppLinkState | undefined;
   submitOperation(input: {
     readonly id: string;
     readonly idempotencyKey: string;
     readonly operation: WhatsAppOperationInput;
+  }): Promise<WhatsAppOperation>;
+  submitPair(input: {
+    readonly id: string;
+    readonly idempotencyKey: string;
+    readonly operation: Extract<WhatsAppOperationInput, { readonly type: "pair" }>;
   }): Promise<WhatsAppOperation>;
   submitMediaOperation(input: MediaOperationSubmission): Promise<WhatsAppOperation>;
   operations(operationIds: readonly string[]): Promise<readonly (WhatsAppOperation | undefined)[]>;
@@ -358,7 +283,7 @@ function deliver<Frame extends { readonly type: string }>(
 /**
  * Create one account's runtime.
  *
- * @param config - Account, backend, and how to open the session — see
+ * @param config - Account, backend, lease, and operation timing — see
  * {@link WhatsAppRuntimeConfig}.
  * @returns A runtime that has claimed nothing until
  * {@link WhatsAppRuntime.start | start} is called.
@@ -368,7 +293,6 @@ function deliver<Frame extends { readonly type: string }>(
  * const runtime = createWhatsAppRuntime({
  *   accountId: "personal",
  *   backend: memoryBackend(),
- *   openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
  * });
  *
  * await runtime.start();
@@ -378,6 +302,17 @@ function deliver<Frame extends { readonly type: string }>(
  * ```
  */
 export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRuntime {
+  return createWhatsAppRuntimeWithSessionFactory(config, productionSessionFactory);
+}
+
+/**
+ * Internal construction seam used by the production factory above and the
+ * deterministic adapter exported from `whatsappd/testing`.
+ */
+export function createWhatsAppRuntimeWithSessionFactory(
+  config: WhatsAppRuntimeConfig,
+  sessionFactory: RuntimeSessionFactory,
+): WhatsAppRuntime {
   const { accountId, backend } = config;
   const holderId = config.holderId ?? crypto.randomUUID();
   const leaseTtlMs = config.leaseTtlMs ?? 30_000;
@@ -409,6 +344,8 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   let operationExecutor: OperationExecutor | undefined;
   let starting: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
+  let registration: RuntimeRegistration | undefined;
+  let checkingRegistration: Promise<RuntimeRegistration> | undefined;
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
   let terminal: Extract<RuntimeDurableFrame, { type: "closed" }> | undefined;
@@ -522,6 +459,9 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       // Connection truth is only ever this claim's; without one there is
       // nothing a client could treat as current.
       if (!claim) return;
+      if (status.phase === "pairing" && status.pairing.step === "challenge_live")
+        registration = "unregistered";
+      else if (isOnline(status)) registration = "registered";
       if (isOnline(status)) operationExecutor?.resume();
       else operationExecutor?.pause();
       const observedAt = Date.now();
@@ -575,7 +515,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
    * Everything is taken and cleared before the first await, so two releases
    * racing — a `stop()` and a startup that resumes to find itself stopped — each
    * give back only what they took. That is what lets teardown finish without
-   * waiting for a startup suspended inside the caller's `openSession`: whatever
+   * waiting for a startup suspended inside the Session factory: whatever
    * it acquires after this runs, it releases itself on the way out.
    */
   async function release(): Promise<void> {
@@ -716,6 +656,18 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     return attempt;
   }
 
+  async function inspectRegistration(): Promise<RuntimeRegistration> {
+    if (registration) return registration;
+    const check =
+      checkingRegistration ??
+      (checkingRegistration = sessionFactory.registration(backend.credentials));
+    try {
+      return (registration ??= await check);
+    } finally {
+      if (checkingRegistration === check) checkingRegistration = undefined;
+    }
+  }
+
   async function open(): Promise<void> {
     // The claim comes first: a duplicate worker must fail before it can open a
     // second socket on the account and diverge its Signal state.
@@ -744,7 +696,11 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     );
     heartbeat.unref?.();
 
-    const opened = await config.openSession(backend.credentials);
+    registration = await inspectRegistration();
+    if (stopped) throw stoppedWhileStarting();
+    if (registration === "unregistered") return;
+
+    const opened = await sessionFactory.open(backend.credentials, resumeAuth());
     session = opened;
     // A stop() that ran while the session was opening has already released the
     // claim, so subscribing now would consume WhatsApp with no claim at all —
@@ -878,6 +834,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       }
     },
     currentClaim,
+    linkState: () => linkStateOf(registration),
     async submitOperation(input) {
       const operation = await backend.operations.submit({
         accountId,
@@ -887,6 +844,14 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       });
       setImmediate(() => operationExecutor?.wake());
       return operation;
+    },
+    async submitPair(input) {
+      return submitPairOperation({
+        accountId,
+        registration: await inspectRegistration(),
+        store: backend.operations,
+        submission: input,
+      });
     },
     async submitMediaOperation(input) {
       const content = await stageMediaOutbound({

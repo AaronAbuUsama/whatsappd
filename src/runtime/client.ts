@@ -43,6 +43,7 @@ import {
   type ClientClaim,
   type WhatsAppRuntime,
 } from "./runtime.ts";
+import { createClientPair, type ClientPairInput, type WhatsAppLinkState } from "./lifecycle.ts";
 import { type MediaOutbound, type WhatsAppOperation } from "./operations.ts";
 import {
   createClientMessageActions,
@@ -331,6 +332,8 @@ interface Tx {
 /** One account's own state: what is durable, what is live, and what it links. */
 export interface ClientAccountState {
   readonly accountId: string;
+  /** Whether this account can resume from credentials or needs an explicit pair operation. */
+  readonly link?: WhatsAppLinkState;
   /** When this account was last observed online, as an epoch ms. */
   readonly lastConnectedAt?: number;
   /** When it was last observed disconnected or terminal, as an epoch ms. */
@@ -416,6 +419,7 @@ export interface ClientNamespace {
 export interface WhatsAppClient {
   readonly account: ClientNamespace & {
     get(): ClientAccountState;
+    pair(input: ClientPairInput, options?: ClientOperationOptions): Promise<WhatsAppOperation>;
   };
   readonly chats: ClientNamespace & {
     /** Newest activity first, then by identifier. */
@@ -1128,6 +1132,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         // nothing.
         return Object.freeze({
           accountId: runtime.accountId,
+          link: source.linkState(),
           ...(record.lastConnectedAt !== undefined && { lastConnectedAt: record.lastConnectedAt }),
           ...(record.lastDisconnectedAt !== undefined && {
             lastDisconnectedAt: record.lastDisconnectedAt,
@@ -1140,6 +1145,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
           ...closure,
         });
       },
+      pair: createClientPair(source),
     },
 
     chats: {

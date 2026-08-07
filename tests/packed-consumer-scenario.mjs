@@ -3,13 +3,12 @@ import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createWhatsAppClient, fileMediaStore, libsqlBackend } from "whatsappd";
 import {
-  createWhatsAppClient,
-  createWhatsAppRuntime,
-  fileMediaStore,
-  libsqlBackend,
-} from "whatsappd";
-import { createTestWhatsAppSession, textMessage } from "whatsappd/testing";
+  createTestWhatsAppRuntime as createWhatsAppRuntime,
+  createTestWhatsAppSession,
+  textMessage,
+} from "whatsappd/testing";
 
 const ACCOUNT = "packed-consumer";
 const CHAT = "consumer-peer@s.whatsapp.net";

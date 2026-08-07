@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createWhatsAppClient, fileMediaStore, libsqlBackend } from "../src/index.ts";
 import {
-  createWhatsAppClient,
-  createWhatsAppRuntime,
-  fileMediaStore,
-  libsqlBackend,
-} from "../src/index.ts";
-import { createTestWhatsAppSession } from "../src/testing.ts";
+  createTestWhatsAppRuntime as createWhatsAppRuntime,
+  createTestWhatsAppSession,
+} from "../src/testing.ts";
 
 const [databasePath, mediaDirectory, operationId] = process.argv.slice(2);
 if (!databasePath || !mediaDirectory || !operationId)

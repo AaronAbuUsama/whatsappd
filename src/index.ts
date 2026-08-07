@@ -54,6 +54,8 @@ export { isTerminal, isOnline, refOf } from "./model/index.ts";
 // ── Runtime, backends, and client ──
 export { createWhatsAppRuntime } from "./runtime/runtime.ts";
 export type { RuntimeSession, WhatsAppRuntime, WhatsAppRuntimeConfig } from "./runtime/runtime.ts";
+export { AccountAlreadyLinkedError } from "./runtime/lifecycle.ts";
+export type { ClientPairInput, WhatsAppLinkState } from "./runtime/lifecycle.ts";
 export { createWhatsAppClient } from "./runtime/client.ts";
 export type {
   ClientAccountState,

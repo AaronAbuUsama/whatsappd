@@ -46,18 +46,26 @@ type Submission = {
   readonly options?: SendOptions;
 };
 
+export const submitClientOperation = <Input extends WhatsAppOperationInput>(
+  operation: Input,
+  options: ClientOperationOptions | undefined,
+  submit: (input: {
+    readonly id: string;
+    readonly idempotencyKey: string;
+    readonly operation: Input;
+  }) => Promise<WhatsAppOperation>,
+): Promise<WhatsAppOperation> => {
+  const id = operationId();
+  const { idempotencyKey = operationId(), signal } = options ?? {};
+  return awaitOperationSubmission(() => submit({ id, idempotencyKey, operation }), signal);
+};
+
 const submitOperation = (
   source: ClientRuntimeSource,
   operation: WhatsAppOperationInput,
   options: ClientOperationOptions | undefined,
-): Promise<WhatsAppOperation> => {
-  const id = operationId();
-  const { idempotencyKey = operationId(), signal } = options ?? {};
-  return awaitOperationSubmission(
-    () => source.submitOperation({ id, idempotencyKey, operation }),
-    signal,
-  );
-};
+): Promise<WhatsAppOperation> =>
+  submitClientOperation(operation, options, (input) => source.submitOperation(input));
 
 export function createClientSend(source: ClientRuntimeSource): {
   text(chatId: string, text: string, options?: ClientSendOptions): Promise<WhatsAppOperation>;

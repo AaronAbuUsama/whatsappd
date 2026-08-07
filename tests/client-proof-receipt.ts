@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -15,16 +16,25 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/tier", field("enum", ["P1", "P4"])],
   [
     "/provenance/captureSite",
-    field("enum", ["client-proof-run-start", "client-proof-guard-run-start"]),
+    field("enum", [
+      "client-proof-run-start",
+      "client-proof-guard-run-start",
+      "pairing-proof-run-start",
+    ]),
   ],
   ["/provenance/gitHead", field("git_sha")],
   ["/provenance/sourceTreeHash", field("hash")],
+  ["/provenance/proofHarnessSha256", field("digest")],
   ["/provenance/treeClean", field("boolean")],
   ["/provenance/startedAt", field("iso8601")],
   ["/provenance/finalizedAt", field("iso8601")],
   [
     "/provenance/command",
-    field("enum", ["pnpm proof:client < /dev/null", "pnpm proof:client:guard"]),
+    field("enum", [
+      "pnpm proof:client < /dev/null",
+      "pnpm proof:client:guard",
+      "pnpm proof:pairing < /dev/null",
+    ]),
   ],
   [
     "/matrix/*/id",
@@ -40,6 +50,9 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "cold-process",
       "cold-no-live-state",
       "allowlist-unlisted-target-refused",
+      "fresh-needs-pairing-no-socket",
+      "linked-resume-no-challenge",
+      "linked-pair-rejected",
     ]),
   ],
   ["/matrix/*/verdict", field("enum", ["observed", "not_observed", "failed"])],
@@ -58,6 +71,9 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "replacement-child-result",
       "replacement-client-factory",
       "recorded-session-command-log",
+      "runtime-client-and-diagnostics",
+      "client-account-observer",
+      "operation-store-and-diagnostics",
     ]),
   ],
   [
@@ -127,6 +143,17 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/targetLength", field("length")],
   ["/matrix/*/evidence/refusalReason", field("enum", ["target_not_allowlisted"])],
   ["/matrix/*/evidence/sessionSendInvocations", field("count")],
+  ["/matrix/*/evidence/freshLinkState", field("enum", ["needs_pairing"])],
+  ["/matrix/*/evidence/observationMs", field("count")],
+  ["/matrix/*/evidence/netSocketCount", field("count")],
+  ["/matrix/*/evidence/tlsSocketCount", field("count")],
+  ["/matrix/*/evidence/netControlCount", field("count")],
+  ["/matrix/*/evidence/tlsControlCount", field("count")],
+  ["/matrix/*/evidence/resumeMs", field("count")],
+  ["/matrix/*/evidence/challengeProduced", field("boolean")],
+  ["/matrix/*/evidence/pairOperationCount", field("count")],
+  ["/matrix/*/evidence/secondSocketCount", field("count")],
+  ["/matrix/*/evidence/sessionStillOnline", field("boolean")],
   ["/sanitization/captureSite", field("enum", ["receipt-writer-in-memory"])],
   ["/sanitization/schemaUnknownFields", field("count")],
   ["/sanitization/schemaInvalidFields", field("count")],
@@ -158,6 +185,15 @@ export interface ClientGuardProofRunStart {
   readonly captureSite: "client-proof-guard-run-start";
   readonly gitHead: string;
   readonly sourceTreeHash: string;
+  readonly treeClean: boolean;
+  readonly startedAt: string;
+}
+
+export interface PairingProofRunStart {
+  readonly captureSite: "pairing-proof-run-start";
+  readonly gitHead: string;
+  readonly sourceTreeHash: string;
+  readonly proofHarnessSha256: string;
   readonly treeClean: boolean;
   readonly startedAt: string;
 }
@@ -252,6 +288,28 @@ export interface ClientGuardProofObservationStore {
   };
 }
 
+export interface PairingProofObservationStore {
+  readonly runStart: PairingProofRunStart;
+  readonly finalizedAt?: string;
+  readonly knownValues: readonly string[];
+  readonly summary?: {
+    readonly interactive: false;
+    readonly freshLinkState: "needs_pairing";
+    readonly observationMs: number;
+    readonly netSocketCount: 0;
+    readonly tlsSocketCount: 0;
+    readonly netControlCount: number;
+    readonly tlsControlCount: number;
+    readonly linkMode: "resumed";
+    readonly resumeMs: number;
+    readonly challengeEventCount: 0;
+    readonly challengeProduced: false;
+    readonly pairOperationCount: 0;
+    readonly secondSocketCount: 0;
+    readonly sessionStillOnline: true;
+  };
+}
+
 export interface CurrentRepoState {
   readonly gitHead: string;
   readonly treeClean: boolean;
@@ -266,6 +324,20 @@ export function captureClientProofRunStart(root: string): ClientProofRunStart {
     captureSite: "client-proof-run-start",
     gitHead: git(root, ["rev-parse", "HEAD"]),
     sourceTreeHash: git(root, ["rev-parse", "HEAD:src"]),
+    treeClean: git(root, ["status", "--porcelain"]).length === 0,
+    startedAt: new Date().toISOString(),
+  };
+}
+
+export function capturePairingProofRunStart(
+  root: string,
+  proofHarness: string,
+): PairingProofRunStart {
+  return {
+    captureSite: "pairing-proof-run-start",
+    gitHead: git(root, ["rev-parse", "HEAD"]),
+    sourceTreeHash: git(root, ["rev-parse", "HEAD:src"]),
+    proofHarnessSha256: createHash("sha256").update(readFileSync(proofHarness)).digest("hex"),
     treeClean: git(root, ["status", "--porcelain"]).length === 0,
     startedAt: new Date().toISOString(),
   };
@@ -568,6 +640,86 @@ export function buildClientGuardProofReceipt(
   );
 }
 
+export function buildPairingProofReceipt(
+  store: PairingProofObservationStore,
+  current: CurrentRepoState,
+): Record<string, unknown> {
+  if (!store.runStart.treeClean || !current.treeClean)
+    throw new Error("refusing receipt: the run or current worktree is dirty");
+  if (store.runStart.gitHead !== current.gitHead)
+    throw new Error("refusing receipt: current head does not match the captured run head");
+  if (!store.finalizedAt || !store.summary)
+    throw new Error("refusing receipt: the pairing run is not finalized");
+  const summary = store.summary;
+  if (
+    summary.interactive ||
+    summary.freshLinkState !== "needs_pairing" ||
+    summary.observationMs < 10_000 ||
+    summary.netSocketCount !== 0 ||
+    summary.tlsSocketCount !== 0 ||
+    summary.netControlCount < 1 ||
+    summary.tlsControlCount < 1 ||
+    summary.linkMode !== "resumed" ||
+    summary.challengeEventCount !== 0 ||
+    summary.challengeProduced ||
+    summary.pairOperationCount !== 0 ||
+    summary.secondSocketCount !== 0 ||
+    !summary.sessionStillOnline
+  )
+    throw new Error("refusing receipt: pairing observation is incomplete");
+  return sanitizedReceipt(
+    {
+      schemaVersion: 1,
+      issue: 109,
+      scope: "Unattended resume, fresh no-socket classification, and linked pair refusal",
+      tier: "P4",
+      provenance: {
+        ...store.runStart,
+        finalizedAt: store.finalizedAt,
+        command: "pnpm proof:pairing < /dev/null",
+      },
+      matrix: [
+        {
+          id: "fresh-needs-pairing-no-socket",
+          verdict: "observed",
+          captureSite: "runtime-client-and-diagnostics",
+          evidence: {
+            interactive: summary.interactive,
+            freshLinkState: summary.freshLinkState,
+            observationMs: summary.observationMs,
+            netSocketCount: summary.netSocketCount,
+            tlsSocketCount: summary.tlsSocketCount,
+            netControlCount: summary.netControlCount,
+            tlsControlCount: summary.tlsControlCount,
+          },
+        },
+        {
+          id: "linked-resume-no-challenge",
+          verdict: "observed",
+          captureSite: "client-account-observer",
+          evidence: {
+            linkMode: summary.linkMode,
+            resumeMs: summary.resumeMs,
+            challengeEventCount: summary.challengeEventCount,
+            challengeProduced: summary.challengeProduced,
+          },
+        },
+        {
+          id: "linked-pair-rejected",
+          verdict: "observed",
+          captureSite: "operation-store-and-diagnostics",
+          evidence: {
+            pairOperationCount: summary.pairOperationCount,
+            secondSocketCount: summary.secondSocketCount,
+            sessionStillOnline: summary.sessionStillOnline,
+          },
+        },
+      ],
+    },
+    store.knownValues,
+  );
+}
+
 export function writeClientProofReceiptExclusive(
   root: string,
   file: string,
@@ -590,6 +742,37 @@ export function writeClientProofReceiptExclusive(
     }
     throw error;
   }
+}
+
+export function writePairingProofReceipt(
+  root: string,
+  store: PairingProofObservationStore,
+): { readonly file: string; readonly scan: ReceiptScanReport } {
+  const current = {
+    gitHead: git(root, ["rev-parse", "HEAD"]),
+    treeClean: git(root, ["status", "--porcelain"]).length === 0,
+  };
+  const receipt = buildPairingProofReceipt(store, current);
+  const outDir = path.join(root, ".proof-receipts");
+  mkdirSync(outDir, { recursive: true });
+  const runNumber =
+    1 + readdirSync(outDir).filter((name) => name.startsWith("issue109-p4.run")).length;
+  const file = path.join(
+    outDir,
+    `issue109-p4.run${runNumber}-${store.runStart.gitHead.slice(0, 7)}.json`,
+  );
+  writeClientProofReceiptExclusive(root, file, receipt);
+  const written = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  const scan = scanClientProofReceipt(written, store.knownValues);
+  if (
+    scan.schemaUnknownFields !== 0 ||
+    scan.schemaInvalidFields !== 0 ||
+    scan.patternHits !== 0 ||
+    scan.knownValueHits !== 0 ||
+    !scan.floorPassed
+  )
+    throw new Error(`written pairing receipt failed sanitization: ${JSON.stringify(scan)}`);
+  return { file, scan };
 }
 
 export function writeClientProofReceipt(

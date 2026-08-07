@@ -96,9 +96,12 @@ mock.module("@libsql/client", {
   },
 });
 
-const { createWhatsAppClient, createWhatsAppRuntime, libsqlBackend, memoryMediaStore } =
-  await import("../src/index.ts");
-const { createTestWhatsAppSession, textMessage } = await import("../src/testing.ts");
+const { createWhatsAppClient, libsqlBackend, memoryMediaStore } = await import("../src/index.ts");
+const {
+  createTestWhatsAppRuntime: createWhatsAppRuntime,
+  createTestWhatsAppSession,
+  textMessage,
+} = await import("../src/testing.ts");
 
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,

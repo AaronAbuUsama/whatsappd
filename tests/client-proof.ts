@@ -18,7 +18,6 @@ import { fileURLToPath } from "node:url";
 import {
   createSession,
   createWhatsAppClient,
-  createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   qrAuth,
@@ -32,6 +31,7 @@ import {
   type WhatsAppRuntime,
   type WhatsAppSession,
 } from "../src/index.ts";
+import { createTestWhatsAppRuntime as createWhatsAppRuntime } from "../src/testing.ts";
 import { DEFAULT_ALLOWLIST_PATH, guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
 import {
   captureClientProofRunStart,

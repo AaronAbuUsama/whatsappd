@@ -51,6 +51,7 @@
     "proof:client:guard": "node --experimental-strip-types tests/client-guard-proof.ts",
     "proof:client:paging": "node --experimental-strip-types tests/client-proof.ts --paging-replacement",
     "proof:live-send": "node --experimental-strip-types tests/live-send-proof.ts",
+    "proof:pairing": "node --experimental-strip-types tests/pairing-proof.ts",
     "proof:pack": "pnpm build && node --experimental-strip-types tests/packed-imports.ts",
     "prepublishOnly": "vp run build",
     "prepare": "vp config"

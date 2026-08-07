@@ -62,6 +62,12 @@ export type WhatsAppOperationInput =
       readonly type: "phone_history";
       readonly anchor: { readonly ref: MessageRef; readonly timestamp: number };
       readonly count: number;
+    }
+  | { readonly type: "pair"; readonly method: "qr" }
+  | {
+      readonly type: "pair";
+      readonly method: "pairing_code";
+      readonly phoneE164: string;
     };
 
 export type WhatsAppOperationState<Result = unknown> =
@@ -145,6 +151,7 @@ export class OperationIdempotencyConflictError extends Error {
   }
 }
 
+/** A pair request was refused because this account already has usable credentials. */
 const owned = <T>(value: T): T => structuredClone(value);
 
 const FORBIDDEN_OPERATION_KEYS = new Set([
@@ -375,6 +382,8 @@ async function prepareSessionCall(
       if (!session.requestHistory)
         throw new TypeError("runtime session does not support requestHistory");
       return () => session.requestHistory!(input.anchor, { count: input.count });
+    case "pair":
+      throw new TypeError("runtime session does not support pair operations yet");
   }
 }
 

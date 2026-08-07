@@ -25,16 +25,17 @@ import {
   memoryMediaStore,
   memoryOperationStore,
 } from "../src/runtime/memory.ts";
-import {
-  createRuntimeFrameClient,
-  createWhatsAppRuntime as createPublicWhatsAppRuntime,
-  type InProcessWhatsAppRuntime,
-} from "../src/runtime/runtime.ts";
+import { createRuntimeFrameClient, type InProcessWhatsAppRuntime } from "../src/runtime/runtime.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import type { InboundMessage } from "../src/model/message.ts";
 import type { PresenceUpdate } from "../src/model/presence.ts";
 import { SubscriptionHandlerError } from "../src/subscription.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+import {
+  createTestWhatsAppRuntime as createPublicWhatsAppRuntime,
+  createTestWhatsAppSession,
+  textMessage,
+  type TestWhatsAppRuntimeConfig,
+} from "../src/testing.ts";
 
 const PERSON = "person@s.whatsapp.net";
 const ROOM = "room@g.us";
@@ -42,9 +43,8 @@ const SELF = "15551230000@s.whatsapp.net";
 const AT = 1_700_000_000_000;
 
 /** Reach the source-only raw Runtime seam in tests without widening the package root. */
-const createWhatsAppRuntime = (
-  config: Parameters<typeof createPublicWhatsAppRuntime>[0],
-): InProcessWhatsAppRuntime => createPublicWhatsAppRuntime(config) as InProcessWhatsAppRuntime;
+const createWhatsAppRuntime = (config: TestWhatsAppRuntimeConfig): InProcessWhatsAppRuntime =>
+  createPublicWhatsAppRuntime(config) as InProcessWhatsAppRuntime;
 
 /** Let queued microtasks and one macrotask turn drain — never a timed wait. */
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -2222,6 +2222,29 @@ test("a throwing frame observer stays subscribed, and its failure is surfaced", 
   expect(brokenSaw).toEqual(healthySaw);
   expect(warnings.length).toBe(4);
   expect(warnings.every((error) => error === broken)).toBe(true);
+});
+
+test("an undescribable observer failure cannot interrupt the remaining observers", async () => {
+  const { driver, runtime } = lane("personal");
+  await runtime.start();
+  let healthyDeliveries = 0;
+  const warnings = await surfaced(async () => {
+    const offBroken = runtime.onFrame(() => {
+      throw Object.create(null);
+    });
+    runtime.onFrame(() => {
+      healthyDeliveries += 1;
+    });
+    await driver.emit({ type: "message", message: hello() });
+    offBroken();
+    await runtime.stop();
+  });
+
+  expect(healthyDeliveries).toBe(3);
+  expect(warnings.length).toBe(1);
+  expect((warnings[0] as Error).message).toBe(
+    "an observer failed with a value that cannot be described",
+  );
 });
 
 test("a frame observer that resubscribes during fanout is not re-visited", async () => {
