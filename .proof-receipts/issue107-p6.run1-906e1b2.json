@@ -1,0 +1,26 @@
+{
+  "schema": "whatsappd-packed-consumer-proof/v1",
+  "tier": "P6",
+  "gitHead": "906e1b26bdac9b81cc05df5028acc8f40e69938d",
+  "observedAt": "2026-08-07T08:36:16Z",
+  "command": "pnpm proof:pack",
+  "packedConsumer": {
+    "typecheckDiagnostics": 0,
+    "source": "README.md#packed-client-typecheck",
+    "packageResolvedThroughNodeModules": true
+  },
+  "reconstruction": {
+    "firstPid": 79744,
+    "secondPid": 79746,
+    "distinctPids": true,
+    "durableDigest": "c89ca45a092018272b0d5a6f44788359042cbb73ebf36cc122fe89ebf0ccbeed",
+    "durableDigestEqual": true,
+    "pageMessageCount": 2,
+    "mediaDigest": "74d87cbca08a9e0c0d87454899639a794d5d4808a6a65f612bd7e601da6a5ecf",
+    "connectionPresent": false,
+    "identityPresent": false,
+    "presenceRestored": false,
+    "explicitEnvironmentAllowlist": true,
+    "closeOrder": ["client", "runtime", "backend"]
+  }
+}
