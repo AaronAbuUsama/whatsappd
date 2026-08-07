@@ -546,11 +546,15 @@ export async function proveStoredPaging(input: {
       proofStage = `${proofStage}:page-floor`;
       throw new Error("the Client exhausted the chat in fewer than two pages");
     }
-    const ordered = orderedMessages(retained.messages);
-    const retainedIds = ordered.map(({ messageId }) => messageId);
+    const retainedIds = retained.messages.map(({ messageId }) => messageId);
     if (new Set(retainedIds).size !== retainedIds.length) {
       proofStage = `${proofStage}:retained-repeat`;
       throw new Error("the Client retained a repeated message id");
+    }
+    const descendingIds = orderedMessages(retained.messages).map(({ messageId }) => messageId);
+    if (retainedIds.some((id, index) => id !== descendingIds[index])) {
+      proofStage = `${proofStage}:order`;
+      throw new Error("the Client retained messages are not in descending order as emitted");
     }
 
     // ADR-0017: only now, after the public assertion, consult the store.

@@ -27,12 +27,13 @@ import { createTestWhatsAppSession, type TestWhatsAppSessionDriver } from "../sr
 import {
   DEFAULT_ALLOWLIST_PATH,
   guardedSender,
-  resolveAllowlistedTarget,
+  resolveAllowlistedTargetForTest,
   SendRefusedError,
   type AllowlistedTarget,
   type SendRefusalReason,
 } from "./send-guard.ts";
 import {
+  callerControlledAllowlistReachingResolver,
   handForgedBrandReachingTheSendSite,
   rawChatIdReachingTheSendSite,
 } from "./send-guard-types.ts";
@@ -93,7 +94,7 @@ async function attemptSend(
   let refusedAt: RefusedAt;
   let target: AllowlistedTarget | undefined;
   try {
-    target = resolveAllowlistedTarget(id, { allowlistPath });
+    target = resolveAllowlistedTargetForTest(id, allowlistPath);
   } catch (thrown) {
     error = thrown;
     refusedAt = "resolve";
@@ -307,7 +308,7 @@ test("a sanctioned group id and a sanctioned chat id both resolve and reach the 
     // allowed through, and observed arriving.
     for (const id of [group, chat]) {
       const driver = createTestWhatsAppSession();
-      const target = resolveAllowlistedTarget(id, { allowlistPath: scratch.allowlistPath });
+      const target = resolveAllowlistedTargetForTest(id, scratch.allowlistPath);
       const ref = await guardedSender(driver.session).send(target, { text: "sanctioned" });
 
       assert.equal(
@@ -334,7 +335,7 @@ test("the destination is read from the guard's own record, not off the caller's 
   const scratch = await scratchAllowlist(JSON.stringify({ chats: [sanctioned] }));
   try {
     const driver = createTestWhatsAppSession();
-    const target = resolveAllowlistedTarget(sanctioned, { allowlistPath: scratch.allowlistPath });
+    const target = resolveAllowlistedTargetForTest(sanctioned, scratch.allowlistPath);
 
     // A checked target carries no id to overwrite, and is frozen besides.
     // Redirecting it is the attack a `{ id }`-shaped token would allow.
@@ -357,7 +358,7 @@ test("a target is re-checked at the send site, so a withdrawn sanction stops the
   const scratch = await scratchAllowlist(JSON.stringify({ chats: [sanctioned] }));
   try {
     const driver = createTestWhatsAppSession();
-    const target = resolveAllowlistedTarget(sanctioned, { allowlistPath: scratch.allowlistPath });
+    const target = resolveAllowlistedTargetForTest(sanctioned, scratch.allowlistPath);
     await writeFile(scratch.allowlistPath, JSON.stringify({ chats: [syntheticChatId()] }), "utf8");
 
     await assert.rejects(
@@ -368,6 +369,37 @@ test("a target is re-checked at the send site, so a withdrawn sanction stops the
       },
     );
     assert.equal(driver.commands.sent.length, 0, "a withdrawn sanction still sent");
+  } finally {
+    await scratch.cleanup();
+  }
+});
+
+test("a caller-authored allowlist cannot authorize the production resolver", async () => {
+  const unsanctioned = syntheticChatId();
+  const scratch = await scratchAllowlist(JSON.stringify({ chats: [unsanctioned] }));
+  try {
+    const driver = createTestWhatsAppSession();
+
+    await assert.rejects(
+      async () => {
+        const target = callerControlledAllowlistReachingResolver(
+          unsanctioned,
+          scratch.allowlistPath,
+        );
+        await guardedSender(driver.session).send(target, { text: "self-authorized" });
+      },
+      (error: unknown) => {
+        assert.ok(error instanceof SendRefusedError);
+        assert.equal(
+          error.allowlistPath,
+          DEFAULT_ALLOWLIST_PATH,
+          "production resolution accepted the caller's authority file",
+        );
+        assert.notEqual(error.allowlistPath, scratch.allowlistPath);
+        return true;
+      },
+    );
+    assert.equal(driver.commands.sent.length, 0, "a self-authorized target reached the Session");
   } finally {
     await scratch.cleanup();
   }

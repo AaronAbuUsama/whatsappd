@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MediaStore, MessageRecord } from "../src/index.ts";
@@ -340,6 +340,88 @@ test("stored paging refuses an oracle mismatch after the public assertion", asyn
   );
 });
 
+test("stored paging refuses an adjacent swap across a page boundary at the order clause", async () => {
+  const chatId = "proof-group@g.us";
+  const oracleMessages = Array.from({ length: 29 }, (_, index) => ({
+    accountId: "android",
+    chatId,
+    messageId: `message-${String(29 - index).padStart(2, "0")}`,
+    sender: { id: "peer@lid", mode: "lid" as const },
+    ref: {
+      id: `message-${String(29 - index).padStart(2, "0")}`,
+      chatId,
+      fromMe: false,
+      participant: "peer@lid",
+    },
+    fromMe: false,
+    timestamp: 10_000 - index,
+    receipts: [],
+    reactions: [],
+    kind: "text" as const,
+    text: `seed-${index}`,
+  })) satisfies MessageRecord[];
+  const emittedMessages = [...oracleMessages];
+  [emittedMessages[24], emittedMessages[25]] = [emittedMessages[25]!, emittedMessages[24]!];
+  let retained: readonly MessageRecord[] = [];
+  let older: "stored" | "loading" | "exhausted" = "stored";
+  let page = 0;
+  const listeners = new Set<() => void>();
+  const client = {
+    messages: {
+      get: () => ({ chatId, messages: retained, older }),
+      older() {
+        older = "loading";
+        queueMicrotask(() => {
+          page++;
+          retained = emittedMessages.slice(0, page === 1 ? 25 : 29);
+          older = page === 1 ? "stored" : "exhausted";
+          for (const listener of listeners) listener();
+        });
+      },
+      subscribe(listener: () => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+  } as unknown as WhatsAppClientCore;
+
+  await assert.rejects(
+    proveStoredPaging({
+      client,
+      chatId,
+      digestSalt: "deterministic-test-salt",
+      oracle: async () => oracleMessages,
+    }),
+    /Client retained messages are not in descending order/,
+  );
+});
+
+async function testSources(directory: string): Promise<readonly string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...(await testSources(file)));
+    else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(file);
+  }
+  return files;
+}
+
+function codeWithoutComments(source: string): string {
+  return source
+    .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => line.replace(/^\s*\/\/.*$/u, ""))
+    .join("\n");
+}
+
+function guardBypassesIn(source: string): readonly string[] {
+  const code = codeWithoutComments(source);
+  return [
+    ...(/\b(?:\w+\.)?session\s*\.\s*send\s*\(/u.test(code) ? ["raw-session-send"] : []),
+    ...(code.includes("resolveAllowlistedTargetForTest(") ? ["test-allowlist-seam"] : []),
+  ];
+}
+
 test("subject composition imports only the agreed public seams", async () => {
   const source = await readFile(path.join(here, "client-proof.ts"), "utf8");
   assert.match(source, /from "\.\.\/src\/index\.ts"/);
@@ -355,4 +437,38 @@ test("subject composition imports only the agreed public seams", async () => {
   ]) {
     assert.equal(source.includes(forbidden), false, `subject harness reached into ${forbidden}`);
   }
+});
+
+test("every real-profile harness uses the production allowlist authority and guarded send site", async () => {
+  const harnesses: Array<{ readonly file: string; readonly source: string }> = [];
+  for (const file of await testSources(here)) {
+    if (file.endsWith(".test.ts")) continue;
+    const source = await readFile(file, "utf8");
+    const code = codeWithoutComments(source);
+    if (!code.includes(".proof-private")) continue;
+    if (!/\b(?:createSession|createWhatsAppRuntime)\s*\(/u.test(code)) continue;
+    harnesses.push({ file, source });
+  }
+
+  assert.deepEqual(
+    harnesses.map(({ file }) => path.relative(here, file)).sort(),
+    ["client-proof.ts", "history-proof.ts", "proof-profile.ts"],
+    "the mechanical real-profile harness enumeration changed",
+  );
+  for (const { file, source } of harnesses) {
+    assert.deepEqual(
+      guardBypassesIn(source),
+      [],
+      `${path.relative(here, file)} bypasses the send guard`,
+    );
+  }
+
+  assert.deepEqual(
+    guardBypassesIn(`
+      await peer.session.send(target, { text: "raw" });
+      resolveAllowlistedTargetForTest(target, callerPath);
+    `),
+    ["raw-session-send", "test-allowlist-seam"],
+    "the harness scan cannot see a planted bypass",
+  );
 });

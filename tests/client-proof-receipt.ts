@@ -55,6 +55,7 @@ const RECEIPT_SCHEMA = new Map<string, FieldSchema>([
       "subject-runtime-events",
       "peer-child-result",
       "client-live-upsert",
+      "client-stored-page",
       "client-message-record",
       "client-media-read",
       "client-stored-pages",
@@ -472,7 +473,10 @@ function baseReceipt(
       {
         id: "inbound-text",
         verdict: "observed",
-        captureSite: "client-live-upsert",
+        captureSite:
+          summary.inboundText.observedVia === "live-upsert"
+            ? "client-live-upsert"
+            : "client-stored-page",
         evidence: summary.inboundText,
       },
       {

@@ -46,6 +46,7 @@ import { createSession, qrAuth, refOf } from "../src/index.ts";
 import { libsqlStore } from "../src/stores/libsql.ts";
 import type { ConversationSyncBatch, InboundMessage } from "../src/model/index.ts";
 import type { MessageRef } from "../src/model/outbound.ts";
+import { guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const privateDir = path.join(here, "..", ".proof-private");
@@ -120,8 +121,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const config = JSON.parse(readFileSync(path.join(privateDir, "config.json"), "utf8")) as {
     credentialDb: string;
     account: string;
-    /** Owner policy: the only jids the runner may ever send to. */
-    sendAllowlist?: string[];
   };
   if (!isAbsolute(config.credentialDb) || !config.account) {
     throw new Error("config.json requires an absolute credentialDb and an account");
@@ -278,6 +277,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     auth: qrAuth(),
     logger,
   });
+  const sender = guardedSender(session);
 
   session.subscribe({
     conversationSync(batch) {
@@ -511,12 +511,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           // so an empty run has no requestable anchors until traffic exists.
           const target = args[0]?.includes("@") ? args[0] : sortedChats()[Number(args[0])]?.[0];
           if (!target) throw new Error(`no chat for ${args[0]} — pass an index or a full jid`);
-          if (!config.sendAllowlist?.includes(target)) {
-            throw new Error(`send to ${target} refused: not in the owner's sendAllowlist`);
-          }
           const text = args.slice(1).join(" ") || `issue18 anchor ${Date.now()}`;
-          const ref = await session.send(target, { text });
-          console.log(`📤 sent ${ref.id} to ${target}`);
+          await sender.send(resolveAllowlistedTarget(target), { text });
+          console.log("📤 sent allowlisted anchor");
           break;
         }
         case "status":

@@ -23,9 +23,8 @@
  *    send site. `tests/send-guard.test.ts` pins that with `@ts-expect-error`
  *    fixtures, and asserts `pnpm check` goes red when either one is removed.
  * 2. The brand is *also* checked at runtime, from a module-private `WeakMap`
- *    that only {@link resolveAllowlistedTarget} writes to. A forged brand cast
- *    through `unknown` type-checks — nothing can stop that — and is still
- *    refused.
+ *    that only this module's resolvers write to. A forged brand cast through
+ *    `unknown` type-checks — nothing can stop that — and is still refused.
  * 3. The destination handed to the session is read out of that `WeakMap`, never
  *    off the caller's object. The target therefore exposes no `id` to read, to
  *    pass around, or to tamper with: there is nothing on it to reach for.
@@ -57,8 +56,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  *
  * @remarks
  * Gitignored, and absent until the owner creates it — the ids are real WhatsApp
- * identifiers, so no agent may write this file. Tests point the resolver at a
- * temporary path instead of touching this one.
+ * identifiers, so no agent may write this file. Tests use the explicit
+ * test-only resolver seam with a temporary path instead of touching this one.
  */
 export const DEFAULT_ALLOWLIST_PATH = path.join(
   here,
@@ -199,18 +198,12 @@ function sanctionedIds(allowlistPath: string): ReadonlySet<string> {
  * @param id - The exact chat or group id to send to. Exact match only: no
  * trimming, no case folding, no prefix, suffix or substring matching, and no
  * subject lookup. A near-miss is a refusal.
- * @param options - `allowlistPath` overrides {@link DEFAULT_ALLOWLIST_PATH}, so
- * tests can use a temporary file without going near the real one.
  * @returns An opaque {@link AllowlistedTarget}, the only thing a guarded sender
  * accepts.
  * @throws SendRefusedError - On an unlisted target, and on an absent, empty or
  * malformed allowlist file. The error names the file, never the rejected id.
  */
-export function resolveAllowlistedTarget(
-  id: string,
-  options: { readonly allowlistPath?: string } = {},
-): AllowlistedTarget {
-  const allowlistPath = options.allowlistPath ?? DEFAULT_ALLOWLIST_PATH;
+function resolveAgainstAllowlist(id: string, allowlistPath: string): AllowlistedTarget {
   const ids = sanctionedIds(allowlistPath);
   // `Set.has` is the whole matching rule. It is also why a caller that reaches
   // this line with a non-string from untyped code is refused rather than
@@ -225,6 +218,32 @@ export function resolveAllowlistedTarget(
   const target = Object.freeze({}) as unknown as AllowlistedTarget;
   issued.set(target, { id, path: allowlistPath });
   return target;
+}
+
+/**
+ * Check one production destination against the owner-controlled allowlist.
+ *
+ * @remarks
+ * There is deliberately no path parameter. Ordinary callers cannot nominate
+ * their own authority file and then prove only that they agree with themselves.
+ */
+export function resolveAllowlistedTarget(id: string): AllowlistedTarget {
+  return resolveAgainstAllowlist(id, DEFAULT_ALLOWLIST_PATH);
+}
+
+/**
+ * Resolve against an isolated allowlist fixture.
+ *
+ * @remarks
+ * Test-only seam. Real-profile harnesses mechanically forbid this export and
+ * must use {@link resolveAllowlistedTarget}, which is bound to
+ * {@link DEFAULT_ALLOWLIST_PATH}.
+ */
+export function resolveAllowlistedTargetForTest(
+  id: string,
+  allowlistPath: string,
+): AllowlistedTarget {
+  return resolveAgainstAllowlist(id, allowlistPath);
 }
 
 /** The send entry point. It has no overload that takes a `string`. */

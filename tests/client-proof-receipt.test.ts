@@ -245,6 +245,32 @@ test("the receipt writer transcribes a complete observation store into a clean m
   );
 });
 
+test("the inbound-text capture site is derived from how the Client observed it", () => {
+  const store = completeStore();
+  const storedPageStore: ClientProofObservationStore = {
+    ...store,
+    summary: {
+      ...store.summary!,
+      inboundText: {
+        ...store.summary!.inboundText,
+        observedVia: "stored-page",
+      },
+    },
+  };
+  const receipt = buildClientProofReceipt(storedPageStore, {
+    gitHead: store.runStart.gitHead,
+    treeClean: true,
+  });
+  const inboundText = (
+    receipt.matrix as Array<{
+      readonly id: string;
+      readonly captureSite: string;
+    }>
+  ).find(({ id }) => id === "inbound-text");
+
+  assert.equal(inboundText?.captureSite, "client-stored-page");
+});
+
 test("the receipt writer uses exclusive creation and never overwrites evidence", () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), "client-proof-receipt-"));
   const file = path.join(directory, "receipt.json");

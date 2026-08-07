@@ -1,5 +1,5 @@
 /**
- * The two ways a send is attempted without passing the guard, pinned as
+ * The three ways a send is attempted without passing the guard, pinned as
  * compile-time fixtures.
  *
  * Each function below is written the way the mistake is actually made, and each
@@ -19,7 +19,27 @@
  * catches a cast through `unknown` and anything arriving from untyped code.
  */
 import type { MessageRef } from "../src/index.ts";
-import type { GuardedSender } from "./send-guard.ts";
+import {
+  resolveAllowlistedTarget,
+  type AllowlistedTarget,
+  type GuardedSender,
+} from "./send-guard.ts";
+
+/**
+ * A caller nominates a file that sanctions the destination it wants.
+ *
+ * @remarks
+ * Production resolution has one authority, the owner-controlled default file.
+ * Temporary authority files belong only to the explicit test seam.
+ */
+export function callerControlledAllowlistReachingResolver(
+  chatId: string,
+  allowlistPath: string,
+): AllowlistedTarget {
+  // guard-fixture:caller-allowlist
+  // @ts-expect-error production callers cannot nominate their own allowlist authority.
+  return resolveAllowlistedTarget(chatId, { allowlistPath });
+}
 
 /**
  * A chat id read straight out of a mirror, handed to the send site.

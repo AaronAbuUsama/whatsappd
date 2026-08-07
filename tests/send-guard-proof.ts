@@ -3,12 +3,13 @@
  *
  *   node --experimental-strip-types tests/send-guard-proof.ts
  *
- * `tests/send-guard-types.ts` carries two `@ts-expect-error` directives: one for
- * a raw `chatId: string` at the send site, one for a hand-forged brand. `pnpm
- * check` being green with them there says the lines beneath them are type
- * errors *today*. It does not say the guard is what makes them errors — an
- * unused directive is itself an error, so a green run is consistent with the
- * guard having been weakened and something unrelated failing in its place.
+ * `tests/send-guard-types.ts` carries three `@ts-expect-error` directives: one
+ * for a caller-controlled allowlist at resolution, one for a raw `chatId:
+ * string` at the send site, and one for a hand-forged brand. `pnpm check` being
+ * green with them there says the lines beneath them are type errors *today*.
+ * It does not say the guard is what makes them errors — an unused directive is
+ * itself an error, so a green run is consistent with the guard having been
+ * weakened and something unrelated failing in its place.
  *
  * So this script removes each directive, one at a time, and requires `pnpm
  * check` to go **red**, naming the fixture's own file and line. A guard nobody
@@ -40,6 +41,10 @@ const FIXTURES = path.join("tests", "send-guard-types.ts");
 
 /** The markers in `send-guard-types.ts`, and what each directive is protecting. */
 const CASES = [
+  {
+    marker: "guard-fixture:caller-allowlist",
+    what: "a caller-controlled allowlist at production resolution",
+  },
   { marker: "guard-fixture:raw-string", what: "a raw chatId string at the send site" },
   { marker: "guard-fixture:forged-brand", what: "a hand-forged brand at the send site" },
 ] as const;
@@ -106,7 +111,11 @@ try {
   // The fixtures are uncommitted while this lane is in progress, and a worktree
   // at HEAD would not have them. Copy the working-tree files across, so what is
   // proven is what is on disk.
-  for (const file of [FIXTURES, path.join("tests", "send-guard.ts")]) {
+  for (const file of [
+    FIXTURES,
+    path.join("tests", "send-guard.ts"),
+    path.join("tests", "send-guard.test.ts"),
+  ]) {
     cpSync(path.join(root, file), path.join(worktree, file));
   }
   // Copied, never symlinked: pnpm treats a symlinked node_modules as a modules
@@ -124,13 +133,13 @@ try {
   );
 
   // Baseline. Without it, a worktree that cannot typecheck at all would produce
-  // two red runs that look exactly like a working guard.
+  // convincing red runs that look exactly like a working guard.
   const baseline = check(worktree);
   assert.ok(
     baseline.ok,
-    `the scratch worktree is not green with both directives present, so a red run below would prove nothing:\n${baseline.output}`,
+    `the scratch worktree is not green with every directive present, so a red run below would prove nothing:\n${baseline.output}`,
   );
-  console.log("  green   both directives present — every fixture really is a type error");
+  console.log("  green   every directive present — every fixture really is a type error");
 
   for (const { marker, what } of CASES) {
     writeFileSync(fixturePath, withoutDirectiveAfter(original, marker), "utf8");
@@ -153,14 +162,14 @@ try {
     console.log(`  red     without the directive for ${what} (${errorLines.length} error lines)`);
   }
 
-  // And green again afterwards, so the two red runs above were caused by the
+  // And green again afterwards, so the red runs above were caused by the
   // removal rather than by anything this script left behind.
   const restored = check(worktree);
   assert.ok(
     restored.ok,
     `the worktree did not return to green after restoring:\n${restored.output}`,
   );
-  console.log("  green   restored — both red runs were caused by the removal");
+  console.log("  green   restored — all red runs were caused by the removal");
 
   console.log(
     `send-guard-proof: ${CASES.length} fixtures, green with them and red without each one`,
