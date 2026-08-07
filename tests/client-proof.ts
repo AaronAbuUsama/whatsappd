@@ -7,11 +7,12 @@
  *
  * The android profile is the subject. The ios profile resumes in a separate
  * process, against its own files, so ADR-0009's one-runtime-per-account rule is
- * preserved. This lane does not send anything. Later #127 lanes extend the
- * same process boundary for inbound observations.
+ * preserved. Every peer send resolves the shared proof group through the
+ * fail-closed allowlist guard.
  */
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,11 +22,15 @@ import {
   libsqlBackend,
   qrAuth,
   type CredentialStore,
+  type MediaStore,
+  type MessageRecord,
   type Status,
+  type WhatsAppSession,
 } from "../src/index.ts";
 // #107 moves this public factory to the package root. Until that surface cut,
 // this source-public Client factory is the one seam #127 is proving.
 import { createWhatsAppClient, type WhatsAppClientCore } from "../src/runtime/client.ts";
+import { DEFAULT_ALLOWLIST_PATH, guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
@@ -73,6 +78,8 @@ export function createLinkObservation(): {
 
 interface OpenProfile {
   readonly client: WhatsAppClientCore;
+  readonly media: MediaStore;
+  readonly session: WhatsAppSession;
   readonly link: LinkSummary;
   readonly identity: string;
   readonly close: () => Promise<void>;
@@ -120,12 +127,14 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
     media,
   });
   const link = createLinkObservation();
+  let liveSession: WhatsAppSession | undefined;
   const runtime = createWhatsAppRuntime({
     accountId: profile,
     backend,
     openSession(credentials: CredentialStore) {
       const session = createSession({ store: credentials, auth: qrAuth() });
       session.subscribe({ connection: link.observe });
+      liveSession = session;
       return session;
     },
   });
@@ -144,8 +153,11 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
       () => client?.account.get().identity?.jid,
       "the linked account identity",
     );
+    if (!liveSession) throw new Error("the linked account opened no session");
     return {
       client,
+      media,
+      session: liveSession,
       link: link.summary(),
       identity,
       async close() {
@@ -163,7 +175,7 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
   }
 }
 
-type PeerMode = "profile" | "env-probe" | "hang";
+type PeerMode = "profile" | "send-text" | "send-document" | "env-probe" | "hang";
 
 interface EnvProbe {
   readonly proofEnvCanaryPresent: boolean;
@@ -176,6 +188,17 @@ export interface PeerProcessResult {
   readonly identityHash?: string;
   readonly link?: LinkSummary;
   readonly envProbe?: EnvProbe;
+  readonly sent?:
+    | {
+        readonly kind: "text";
+        readonly sha256: string;
+        readonly byteLength: number;
+      }
+    | {
+        readonly kind: "document";
+        readonly sha256: string;
+        readonly byteLength: number;
+      };
 }
 
 interface PeerProcessOptions {
@@ -201,6 +224,181 @@ const PEER_ENV_KEYS = new Set([
 
 function hashIdentity(salt: string, identity: string): string {
   return createHash("sha256").update(salt).update(identity).digest("hex");
+}
+
+function sha256(bytes: string | Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function proofGroupId(): string {
+  const parsed = JSON.parse(readFileSync(DEFAULT_ALLOWLIST_PATH, "utf8")) as unknown;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("the send allowlist is not an object");
+  }
+  const groups = (parsed as { groups?: unknown }).groups;
+  if (
+    !Array.isArray(groups) ||
+    groups.length !== 1 ||
+    typeof groups[0] !== "string" ||
+    groups[0].length === 0
+  ) {
+    throw new Error("the send allowlist must contain exactly one proof group");
+  }
+  // Resolution is deliberately performed even on the subject, so the same
+  // exact-id authority selects the chat the peer is permitted to send to.
+  resolveAllowlistedTarget(groups[0]);
+  return groups[0];
+}
+
+interface SentPayload {
+  readonly sha256: string;
+  readonly byteLength: number;
+}
+
+export interface InboundTextObservation {
+  readonly observedVia: "live-upsert" | "stored-page";
+  readonly nonceSha256: string;
+  readonly nonceLength: number;
+  readonly chatsList: true;
+  readonly messagesGet: true;
+}
+
+export interface InboundDocumentObservation {
+  readonly kind: "document";
+  readonly mediaState: "stored";
+  readonly byteLength: number;
+  readonly byteLengthMatches: true;
+  readonly sentSha256: string;
+  readonly storedSha256: string;
+  readonly equal: true;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitFor<T>(
+  read: () => T | undefined | Promise<T | undefined>,
+  timeoutMs: number,
+): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const value = await read();
+    if (value !== undefined) return value;
+    await sleep(25);
+  } while (Date.now() < deadline);
+  return undefined;
+}
+
+function textObservation(
+  client: WhatsAppClientCore,
+  chatId: string,
+  sent: SentPayload,
+): Omit<InboundTextObservation, "observedVia"> | undefined {
+  const message = client.messages
+    .get(chatId)
+    .messages.find(
+      (candidate): candidate is Extract<MessageRecord, { kind: "text" }> =>
+        candidate.kind === "text" &&
+        Buffer.byteLength(candidate.text) === sent.byteLength &&
+        sha256(candidate.text) === sent.sha256,
+    );
+  if (!message) return undefined;
+  const chat = client.chats.list().find((candidate) => candidate.chatId === chatId);
+  if (!chat || chat.lastMessageAt < message.timestamp) return undefined;
+  return {
+    nonceSha256: sent.sha256,
+    nonceLength: sent.byteLength,
+    chatsList: true,
+    messagesGet: true,
+  };
+}
+
+/**
+ * Subscribe and retain the chat before allowing the peer send to begin.
+ *
+ * No store page is read unless the live window expires, so the verdict records
+ * whether the observation was the live upsert or a later durable page.
+ */
+export async function observeInboundText(input: {
+  readonly client: WhatsAppClientCore;
+  readonly chatId: string;
+  readonly send: () => Promise<SentPayload>;
+  readonly timeoutMs?: number;
+}): Promise<InboundTextObservation> {
+  const timeoutMs = input.timeoutMs ?? ONLINE_TIMEOUT_MS;
+  input.client.messages.get(input.chatId);
+  const offMessages = input.client.messages.subscribe(() => {});
+  const offChats = input.client.chats.subscribe(() => {});
+  try {
+    const sent = await input.send();
+    const live = await waitFor(
+      () => textObservation(input.client, input.chatId, sent),
+      Math.min(timeoutMs, 30_000),
+    );
+    if (live) return { observedVia: "live-upsert", ...live };
+
+    input.client.messages.older(input.chatId);
+    const stored = await waitFor(
+      () => textObservation(input.client, input.chatId, sent),
+      Math.max(1, timeoutMs - 30_000),
+    );
+    if (stored) return { observedVia: "stored-page", ...stored };
+    throw new Error("the peer text did not surface through both Client read paths");
+  } finally {
+    offChats();
+    offMessages();
+  }
+}
+
+async function documentObservation(
+  accountId: string,
+  client: WhatsAppClientCore,
+  media: Pick<MediaStore, "read">,
+  chatId: string,
+  sent: SentPayload,
+): Promise<InboundDocumentObservation | undefined> {
+  for (const message of client.messages.get(chatId).messages) {
+    if (message.kind !== "document" || message.media.state !== "stored") continue;
+    const bytes = await media.read({ accountId, ref: message.media.ref });
+    if (!bytes) continue;
+    const storedSha256 = sha256(bytes);
+    if (storedSha256 !== sent.sha256) continue;
+    if (message.media.byteLength !== sent.byteLength || bytes.byteLength !== sent.byteLength) {
+      throw new Error("the stored document length differs from the peer's sent length");
+    }
+    return {
+      kind: "document",
+      mediaState: "stored",
+      byteLength: message.media.byteLength,
+      byteLengthMatches: true,
+      sentSha256: sent.sha256,
+      storedSha256,
+      equal: true,
+    };
+  }
+  return undefined;
+}
+
+export async function observeInboundDocument(input: {
+  readonly accountId: string;
+  readonly client: WhatsAppClientCore;
+  readonly media: Pick<MediaStore, "read">;
+  readonly chatId: string;
+  readonly send: () => Promise<SentPayload>;
+  readonly timeoutMs?: number;
+}): Promise<InboundDocumentObservation> {
+  input.client.messages.get(input.chatId);
+  const off = input.client.messages.subscribe(() => {});
+  try {
+    const sent = await input.send();
+    const observed = await waitFor(
+      () => documentObservation(input.accountId, input.client, input.media, input.chatId, sent),
+      input.timeoutMs ?? ONLINE_TIMEOUT_MS,
+    );
+    if (!observed) throw new Error("the peer document did not surface with stored media bytes");
+    return observed;
+  } finally {
+    off();
+  }
 }
 
 /**
@@ -286,16 +484,37 @@ async function peerChild(): Promise<void> {
     process.stdout.write(JSON.stringify(result));
     return;
   }
-  if (mode !== "profile") throw new Error("unknown peer child mode");
+  if (mode !== "profile" && mode !== "send-text" && mode !== "send-document") {
+    throw new Error("unknown peer child mode");
+  }
 
   const salt = process.env.CLIENT_PROOF_HASH_SALT;
   if (!salt) throw new Error("peer child has no identity hash salt");
   const peer = await openProfile("ios");
   try {
+    let sent: PeerProcessResult["sent"];
+    if (mode === "send-text") {
+      const nonce = randomBytes(24).toString("base64url");
+      const target = resolveAllowlistedTarget(proofGroupId());
+      await guardedSender(peer.session).send(target, { text: nonce });
+      sent = { kind: "text", sha256: sha256(nonce), byteLength: Buffer.byteLength(nonce) };
+    } else if (mode === "send-document") {
+      const bytes = randomBytes(256);
+      const target = resolveAllowlistedTarget(proofGroupId());
+      await guardedSender(peer.session).send(target, {
+        document: bytes,
+        fileName: "whatsappd-proof.bin",
+        mimetype: "application/octet-stream",
+      });
+      sent = { kind: "document", sha256: sha256(bytes), byteLength: bytes.byteLength };
+    } else if (mode !== "profile") {
+      throw new Error("unknown peer child mode");
+    }
     const result: PeerProcessResult = {
       pid: process.pid,
       identityHash: hashIdentity(salt, peer.identity),
       link: peer.link,
+      ...(sent && { sent }),
     };
     process.stdout.write(JSON.stringify(result));
   } finally {
@@ -309,20 +528,54 @@ async function subjectRun(): Promise<void> {
   }
 
   const salt = randomBytes(16).toString("hex");
-  const peerPromise = runPeerProcess({ identityHashSalt: salt });
   let subject: OpenProfile | undefined;
   try {
     subject = await openProfile("android");
-    const peer = await peerPromise;
+    const chatId = proofGroupId();
+    let textPeer: PeerProcessResult | undefined;
+    const text = await observeInboundText({
+      client: subject.client,
+      chatId,
+      async send() {
+        textPeer = await runPeerProcess({ mode: "send-text", identityHashSalt: salt });
+        if (textPeer.sent?.kind !== "text") {
+          throw new Error("the peer returned no text-send proof");
+        }
+        return textPeer.sent;
+      },
+    });
+    let documentPeer: PeerProcessResult | undefined;
+    const document = await observeInboundDocument({
+      accountId: "android",
+      client: subject.client,
+      media: subject.media,
+      chatId,
+      async send() {
+        documentPeer = await runPeerProcess({ mode: "send-document", identityHashSalt: salt });
+        if (documentPeer.sent?.kind !== "document") {
+          throw new Error("the peer returned no document-send proof");
+        }
+        return documentPeer.sent;
+      },
+    });
+    if (!textPeer || !documentPeer) throw new Error("the peer process returned no identity proof");
     const subjectIdentityHash = hashIdentity(salt, subject.identity);
+    const peerIdentityHash = textPeer.identityHash;
     if (
-      peer.pid === process.pid ||
-      peer.identityHash === undefined ||
-      peer.identityHash === subjectIdentityHash
+      textPeer.pid === process.pid ||
+      documentPeer.pid === process.pid ||
+      textPeer.pid === documentPeer.pid ||
+      peerIdentityHash === undefined ||
+      documentPeer.identityHash !== peerIdentityHash ||
+      peerIdentityHash === subjectIdentityHash
     ) {
       throw new Error("subject and peer were not distinct linked accounts in distinct processes");
     }
-    if (subject.link.linkMode !== "resumed" || peer.link?.linkMode !== "resumed") {
+    if (
+      subject.link.linkMode !== "resumed" ||
+      textPeer.link?.linkMode !== "resumed" ||
+      documentPeer.link?.linkMode !== "resumed"
+    ) {
       throw new Error("a durable linked profile entered pairing instead of resuming");
     }
 
@@ -342,20 +595,23 @@ async function subjectRun(): Promise<void> {
         qrDisplayed: subject.link.qrDisplayed,
         stdoutContainedChallenge: false,
         subjectPid: process.pid,
-        peerPid: peer.pid,
+        peerPid: textPeer.pid,
+        documentPeerPid: documentPeer.pid,
         subjectIdentityHash,
-        peerIdentityHash: peer.identityHash,
+        peerIdentityHash,
         peer: {
           mode: "second-account-own-process",
-          linkMode: peer.link.linkMode,
-          challengeEventCount: peer.link.challengeEventCount,
-          qrDisplayed: peer.link.qrDisplayed,
+          linkMode: textPeer.link.linkMode,
+          challengeEventCount:
+            textPeer.link.challengeEventCount + documentPeer.link.challengeEventCount,
+          qrDisplayed: textPeer.link.qrDisplayed || documentPeer.link.qrDisplayed,
         },
+        inboundText: text,
+        inboundDocument: document,
       })}\n`,
     );
   } finally {
     await subject?.close();
-    await peerPromise.catch(() => {});
   }
 }
 
