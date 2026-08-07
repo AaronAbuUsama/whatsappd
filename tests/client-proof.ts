@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSession,
+  createWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
@@ -27,12 +28,10 @@ import {
   type MessageRecord,
   type Status,
   type WhatsAppBackend,
+  type WhatsAppClient,
   type WhatsAppRuntime,
   type WhatsAppSession,
 } from "../src/index.ts";
-// #107 moves this public factory to the package root. Until that surface cut,
-// this source-public Client factory is the one seam #127 is proving.
-import { createWhatsAppClient, type WhatsAppClientCore } from "../src/runtime/client.ts";
 import { DEFAULT_ALLOWLIST_PATH, guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
 import {
   captureClientProofRunStart,
@@ -88,14 +87,14 @@ export function createLinkObservation(): {
 }
 
 interface OpenProfile {
-  readonly client: WhatsAppClientCore;
+  readonly client: WhatsAppClient;
   readonly backend: WhatsAppBackend;
   readonly media: MediaStore;
   readonly runtime: WhatsAppRuntime;
   readonly session: WhatsAppSession;
   readonly link: LinkSummary;
   readonly identity: string;
-  readonly replaceClient: () => Promise<WhatsAppClientCore>;
+  readonly replaceClient: () => Promise<WhatsAppClient>;
   readonly close: () => Promise<void>;
 }
 
@@ -104,7 +103,7 @@ function profileDirectory(profile: "android" | "ios"): string {
 }
 
 async function waitForAccount(
-  client: WhatsAppClientCore,
+  client: WhatsAppClient,
   read: () => string | undefined,
   what: string,
 ): Promise<string> {
@@ -153,7 +152,7 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
     },
   });
 
-  let client: WhatsAppClientCore | undefined;
+  let client: WhatsAppClient | undefined;
   try {
     await runtime.start();
     client = await createWhatsAppClient(runtime);
@@ -359,7 +358,7 @@ async function waitFor<T>(
 }
 
 function textObservation(
-  client: WhatsAppClientCore,
+  client: WhatsAppClient,
   chatId: string,
   sent: SentPayload,
 ): Omit<InboundTextObservation, "observedVia"> | undefined {
@@ -389,7 +388,7 @@ function textObservation(
  * whether the observation was the live upsert or a later durable page.
  */
 export async function observeInboundText(input: {
-  readonly client: WhatsAppClientCore;
+  readonly client: WhatsAppClient;
   readonly chatId: string;
   readonly send: () => Promise<SentPayload>;
   readonly timeoutMs?: number;
@@ -421,7 +420,7 @@ export async function observeInboundText(input: {
 
 async function documentObservation(
   accountId: string,
-  client: WhatsAppClientCore,
+  client: WhatsAppClient,
   media: Pick<MediaStore, "read">,
   chatId: string,
   sent: SentPayload,
@@ -450,7 +449,7 @@ async function documentObservation(
 
 export async function observeInboundDocument(input: {
   readonly accountId: string;
-  readonly client: WhatsAppClientCore;
+  readonly client: WhatsAppClient;
   readonly media: Pick<MediaStore, "read">;
   readonly chatId: string;
   readonly send: () => Promise<SentPayload>;
@@ -490,7 +489,7 @@ function orderedMessages(messages: readonly MessageRecord[]): readonly MessageRe
  * has reported an exhausted, duplicate-free run.
  */
 export async function proveStoredPaging(input: {
-  readonly client: WhatsAppClientCore;
+  readonly client: WhatsAppClient;
   readonly chatId: string;
   readonly digestSalt: string;
   readonly oracle: () => Promise<readonly MessageRecord[]>;
@@ -594,7 +593,7 @@ function contactAddresses(contacts: readonly ContactRecord[]): readonly string[]
 }
 
 async function durableDigest(input: {
-  readonly client: WhatsAppClientCore;
+  readonly client: WhatsAppClient;
   readonly media: Pick<MediaStore, "read">;
   readonly accountId: string;
   readonly chatId: string;
@@ -826,7 +825,7 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
       return createSession({ store: credentials, auth: qrAuth() });
     },
   });
-  let client: WhatsAppClientCore | undefined;
+  let client: WhatsAppClient | undefined;
   try {
     // Do not start the Runtime. Factory resolution must reflect only durable
     // state, before a live session can attach and manufacture current status.
@@ -1129,7 +1128,7 @@ async function subjectRun(): Promise<void> {
         "createWhatsAppRuntime",
         "createWhatsAppClient",
       ],
-      subjectImports: ["package-root", "runtime-client-public-factory"],
+      subjectImports: ["package-root"],
       linkMode: subjectLink.linkMode,
       challengeEventCount: subjectLink.challengeEventCount,
       qrDisplayed: subjectLink.qrDisplayed,

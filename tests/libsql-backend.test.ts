@@ -6,16 +6,18 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "./_expect.ts";
 import {
-  createInProcessWhatsAppClient,
-  createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   memoryMediaStore,
   AccountAlreadyClaimedError,
   StaleAccountClaimError,
-  type WhatsAppClient,
-  type WhatsAppSnapshot,
 } from "../src/index.ts";
+import type { RuntimeFrameClient, CurrentMirrorSnapshot } from "../src/runtime/contracts.ts";
+import {
+  createRuntimeFrameClient,
+  createWhatsAppRuntime as createPublicWhatsAppRuntime,
+  type InProcessWhatsAppRuntime,
+} from "../src/runtime/runtime.ts";
 import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
@@ -24,6 +26,11 @@ const ACCOUNT = "personal";
 const CHAT = "person@s.whatsapp.net";
 const ROOM = "room@g.us";
 const AT = 1_700_000_000_000;
+
+/** Reach the source-only raw Runtime seam in tests without widening the package root. */
+const createWhatsAppRuntime = (
+  config: Parameters<typeof createPublicWhatsAppRuntime>[0],
+): InProcessWhatsAppRuntime => createPublicWhatsAppRuntime(config) as InProcessWhatsAppRuntime;
 
 dataStoreConformance("memory data", async () => ({
   data: (await import("../src/runtime/memory.ts")).memoryDataStore(),
@@ -46,7 +53,7 @@ dataStoreConformance("libSQL data", async () => {
   };
 });
 
-async function firstSnapshot(client: WhatsAppClient): Promise<WhatsAppSnapshot> {
+async function firstSnapshot(client: RuntimeFrameClient): Promise<CurrentMirrorSnapshot> {
   const controller = new AbortController();
   const frames = client.watch({ signal: controller.signal })[Symbol.asyncIterator]();
   const first = await frames.next();
@@ -251,7 +258,7 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
       backend: replacementBackend,
       openSession: () => replacementSession.session,
     });
-    const replacementClient = createInProcessWhatsAppClient(replacementRuntime);
+    const replacementClient = createRuntimeFrameClient(replacementRuntime);
 
     await replacementRuntime.start();
     expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);
@@ -381,7 +388,7 @@ test("new libSQL, file media, Runtime, and Client instances reconstruct image an
       backend: replacementBackend,
       openSession: () => replacementSession.session,
     });
-    const replacementClient = createInProcessWhatsAppClient(replacementRuntime);
+    const replacementClient = createRuntimeFrameClient(replacementRuntime);
     await replacementRuntime.start();
 
     expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);

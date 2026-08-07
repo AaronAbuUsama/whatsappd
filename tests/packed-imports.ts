@@ -6,10 +6,115 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const execFile = promisify(execFileCallback);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-packed-"));
+
+const EXPECTED_ROOT_EXPORTS = [
+  "AcceptedWhatsAppBatch",
+  "AccountAlreadyClaimedError",
+  "AccountLease",
+  "AccountLeaseStore",
+  "AccountNotHeldError",
+  "AccountRecord",
+  "AuthStrategy",
+  "Awaitable",
+  "BinaryInput",
+  "ChatRecord",
+  "ClientAccountState",
+  "ClientChatMessages",
+  "ClientNamespace",
+  "ContactRecord",
+  "ContactUpdate",
+  "ConversationSyncBatch",
+  "ConversationSyncContext",
+  "ConversationSyncSource",
+  "CredentialStore",
+  "Disposition",
+  "DurableInboundMessage",
+  "DurableMedia",
+  "DurableUpdate",
+  "FaultReason",
+  "FileMediaStoreOptions",
+  "GroupMetadata",
+  "GroupParticipant",
+  "GroupParticipantAction",
+  "GroupRecord",
+  "GroupUpdate",
+  "HistoryChat",
+  "HistoryContact",
+  "InboundMessage",
+  "LibsqlBackend",
+  "LibsqlBackendOptions",
+  "MediaHandle",
+  "MediaMeta",
+  "MediaStore",
+  "MessageContext",
+  "MessageFlags",
+  "MessageHandlerContext",
+  "MessageReaction",
+  "MessageReceipt",
+  "MessageRecord",
+  "MessageRef",
+  "MetricEvent",
+  "MetricsHook",
+  "MirrorAlias",
+  "MirrorRecord",
+  "ObservedInstant",
+  "Outbound",
+  "PairingError",
+  "PairingState",
+  "PresenceKind",
+  "PresenceUpdate",
+  "ReceiptStatus",
+  "RuntimeSession",
+  "SendOptions",
+  "SessionConfig",
+  "StaleAccountClaimError",
+  "Status",
+  "StoredMessageCursor",
+  "StoredMessagePage",
+  "StoredMessagePageOptions",
+  "SyncState",
+  "Unsubscribe",
+  "UnsupportedDurableEventError",
+  "Update",
+  "WaIdentity",
+  "WhatsAppAddress",
+  "WhatsAppBackend",
+  "WhatsAppClient",
+  "WhatsAppClientConnectionState",
+  "WhatsAppDataEvent",
+  "WhatsAppDataStore",
+  "WhatsAppDurableEvent",
+  "WhatsAppFault",
+  "WhatsAppRuntime",
+  "WhatsAppRuntimeConfig",
+  "WhatsAppSession",
+  "WhatsAppSessionHandlers",
+  "assertE164",
+  "classifyDisconnect",
+  "createSession",
+  "createWhatsAppClient",
+  "createWhatsAppRuntime",
+  "dispositionFor",
+  "fileMediaStore",
+  "fileStore",
+  "isOnline",
+  "isRetryable",
+  "isTerminal",
+  "libsqlBackend",
+  "memoryBackend",
+  "memoryDataStore",
+  "memoryLeaseStore",
+  "memoryMediaStore",
+  "memoryStore",
+  "pairingAuth",
+  "qrAuth",
+  "refOf",
+] as const;
 
 const digests = async (directory: string): Promise<Record<string, string>> =>
   Object.fromEntries(
@@ -58,6 +163,7 @@ try {
         .map((file) => readFile(path.join(dist, file), "utf8")),
     )
   ).join("\n");
+  const rootDeclarations = await readFile(path.join(dist, "index.d.mts"), "utf8");
   // A positive control, before anything is asserted absent. Every check below
   // is a negative — `regex.test(declarations) === false` — and a `dist/` that
   // is empty, stale, or emitted no `.d.mts` at all satisfies every one of them
@@ -95,6 +201,107 @@ try {
     await digests(path.join(root, "dist")),
     "the packed dist/ is not this working tree's build — `pnpm pack` archives whatever dist/ already holds",
   );
+
+  const rootSource = ts.createSourceFile(
+    "index.d.mts",
+    rootDeclarations,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const rootExportClauses = rootSource.statements.filter(
+    (statement): statement is ts.ExportDeclaration =>
+      ts.isExportDeclaration(statement) &&
+      statement.moduleSpecifier === undefined &&
+      statement.exportClause !== undefined &&
+      ts.isNamedExports(statement.exportClause),
+  );
+  assert.equal(rootExportClauses.length, 1, "the generated root must have one export clause");
+  const rootExportClause = rootExportClauses[0];
+  assert.ok(rootExportClause?.exportClause && ts.isNamedExports(rootExportClause.exportClause));
+  assert.deepEqual(
+    rootExportClause.exportClause.elements.map((element) => element.name.text).sort(),
+    [...EXPECTED_ROOT_EXPORTS],
+    "the generated root export clause drifted from the reviewed public surface",
+  );
+
+  const declarationSource = ts.createSourceFile(
+    "packed.d.mts",
+    declarations,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declaredNames = new Set<string>();
+  for (const statement of declarationSource.statements) {
+    if (
+      ts.isClassDeclaration(statement) ||
+      ts.isFunctionDeclaration(statement) ||
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement)
+    ) {
+      if (statement.name) declaredNames.add(statement.name.text);
+      continue;
+    }
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations)
+        if (ts.isIdentifier(declaration.name)) declaredNames.add(declaration.name.text);
+    }
+  }
+  const clientDeclarations = declarationSource.statements.filter(
+    (statement): statement is ts.InterfaceDeclaration =>
+      ts.isInterfaceDeclaration(statement) && statement.name.text === "WhatsAppClient",
+  );
+  assert.equal(
+    clientDeclarations.length,
+    1,
+    "the packed declarations must contain exactly one WhatsAppClient interface",
+  );
+  const clientDeclaration = clientDeclarations[0];
+  assert.ok(clientDeclaration);
+  const clientMembers = clientDeclaration.members.map((member) => {
+    assert.ok(member.name && ts.isIdentifier(member.name), "Client members must be named");
+    return member.name.text;
+  });
+  assert.deepEqual(
+    clientMembers.sort(),
+    ["account", "chats", "close", "contacts", "groups", "messages"],
+    "WhatsAppClient must be the friendly account/chats/contacts/groups/messages/close shape",
+  );
+  assert.equal(clientMembers.includes("watch"), false);
+  for (const rawContract of [
+    "WhatsAppDurableFrame",
+    "WhatsAppLiveFrame",
+    "WhatsAppClientFrame",
+    "WhatsAppPatch",
+    "WhatsAppSnapshot",
+    "MirrorView",
+    "StoredMessageCursor",
+  ]) {
+    for (const member of clientDeclaration.members)
+      assert.equal(
+        new RegExp(`\\b${rawContract}\\b`).test(member.getText(declarationSource)),
+        false,
+        `WhatsAppClient.${member.name?.getText(declarationSource)} must not expose ${rawContract}`,
+      );
+  }
+
+  for (const removedDeclaration of [
+    "createInProcessWhatsAppClient",
+    "WhatsAppClientFrame",
+    "WhatsAppDurableFrame",
+    "WhatsAppLiveFrame",
+    "WhatsAppPatch",
+    "WhatsAppSnapshot",
+    "MirrorView",
+  ]) {
+    assert.equal(
+      declaredNames.has(removedDeclaration),
+      false,
+      `${removedDeclaration} must not reach the packed declarations`,
+    );
+  }
+
   for (const removed of [
     "SessionStore",
     "IncomingMessage",
@@ -108,25 +315,20 @@ try {
   // The runtime-to-client source is an internal Module, not a public Adapter:
   // its joint read, its account claim and its identity sample are how the
   // friendly client reaches the Data Store transaction without a Backend
-  // parameter or a public `runtime.read()` (ADR-0030). None of it, and no part
-  // of the client core this stack layer builds on it, is a published contract
-  // yet. `RuntimeSession.identity` is deliberately not in this list: an
-  // application supplies its own session, so that capability has to be
-  // declarable.
+  // parameter or a public `runtime.read()` (ADR-0030). None of that source is a
+  // published contract. `RuntimeSession.identity` is deliberately not in this
+  // list: an application supplies its own session, so that capability has to
+  // be declarable.
   for (const modulePrivate of [
     "ClientRuntimeSource",
     "clientSourceFor",
     "ClientClaim",
     "currentClaim",
-    "createWhatsAppClient",
     "WhatsAppClientCore",
-    "ClientAccountState",
-    "ClientChatMessages",
-    "ClientNamespace",
     "fanout",
   ]) {
     assert.equal(
-      new RegExp(`\\b${modulePrivate}\\b`).test(declarations),
+      declaredNames.has(modulePrivate),
       false,
       `${modulePrivate} must not reach the packed declarations`,
     );
@@ -150,7 +352,7 @@ try {
       assert.equal(typeof createTestWhatsAppSession, "function");
       assert.equal(typeof root.memoryStore, "function");
       assert.equal(typeof root.createWhatsAppRuntime, "function");
-      assert.equal(typeof root.createInProcessWhatsAppClient, "function");
+      assert.equal(typeof root.createWhatsAppClient, "function");
       assert.equal(typeof root.memoryBackend, "function");
       assert.equal(typeof root.libsqlBackend, "function");
       assert.equal(typeof root.fileMediaStore, "function");
@@ -172,7 +374,7 @@ try {
       });
       assert.equal(typeof backend.close, "function");
       await backend.close();
-      for (const removed of ["createChannelAdapter", "bindTools", "createWhatsAppClient"]) {
+      for (const removed of ["createChannelAdapter", "bindTools", "createInProcessWhatsAppClient"]) {
         assert.equal(removed in root, false);
       }
       for (const subpath of ["adapters/eve", "channel", "sidecar", "stores/libsql", "stores/memory", "tools"]) {

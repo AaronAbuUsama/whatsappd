@@ -36,7 +36,7 @@ export type CurrentMirrorMutation =
 export interface CurrentMirrorProjection {
   readonly upserts: readonly MirrorRecord[];
   readonly deletes: readonly MirrorDelete[];
-  /** Only the aliases whose owner changed — see {@link WhatsAppPatch.aliases}. */
+  /** Only the aliases whose owner changed — see {@link CurrentMirrorPatch.aliases}. */
   readonly aliases: readonly MirrorAlias[];
   readonly mutations: readonly CurrentMirrorMutation[];
 }

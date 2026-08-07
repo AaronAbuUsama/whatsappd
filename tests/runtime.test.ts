@@ -11,12 +11,12 @@ import {
   type StoredMessageCursor,
   type StoredMessagePage,
   type WhatsAppBackend,
-  type WhatsAppClient,
+  type RuntimeFrameClient,
   type WhatsAppDataEvent,
-  type WhatsAppDurableFrame,
-  type WhatsAppLiveFrame,
-  type WhatsAppPatch,
-  type WhatsAppSnapshot,
+  type RuntimeDurableFrame,
+  type RuntimeLiveFrame,
+  type CurrentMirrorPatch,
+  type CurrentMirrorSnapshot,
 } from "../src/runtime/contracts.ts";
 import {
   memoryBackend,
@@ -25,9 +25,9 @@ import {
   memoryMediaStore,
 } from "../src/runtime/memory.ts";
 import {
-  createInProcessWhatsAppClient,
-  createWhatsAppRuntime,
-  type WhatsAppRuntime,
+  createRuntimeFrameClient,
+  createWhatsAppRuntime as createPublicWhatsAppRuntime,
+  type InProcessWhatsAppRuntime,
 } from "../src/runtime/runtime.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import type { InboundMessage } from "../src/model/message.ts";
@@ -39,6 +39,11 @@ const PERSON = "person@s.whatsapp.net";
 const ROOM = "room@g.us";
 const SELF = "15551230000@s.whatsapp.net";
 const AT = 1_700_000_000_000;
+
+/** Reach the source-only raw Runtime seam in tests without widening the package root. */
+const createWhatsAppRuntime = (
+  config: Parameters<typeof createPublicWhatsAppRuntime>[0],
+): InProcessWhatsAppRuntime => createPublicWhatsAppRuntime(config) as InProcessWhatsAppRuntime;
 
 /** Let queued microtasks and one macrotask turn drain — never a timed wait. */
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -86,8 +91,8 @@ function lane(
 ): {
   driver: ReturnType<typeof createTestWhatsAppSession>;
   backend: WhatsAppBackend;
-  runtime: WhatsAppRuntime;
-  client: WhatsAppClient;
+  runtime: InProcessWhatsAppRuntime;
+  client: RuntimeFrameClient;
   opened: () => number;
 } {
   const backend = options.backend ?? memoryBackend();
@@ -107,7 +112,7 @@ function lane(
     driver,
     backend,
     runtime,
-    client: createInProcessWhatsAppClient(runtime),
+    client: createRuntimeFrameClient(runtime),
     opened: () => opened,
   };
 }
@@ -128,11 +133,11 @@ const fixedLeaseStore = (fencingToken: number): AccountLeaseStore => ({
 });
 
 /** Drain a client watch in the background so frame arrival is observable. */
-function watching(client: WhatsAppClient): {
-  frames: WhatsAppDurableFrame[];
+function watching(client: RuntimeFrameClient): {
+  frames: RuntimeDurableFrame[];
   close(): Promise<void>;
 } {
-  const frames: WhatsAppDurableFrame[] = [];
+  const frames: RuntimeDurableFrame[] = [];
   const controller = new AbortController();
   const pump = (async () => {
     for await (const frame of client.watch({ signal: controller.signal })) frames.push(frame);
@@ -146,17 +151,17 @@ function watching(client: WhatsAppClient): {
   };
 }
 
-const patchesOf = (frames: readonly WhatsAppDurableFrame[]): WhatsAppPatch[] =>
+const patchesOf = (frames: readonly RuntimeDurableFrame[]): CurrentMirrorPatch[] =>
   frames
     .filter(
-      (frame): frame is Extract<WhatsAppDurableFrame, { type: "patch" }> => frame.type === "patch",
+      (frame): frame is Extract<RuntimeDurableFrame, { type: "patch" }> => frame.type === "patch",
     )
     .map((frame) => frame.patch);
 
-const snapshotsOf = (frames: readonly WhatsAppDurableFrame[]): WhatsAppSnapshot[] =>
+const snapshotsOf = (frames: readonly RuntimeDurableFrame[]): CurrentMirrorSnapshot[] =>
   frames
     .filter(
-      (frame): frame is Extract<WhatsAppDurableFrame, { type: "snapshot" }> =>
+      (frame): frame is Extract<RuntimeDurableFrame, { type: "snapshot" }> =>
         frame.type === "snapshot",
     )
     .map((frame) => frame.snapshot);
@@ -219,7 +224,7 @@ const attachment = (
 });
 
 /** The Snapshot Window of an account nothing has been observed for yet. */
-const empty = (accountId: string): WhatsAppSnapshot => ({
+const empty = (accountId: string): CurrentMirrorSnapshot => ({
   accountId,
   revision: 0,
   account: { accountId },
@@ -231,7 +236,7 @@ const empty = (accountId: string): WhatsAppSnapshot => ({
 
 /** Every stored message id in one chat, newest first, by following the cursor. */
 async function pagedIds(
-  reader: Pick<WhatsAppClient, "messages">,
+  reader: Pick<RuntimeFrameClient, "messages">,
   chatId: string,
   limit: number,
   from?: StoredMessageCursor,
@@ -2053,7 +2058,7 @@ test("an immediate session close failure releases the account exactly once", asy
     }),
   });
   await runtime.start();
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(createRuntimeFrameClient(runtime));
   await tick();
 
   const [first, duplicate] = await Promise.allSettled([runtime.stop(), runtime.stop()]);
@@ -2112,7 +2117,7 @@ test("a session that dies on its own closes the watch with the failure", async (
   });
 
   await runtime.start();
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(createRuntimeFrameClient(runtime));
   await tick();
 
   die(died);
@@ -2144,7 +2149,7 @@ test("a Client watch started after stop receives the terminal frame and ends", a
 
   const frames = await withDeadline(
     (async () => {
-      const seen: WhatsAppDurableFrame[] = [];
+      const seen: RuntimeDurableFrame[] = [];
       for await (const frame of client.watch()) seen.push(frame);
       return seen;
     })(),
@@ -2159,7 +2164,7 @@ test("runtime closure interrupts a Client snapshot already in flight", async () 
   const snapshotStarted = new Promise<void>((resolve) => {
     startedSnapshot = resolve;
   });
-  const never = new Promise<WhatsAppSnapshot>(() => {});
+  const never = new Promise<CurrentMirrorSnapshot>(() => {});
   const backend: WhatsAppBackend = {
     ...memoryBackend(),
     data: {
@@ -2241,7 +2246,7 @@ test("re-registering an observer during fanout defers it to the next frame", asy
   const { driver, runtime } = lane("personal");
   await runtime.start();
   const seen: string[] = [];
-  const observer = (frame: WhatsAppDurableFrame): void => void seen.push(frame.type);
+  const observer = (frame: RuntimeDurableFrame): void => void seen.push(frame.type);
   let off = (): void => {};
   let churned = false;
   runtime.onFrame(() => {
@@ -2405,7 +2410,7 @@ test("closed-frame wrappers are isolated while preserving the failure identity",
     mutable.type = "patch";
     delete mutable.error;
   });
-  let current: WhatsAppDurableFrame | undefined;
+  let current: RuntimeDurableFrame | undefined;
   runtime.onFrame((frame) => {
     current = frame;
   });
@@ -2414,7 +2419,7 @@ test("closed-frame wrappers are isolated while preserving the failure identity",
   await tick();
 
   expect(current).toEqual({ type: "closed", error: died });
-  let late: WhatsAppDurableFrame | undefined;
+  let late: RuntimeDurableFrame | undefined;
   runtime.onFrame((frame) => {
     late = frame;
   });
@@ -2445,7 +2450,7 @@ test("losing the account lease stops the runtime without evicting its new holder
   // while the runtime's deliberately-unreferenced heartbeat is still due.
   const frames = await withDeadline(
     (async () => {
-      const seen: WhatsAppDurableFrame[] = [];
+      const seen: RuntimeDurableFrame[] = [];
       for await (const frame of client.watch()) seen.push(frame);
       return seen;
     })(),
@@ -2506,7 +2511,7 @@ test("a lease backend outage closes the Client and is reported by stop", async (
   await runtime.start();
   const terminal = await withDeadline(
     (async () => {
-      let last: WhatsAppDurableFrame | undefined;
+      let last: RuntimeDurableFrame | undefined;
       for await (const frame of client.watch()) last = frame;
       return last;
     })(),
@@ -2549,12 +2554,12 @@ test("a stop during an automatic teardown joins it instead of racing it", async 
 });
 
 test("aborting a watch during a hung snapshot read releases its subscription", async () => {
-  const listeners = new Set<(frame: WhatsAppDurableFrame) => void>();
-  const runtime: WhatsAppRuntime = {
+  const listeners = new Set<(frame: RuntimeDurableFrame) => void>();
+  const runtime: InProcessWhatsAppRuntime = {
     accountId: "personal",
     start: async () => {},
     stop: async () => {},
-    snapshot: () => new Promise<WhatsAppSnapshot>(() => {}), // never settles
+    snapshot: () => new Promise<CurrentMirrorSnapshot>(() => {}), // never settles
     messages: () => Promise.reject(new Error("not read by this test")),
     onFrame(listener) {
       listeners.add(listener);
@@ -2564,7 +2569,7 @@ test("aborting a watch during a hung snapshot read releases its subscription", a
   };
   const controller = new AbortController();
   const pump = (async () => {
-    for await (const _frame of createInProcessWhatsAppClient(runtime).watch({
+    for await (const _frame of createRuntimeFrameClient(runtime).watch({
       signal: controller.signal,
     }));
   })();
@@ -2582,9 +2587,9 @@ test("aborting a watch during a hung snapshot read releases its subscription", a
 });
 
 test("a client applies only contiguous patches and re-snapshots after a gap", async () => {
-  let current: WhatsAppSnapshot = empty("personal");
-  const listeners = new Set<(frame: WhatsAppDurableFrame) => void>();
-  const runtime: WhatsAppRuntime = {
+  let current: CurrentMirrorSnapshot = empty("personal");
+  const listeners = new Set<(frame: RuntimeDurableFrame) => void>();
+  const runtime: InProcessWhatsAppRuntime = {
     accountId: "personal",
     start: async () => {},
     stop: async () => {},
@@ -2604,7 +2609,7 @@ test("a client applies only contiguous patches and re-snapshots after a gap", as
       });
   };
 
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(createRuntimeFrameClient(runtime));
   await tick();
   publish(0, 1);
   await tick();
@@ -2626,7 +2631,7 @@ test("connection and presence expire and never become stored truth", async () =>
   const { backend, driver, runtime, client } = lane("personal", { freshnessMs: 5_000 });
   await runtime.start();
   const seen = watching(client);
-  const live: WhatsAppLiveFrame[] = [];
+  const live: RuntimeLiveFrame[] = [];
   runtime.onLive((frame) => void live.push(frame));
   await tick();
   await driver.emit({ type: "message", message: hello() });
@@ -3031,7 +3036,7 @@ test("a page boundary inside a timestamp collision neither drops nor repeats", a
     1,
   );
 
-  const client: Pick<WhatsAppClient, "messages"> = {
+  const client: Pick<RuntimeFrameClient, "messages"> = {
     messages: (chatId, options) => data.messages("personal", chatId, options),
   };
   for (const limit of [1, 2, 3, 4, 5, 6]) {
@@ -3167,8 +3172,8 @@ test("a backdated message below an open cursor reconciles by identity on both su
 
 test("a stale update is ignored, a future base re-snapshots, and pages read through both", async () => {
   const data = memoryDataStore();
-  const listeners = new Set<(frame: WhatsAppDurableFrame) => void>();
-  const runtime: WhatsAppRuntime = {
+  const listeners = new Set<(frame: RuntimeDurableFrame) => void>();
+  const runtime: InProcessWhatsAppRuntime = {
     accountId: "personal",
     start: async () => {},
     stop: async () => {},
@@ -3206,7 +3211,7 @@ test("a stale update is ignored, a future base re-snapshots, and pages read thro
 
   for (const [index, id] of ["m1", "m2", "m3", "m4"].entries()) await store(id, index);
 
-  const client = createInProcessWhatsAppClient(runtime);
+  const client = createRuntimeFrameClient(runtime);
   const seen = watching(client);
   await tick();
 
@@ -3252,7 +3257,7 @@ test("a real runtime's missed update is detected and replaced with a fresh snaps
   // contiguity rule exists to survive. Nothing about the mirror is faked: the
   // snapshots and pages below are the backend's own.
   let drop = 0;
-  const lossy: WhatsAppClient = createInProcessWhatsAppClient({
+  const lossy: RuntimeFrameClient = createRuntimeFrameClient({
     ...runtime,
     onFrame: (listener) =>
       runtime.onFrame((frame) => {

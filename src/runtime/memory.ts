@@ -23,7 +23,7 @@ import {
   type GroupRecord,
   type MediaStore,
   type MessageRecord,
-  type MirrorView,
+  type CurrentMirrorView,
   type StoredMessageCursor,
   type WhatsAppBackend,
   type WhatsAppDataStore,
@@ -116,7 +116,7 @@ export function memoryDataStore(): WhatsAppDataStore {
     messages: new Map(mirror.messages),
   });
 
-  const view = (accountId: string, mirror: AccountMirror): MirrorView => ({
+  const view = (accountId: string, mirror: AccountMirror): CurrentMirrorView => ({
     async snapshot() {
       return copy({
         accountId,

@@ -22,7 +22,7 @@ import {
   type RuntimeSession,
   type WhatsAppRuntime,
 } from "../src/runtime/runtime.ts";
-import { createWhatsAppClient, type WhatsAppClientCore } from "../src/runtime/client.ts";
+import { createWhatsAppClient, type WhatsAppClient } from "../src/runtime/client.ts";
 import type { InboundMessage } from "../src/model/message.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 
@@ -112,7 +112,7 @@ interface Lane {
   readonly driver: ReturnType<typeof createTestWhatsAppSession>;
   readonly backend: WhatsAppBackend;
   readonly runtime: WhatsAppRuntime;
-  readonly client: WhatsAppClientCore;
+  readonly client: WhatsAppClient;
   stop(): Promise<void>;
 }
 
@@ -1881,13 +1881,13 @@ test("namespace lists use binary identifier ordering, never locale ordering", as
 // ── 11. Retained messages: the fifth namespace ────────────────────────────
 
 /** One chat's retained texts, in the order the Client holds them. */
-const texts = (client: WhatsAppClientCore, chatId: string): string[] =>
+const texts = (client: WhatsAppClient, chatId: string): string[] =>
   client.messages
     .get(chatId)
     .messages.map((message) => ("text" in message ? message.text : "") ?? "");
 
 /** One chat's retained message ids, in the order the Client holds them. */
-const heldIds = (client: WhatsAppClientCore, chatId: string): string[] =>
+const heldIds = (client: WhatsAppClient, chatId: string): string[] =>
   client.messages.get(chatId).messages.map((message) => message.messageId);
 
 /**
@@ -1896,7 +1896,7 @@ const heldIds = (client: WhatsAppClientCore, chatId: string): string[] =>
  * @remarks
  * Deliberately in this file rather than in `src/testing.ts`: a deferrable read
  * is a property of this proof, not a published capability of the
- * `whatsappd/testing` entry (issue #106). It decorates the `MirrorView` inside
+ * `whatsappd/testing` entry (issue #106). It decorates the `CurrentMirrorView` inside
  * `data.read`, which is the exact seam `ClientRuntimeSource.read` reaches
  * (`runtime.ts:809`), so nothing about the Client is special-cased for it.
  *
@@ -1923,7 +1923,7 @@ function heldReads(inner: WhatsAppBackend): WhatsAppBackend & {
       async read(accountId, fn) {
         reads += 1;
         // `"release"` waits out here, before `data.read` is entered at all.
-        // Deferring inside the `MirrorView` does not work: `memoryDataStore`
+        // Deferring inside the `CurrentMirrorView` does not work: `memoryDataStore`
         // pins the mirror when `read` is *entered* (`memory.ts:163-168`), so a
         // wait inside `view.messages` still reads the pre-`accept` snapshot and
         // the page is not fresher than anything. That inertness silently made a

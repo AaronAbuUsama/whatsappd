@@ -30,10 +30,10 @@ import type {
   MessageRecord,
   StoredMessageCursor,
   StoredMessagePage,
-  WhatsAppDurableFrame,
-  WhatsAppLiveFrame,
-  WhatsAppPatch,
-  WhatsAppSnapshot,
+  RuntimeDurableFrame,
+  RuntimeLiveFrame,
+  CurrentMirrorPatch,
+  CurrentMirrorSnapshot,
 } from "./contracts.ts";
 import {
   clientSourceFor,
@@ -162,10 +162,8 @@ type Namespace = (typeof NAMESPACES)[number];
  * One chat's retained messages, as the Client holds them.
  *
  * @remarks
- * Declared here beside {@link ClientAccountState} rather than in
- * `contracts.ts`: `tests/packed-imports.ts` asserts the Client's types are
- * absent from the packed declarations, and `contracts.ts` is reachable from the
- * root entry while this module is not.
+ * Declared here beside {@link ClientAccountState} because these are the
+ * friendly Client's own public vocabulary, not Backend adapter contracts.
  */
 export interface ClientChatMessages {
   readonly chatId: string;
@@ -283,11 +281,11 @@ const ENDED: PageLanding = Object.freeze({ ended: true });
 /** How a transition mutates Client state. The only way anything here changes. */
 interface Tx {
   /** Replace all durable state with a Snapshot Window's. */
-  replace(snapshot: WhatsAppSnapshot): void;
+  replace(snapshot: CurrentMirrorSnapshot): void;
   /** Apply one contiguous change: upserts, deletes, and the aliases between. */
-  apply(patch: WhatsAppPatch): void;
+  apply(patch: CurrentMirrorPatch): void;
   /** Retain one live observation under the claim it was made under. */
-  observe(frame: WhatsAppLiveFrame, claim: ClientClaim): void;
+  observe(frame: RuntimeLiveFrame, claim: ClientClaim): void;
   /**
    * Move one chat's page read to whatever became of it.
    *
@@ -316,7 +314,7 @@ interface Tx {
    */
   stopped(): void;
   /** Record that the Runtime has stopped consuming this account. */
-  close(frame: Extract<WhatsAppDurableFrame, { type: "closed" }>): void;
+  close(frame: Extract<RuntimeDurableFrame, { type: "closed" }>): void;
 }
 
 /** One account's own state: what is durable, what is live, and what it links. */
@@ -356,7 +354,7 @@ export interface ClientAccountState {
    * an application that simply recreates is correct either way without having
    * to branch. `error` says why, and is absent when the stop was deliberate.
    *
-   * Calling {@link WhatsAppClientCore.close} does *not* set this: the
+   * Calling {@link WhatsAppClient.close} does *not* set this: the
    * application asked for that and does not need to be told.
    */
   readonly closed: boolean;
@@ -404,7 +402,7 @@ export interface ClientNamespace {
 }
 
 /** One account's synchronized application state. */
-export interface WhatsAppClientCore {
+export interface WhatsAppClient {
   readonly account: ClientNamespace & {
     get(): ClientAccountState;
   };
@@ -474,7 +472,7 @@ export interface WhatsAppClientCore {
      * a render or an effect, or track `error` and back off.
      *
      * A no-op once this Client has stopped following, which covers both
-     * {@link WhatsAppClientCore.close} and a durable-follow failure. That is
+     * {@link WhatsAppClient.close} and a durable-follow failure. That is
      * **not** the same condition as `account.get().closed`: a deliberate
      * Runtime `closed` frame leaves this Client following, so paging still
      * works against storage after Runtime closure — correct under ADR-0010,
@@ -512,7 +510,7 @@ export interface WhatsAppClientCore {
  * const off = client.chats.subscribe(() => render(client.chats.list()));
  * ```
  */
-export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<WhatsAppClientCore> {
+export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<WhatsAppClient> {
   const registered = clientSourceFor.get(runtime);
   if (!registered)
     throw new TypeError(
@@ -906,7 +904,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
        * and throw outright on an error carrying a function — which would lose
        * the very failure being reported.
        */
-      closed: (frame: Extract<WhatsAppDurableFrame, { type: "closed" }>): void => {
+      closed: (frame: Extract<RuntimeDurableFrame, { type: "closed" }>): void => {
         if (closure) return;
         closure = "error" in frame ? { error: frame.error } : {};
         touch("account");
@@ -1071,7 +1069,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       return off;
     };
 
-  const client: WhatsAppClientCore = {
+  const client: WhatsAppClient = {
     account: {
       subscribe: subscribeTo("account"),
       get() {
@@ -1202,7 +1200,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   const follow = new AbortController();
   const frames = source.frames(follow.signal)[Symbol.asyncIterator]();
 
-  const consume = (frame: WhatsAppDurableFrame): void =>
+  const consume = (frame: RuntimeDurableFrame): void =>
     commit((tx) => {
       if (frame.type === "snapshot") tx.replace(frame.snapshot);
       else if (frame.type === "patch") tx.apply(frame.patch);

@@ -12,7 +12,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MediaStore, MessageRecord } from "../src/index.ts";
-import type { WhatsAppClientCore } from "../src/runtime/client.ts";
+import type { WhatsAppClient } from "../src/runtime/client.ts";
 import { test } from "./_expect.ts";
 import {
   createLinkObservation,
@@ -121,7 +121,7 @@ test("inbound text is retained before the peer sends and proves both Client surf
         return () => messageListeners.delete(listener);
       },
     },
-  } as unknown as WhatsAppClientCore;
+  } as unknown as WhatsAppClient;
 
   const observed = await observeInboundText({
     client,
@@ -184,7 +184,7 @@ test("inbound document bytes are read through only the Client-surfaced media ref
         return () => listeners.delete(listener);
       },
     },
-  } as unknown as WhatsAppClientCore;
+  } as unknown as WhatsAppClient;
   const reads: { accountId: string; ref: string }[] = [];
   const media = {
     async read(input) {
@@ -261,7 +261,7 @@ test("stored paging walks two pages to exhausted before consulting the oracle", 
         return () => listeners.delete(listener);
       },
     },
-  } as unknown as WhatsAppClientCore;
+  } as unknown as WhatsAppClient;
   let oracleCalledAtPage = 0;
 
   const result = await proveStoredPaging({
@@ -327,7 +327,7 @@ test("stored paging refuses an oracle mismatch after the public assertion", asyn
         return () => listeners.delete(listener);
       },
     },
-  } as unknown as WhatsAppClientCore;
+  } as unknown as WhatsAppClient;
 
   await assert.rejects(
     proveStoredPaging({
@@ -383,7 +383,7 @@ test("stored paging refuses an adjacent swap across a page boundary at the order
         return () => listeners.delete(listener);
       },
     },
-  } as unknown as WhatsAppClientCore;
+  } as unknown as WhatsAppClient;
 
   await assert.rejects(
     proveStoredPaging({
@@ -425,11 +425,11 @@ function guardBypassesIn(source: string): readonly string[] {
 test("subject composition imports only the agreed public seams", async () => {
   const source = await readFile(path.join(here, "client-proof.ts"), "utf8");
   assert.match(source, /from "\.\.\/src\/index\.ts"/);
-  assert.match(source, /from "\.\.\/src\/runtime\/client\.ts"/);
   assert.equal(source.match(/guardedSender\(peer\.session\)\.send/g)?.length, 3);
   assert.equal(source.includes("peer.session.send("), false);
   for (const forbidden of [
     "../src/stores/",
+    "../src/runtime/client.ts",
     "../src/runtime/libsql.ts",
     "../src/runtime/projection.ts",
     "../src/baileys/",

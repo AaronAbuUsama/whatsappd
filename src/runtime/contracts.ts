@@ -213,7 +213,7 @@ export interface ContactRecord {
    * @remarks
    * A historical instant, never a live state (ADR-0020). It says an address was
    * there at a time, and says nothing about now — the live
-   * {@link WhatsAppClientFrame} presence frame is the only thing that does, and
+   * {@link RuntimeLiveFrame} presence frame is the only thing that does, and
    * it expires.
    */
   readonly lastSeenAt?: number;
@@ -281,7 +281,7 @@ export type MirrorAlias = { readonly nativeId: string; readonly contactId: strin
  * windows while a UI shows one chat (ADR-0010). One chat's messages are read
  * from {@link WhatsAppDataStore.messages} instead.
  */
-export interface WhatsAppSnapshot {
+export interface CurrentMirrorSnapshot {
   readonly accountId: string;
   readonly revision: number;
   readonly account: AccountRecord;
@@ -340,7 +340,7 @@ export interface StoredMessagePage {
    * The handle that orders this page against the patch stream: every change up
    * to and including this revision is already reflected here, so a consumer
    * knows which patches the chat view it holds has and has not absorbed. Same
-   * number, same meaning, as {@link WhatsAppSnapshot.revision}.
+   * number, same meaning, as {@link CurrentMirrorSnapshot.revision}.
    */
   readonly revision: number;
   readonly messages: readonly MessageRecord[];
@@ -368,7 +368,7 @@ export interface StoredMessagePage {
  * A patch carries every mutation kind the projection computed — upserts,
  * deletes, and the aliases between them (ADR-0030 amending ADR-0011).
  */
-export interface WhatsAppPatch {
+export interface CurrentMirrorPatch {
   readonly accountId: string;
   readonly fromRevision: number;
   readonly revision: number;
@@ -415,7 +415,7 @@ export interface AcceptedWhatsAppBatch {
   readonly fromRevision: number;
   readonly revision: number;
   readonly events: readonly WhatsAppDataEvent[];
-  readonly patch: WhatsAppPatch;
+  readonly patch: CurrentMirrorPatch;
 }
 
 /**
@@ -427,8 +427,8 @@ export interface AcceptedWhatsAppBatch {
  * disagree with it. Every answer describes the mirror at one revision, however
  * many questions are asked and however many writes commit meanwhile.
  */
-export interface MirrorView {
-  snapshot(): Promise<WhatsAppSnapshot>;
+export interface CurrentMirrorView {
+  snapshot(): Promise<CurrentMirrorSnapshot>;
   messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
 }
 
@@ -487,10 +487,10 @@ export interface WhatsAppDataStore {
    * second, later read, which against a local libSQL file queues behind the
    * one still waiting on `fn` and does not return.
    */
-  read<T>(accountId: string, fn: (view: MirrorView) => Promise<T>): Promise<T>;
+  read<T>(accountId: string, fn: (view: CurrentMirrorView) => Promise<T>): Promise<T>;
 
   /** Read the account's current mirror and its revision. */
-  snapshot(accountId: string): Promise<WhatsAppSnapshot>;
+  snapshot(accountId: string): Promise<CurrentMirrorSnapshot>;
 
   /**
    * Read one chat's stored messages, newest first.
@@ -696,9 +696,9 @@ export interface WhatsAppClientConnectionState {
  * is how both retired implementations of the Client acquired a publication path
  * outside their own transition machinery.
  */
-export type WhatsAppDurableFrame =
-  | { readonly type: "snapshot"; readonly snapshot: WhatsAppSnapshot }
-  | { readonly type: "patch"; readonly patch: WhatsAppPatch }
+export type RuntimeDurableFrame =
+  | { readonly type: "snapshot"; readonly snapshot: CurrentMirrorSnapshot }
+  | { readonly type: "patch"; readonly patch: CurrentMirrorPatch }
   | {
       /**
        * The runtime has stopped consuming this account. No frame follows it.
@@ -722,7 +722,7 @@ export type WhatsAppDurableFrame =
  * separated these two kinds of fact for storage; this separates them for
  * delivery.
  */
-export type WhatsAppLiveFrame =
+export type RuntimeLiveFrame =
   | {
       readonly type: "presence";
       readonly presence: PresenceUpdate;
@@ -731,16 +731,13 @@ export type WhatsAppLiveFrame =
     }
   | { readonly type: "connection"; readonly state: WhatsAppClientConnectionState };
 
-/** Every frame a runtime publishes, across both of its channels. */
-export type WhatsAppClientFrame = WhatsAppDurableFrame | WhatsAppLiveFrame;
-
-/** The backend-independent contract applications and React bindings consume. */
-export interface WhatsAppClient {
+/** The internal frame-oriented client retained for Runtime regression tests. */
+export interface RuntimeFrameClient {
   /**
    * Watch one account: a current Snapshot Window first, then the changes that
    * follow it, each stamped with the revision it moves the mirror to.
    */
-  watch(options?: { readonly signal?: AbortSignal }): AsyncIterable<WhatsAppDurableFrame>;
+  watch(options?: { readonly signal?: AbortSignal }): AsyncIterable<RuntimeDurableFrame>;
 
   /**
    * Read one chat's stored messages, newest first, then older pages from the
@@ -752,7 +749,7 @@ export interface WhatsAppClient {
    * {@link WhatsAppDataStore.messages}.
    *
    * **Consumers apply both surfaces by record identity.** This method and the
-   * message upserts on {@link WhatsAppClient.watch} are independent reads; the
+   * message upserts on {@link RuntimeFrameClient.watch} are independent reads; the
    * client does not own or reconcile an application collection. Merge them on
    * `(chatId, messageId)` — the identity of {@link MessageRecord} — rather than
    * appending:

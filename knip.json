@@ -11,7 +11,7 @@
   ],
   "project": ["src/**/*.ts", "tests/**/*.ts"],
 
-  "ignoreDependencies": ["@typescript/native-preview", "vite", "jscpd"],
+  "ignoreDependencies": ["@typescript/native-preview", "vite"],
 
   "ignoreExportsUsedInFile": true,
   "includeEntryExports": false

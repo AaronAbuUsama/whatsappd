@@ -29,12 +29,12 @@ import {
   type MirrorAlias,
   type MirrorDelete,
   type MirrorRecord,
-  type MirrorView,
+  type CurrentMirrorView,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
   type WhatsAppDataEvent,
   type WhatsAppDataStore,
-  type WhatsAppPatch,
+  type CurrentMirrorPatch,
 } from "./contracts.ts";
 import {
   projectCurrentMirror,
@@ -939,7 +939,7 @@ function mirrorAlias(value: unknown): MirrorAlias {
   };
 }
 
-function patch(value: unknown): WhatsAppPatch {
+function patch(value: unknown): CurrentMirrorPatch {
   const record = object(value, "patch");
   if (!Array.isArray(record.upserts)) throw new Error("invalid libSQL patch upserts");
   if (record.deletes !== undefined && !Array.isArray(record.deletes))
@@ -1215,7 +1215,7 @@ function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
    * with the snapshot taken beside it, and would deadlock against the shared
    * local-client queue.
    */
-  const view = (transaction: Transaction, accountId: string): MirrorView => {
+  const view = (transaction: Transaction, accountId: string): CurrentMirrorView => {
     return {
       async snapshot() {
         const state = await accountState(transaction, accountId);
