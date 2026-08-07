@@ -11,8 +11,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MediaStore, MessageRecord } from "../src/index.ts";
-import type { WhatsAppClient } from "../src/runtime/client.ts";
+import type { MediaStore, MessageRecord, WhatsAppClient } from "../src/index.ts";
 import { test } from "./_expect.ts";
 import {
   createLinkObservation,

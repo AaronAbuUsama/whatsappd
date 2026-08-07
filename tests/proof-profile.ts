@@ -32,10 +32,9 @@ import {
   libsqlBackend,
   qrAuth,
   createWhatsAppRuntime,
+  createWhatsAppClient,
   type CredentialStore,
 } from "../src/index.ts";
-// The friendly Client is not a root export until #107 cuts the public surface.
-import { createWhatsAppClient } from "../src/runtime/client.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const profile = process.argv.slice(2).find((arg) => arg !== "--") ?? "client-read";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -116,6 +116,52 @@ const EXPECTED_ROOT_EXPORTS = [
   "refOf",
 ] as const;
 
+const filesUnder = async (entry: string): Promise<readonly string[]> => {
+  const info = await stat(entry);
+  if (info.isFile()) return [entry];
+  assert.ok(info.isDirectory(), `${entry} must be a file or directory`);
+  return (
+    await Promise.all((await readdir(entry)).map((child) => filesUnder(path.join(entry, child))))
+  ).flat();
+};
+
+const assertNoRetiredConversationHandle = async (
+  artifacts: readonly string[],
+  packedDeclarations: string,
+): Promise<void> => {
+  const conversationType = new RegExp(["WhatsApp", "Conversation"].join(""));
+  const chatsOpen = new RegExp(["chats", String.raw`\s*\.\s*`, "open", String.raw`\s*\(`].join(""));
+  const canaryType = ["WhatsApp", "Conversation"].join("");
+  const canaryOpen = ["chats", ".open("].join("");
+  assert.equal(conversationType.test(canaryType), true, "conversation type scanner is blind");
+  assert.equal(chatsOpen.test(canaryOpen), true, "chat-open scanner is blind");
+  assert.ok(artifacts.length > 0, "no repository artifacts were scanned");
+
+  for (const artifact of artifacts) {
+    const source = await readFile(artifact, "utf8");
+    assert.equal(
+      conversationType.test(source),
+      false,
+      `${path.relative(root, artifact)} reintroduced the retired conversation type`,
+    );
+    assert.equal(
+      chatsOpen.test(source),
+      false,
+      `${path.relative(root, artifact)} reintroduced the retired chat-open handle`,
+    );
+  }
+  assert.equal(
+    conversationType.test(packedDeclarations),
+    false,
+    "packed declarations reintroduced the retired conversation type",
+  );
+  assert.equal(
+    chatsOpen.test(packedDeclarations),
+    false,
+    "packed declarations reintroduced the retired chat-open handle",
+  );
+};
+
 const digests = async (directory: string): Promise<Record<string, string>> =>
   Object.fromEntries(
     await Promise.all(
@@ -135,6 +181,24 @@ try {
   await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: root });
   const archive = (await readdir(consumer)).find((file) => file.endsWith(".tgz"));
   assert.ok(archive, "pnpm pack did not produce an archive");
+  const { stdout: tarList } = await execFile("tar", ["tzf", path.join(consumer, archive)]);
+  const packedFiles = tarList
+    .trim()
+    .split("\n")
+    .map((file) => file.replace(/^package\//u, ""))
+    .sort();
+  const intendedRootFiles = ["CHANGELOG.md", "LICENSE", "README.md", "package.json"];
+  for (const file of packedFiles)
+    assert.ok(
+      file.startsWith("dist/") || intendedRootFiles.includes(file),
+      `unexpected packed file: ${file}`,
+    );
+  for (const file of intendedRootFiles)
+    assert.ok(packedFiles.includes(file), `required packed file is missing: ${file}`);
+  assert.ok(
+    packedFiles.some((file) => file.startsWith("dist/")),
+    "the tarball contains no dist artifacts",
+  );
 
   await writeFile(
     path.join(consumer, "package.json"),
@@ -219,11 +283,26 @@ try {
   assert.equal(rootExportClauses.length, 1, "the generated root must have one export clause");
   const rootExportClause = rootExportClauses[0];
   assert.ok(rootExportClause?.exportClause && ts.isNamedExports(rootExportClause.exportClause));
+  const rootExportNames = rootExportClause.exportClause.elements.map(
+    (element) => element.name.text,
+  );
   assert.deepEqual(
-    rootExportClause.exportClause.elements.map((element) => element.name.text).sort(),
+    rootExportNames.sort(),
     [...EXPECTED_ROOT_EXPORTS],
     "the generated root export clause drifted from the reviewed public surface",
   );
+  const rootExportNameSet = new Set(rootExportNames);
+  for (const requiredPublicClientExport of [
+    "createWhatsAppClient",
+    "ClientAccountState",
+    "ClientChatMessages",
+    "ClientNamespace",
+  ])
+    assert.equal(
+      rootExportNameSet.has(requiredPublicClientExport),
+      true,
+      `${requiredPublicClientExport} must be exported from the package root`,
+    );
 
   const declarationSource = ts.createSourceFile(
     "packed.d.mts",
@@ -333,6 +412,16 @@ try {
       `${modulePrivate} must not reach the packed declarations`,
     );
   }
+  await assertNoRetiredConversationHandle(
+    (
+      await Promise.all(
+        ["src", "tests", ".changeset", ".proof-receipts", "README.md", "CHANGELOG.md"].map(
+          (entry) => filesUnder(path.join(root, entry)),
+        ),
+      )
+    ).flat(),
+    declarations,
+  );
   for (const retiredVocabulary of [
     /\bcallbacks?\b/i,
     /\b(?:event|inbound|contacts?|presence|groups?|connection|own)\W+streams?\b/i,
@@ -346,17 +435,32 @@ try {
     `
       import assert from "node:assert/strict";
       import * as root from "whatsappd";
+      import {
+        createSession,
+        createWhatsAppClient,
+        createWhatsAppRuntime,
+        fileMediaStore,
+        fileStore,
+        libsqlBackend,
+        memoryBackend,
+        memoryStore,
+        pairingAuth,
+        qrAuth,
+      } from "whatsappd";
       import { createTestWhatsAppSession } from "whatsappd/testing";
 
-      assert.equal(typeof root.createSession, "function");
+      assert.equal(typeof createSession, "function");
       assert.equal(typeof createTestWhatsAppSession, "function");
-      assert.equal(typeof root.memoryStore, "function");
-      assert.equal(typeof root.createWhatsAppRuntime, "function");
-      assert.equal(typeof root.createWhatsAppClient, "function");
-      assert.equal(typeof root.memoryBackend, "function");
-      assert.equal(typeof root.libsqlBackend, "function");
-      assert.equal(typeof root.fileMediaStore, "function");
-      const media = root.fileMediaStore({ directory: "./media" });
+      assert.equal(typeof fileStore, "function");
+      assert.equal(typeof memoryStore, "function");
+      assert.equal(typeof pairingAuth, "function");
+      assert.equal(typeof qrAuth, "function");
+      assert.equal(typeof createWhatsAppRuntime, "function");
+      assert.equal(typeof createWhatsAppClient, "function");
+      assert.equal(typeof memoryBackend, "function");
+      assert.equal(typeof libsqlBackend, "function");
+      assert.equal(typeof fileMediaStore, "function");
+      const media = fileMediaStore({ directory: "./media" });
       const stored = await media.put({
         accountId: "personal",
         message: { id: "packed", chatId: "person@s.whatsapp.net", fromMe: false },
@@ -367,7 +471,7 @@ try {
         await media.read({ accountId: "personal", ref: stored.ref }),
         Uint8Array.from([1, 2, 3]),
       );
-      const backend = root.libsqlBackend({
+      const backend = libsqlBackend({
         url: "file:./not-opened.db",
         accountId: "personal",
         media: root.memoryMediaStore(),

@@ -3,7 +3,7 @@
  *
  * Every assertion reads the public path: a runtime created by
  * `createWhatsAppRuntime()`, driven by the deterministic session, observed
- * through the source-module `createWhatsAppClient()`. No SQL, no harness, no
+ * through the package-root `createWhatsAppClient()`. No SQL, no harness, no
  * sleeps — the deterministic clock is Node's own test-runner mock.
  */
 import assert from "node:assert/strict";
@@ -22,7 +22,7 @@ import {
   type RuntimeSession,
   type WhatsAppRuntime,
 } from "../src/runtime/runtime.ts";
-import { createWhatsAppClient, type WhatsAppClient } from "../src/runtime/client.ts";
+import { createWhatsAppClient, type WhatsAppClient } from "../src/index.ts";
 import type { InboundMessage } from "../src/model/message.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 
