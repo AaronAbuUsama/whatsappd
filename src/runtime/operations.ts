@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { BinaryInput, MessageRef, Outbound, SendOptions } from "../model/outbound.ts";
 import type { Unsubscribe } from "../subscription.ts";
 import type { MediaStore } from "./contracts.ts";
+import type { OperationSession } from "./operation-session.ts";
 
 export interface OperationClock {
   now(): number | Promise<number>;
@@ -97,6 +98,11 @@ export interface WhatsAppOperationStore {
     readonly operation: WhatsAppOperationInput;
   }): Promise<WhatsAppOperation>;
   get(accountId: string, operationId: string): Promise<WhatsAppOperation | undefined>;
+  get(
+    accountId: string,
+    operationIds: readonly string[],
+  ): Promise<readonly (WhatsAppOperation | undefined)[]>;
+  list(accountId: string): Promise<readonly WhatsAppOperation[]>;
   subscribe(
     accountId: string,
     operationId: string,
@@ -279,30 +285,11 @@ export async function awaitOperationSubmission(
   });
 }
 
-export interface OperationSession {
-  send?(to: string, content: Outbound, options?: SendOptions): Promise<MessageRef>;
-}
-
 export interface OperationExecutor {
   wake(): void;
   resume(): void;
   pause(): void;
   stop(): Promise<void>;
-}
-
-type ExecutableOperationInput = {
-  readonly type: "send";
-  readonly chatId: string;
-  readonly content: DurableOutbound;
-  readonly options?: SendOptions;
-};
-
-function validate(input: WhatsAppOperationInput): asserts input is ExecutableOperationInput {
-  if (input.type !== "send")
-    throw new TypeError(`operation type ${input.type} is not executable yet`);
-  if (!input.chatId) throw new TypeError("send chatId must not be empty");
-  if ("text" in input.content && input.content.text.length === 0)
-    throw new TypeError("send text must not be empty");
 }
 
 function mediaOutbound(media: DurableMediaInput, bytes: Uint8Array): Outbound {
@@ -348,6 +335,45 @@ async function executableOutbound(
   return mediaOutbound(content.media, bytes);
 }
 
+async function prepareSessionCall(
+  accountId: string,
+  media: MediaStore,
+  session: OperationSession,
+  input: WhatsAppOperationInput,
+): Promise<() => Promise<unknown>> {
+  switch (input.type) {
+    case "send": {
+      if (!input.chatId) throw new TypeError("send chatId must not be empty");
+      if ("text" in input.content && input.content.text.length === 0)
+        throw new TypeError("send text must not be empty");
+      if (!session.send) throw new TypeError("runtime session does not support sends");
+      const content = await executableOutbound(accountId, media, input.content);
+      return () => session.send!(input.chatId, content, input.options);
+    }
+    case "mark_read":
+      if (!session.markRead) throw new TypeError("runtime session does not support markRead");
+      return async () => {
+        await session.markRead!([...input.refs]);
+        return {};
+      };
+    case "typing":
+      if (!input.chatId) throw new TypeError("typing chatId must not be empty");
+      if (!session.setTyping) throw new TypeError("runtime session does not support setTyping");
+      return async () => {
+        await session.setTyping!(input.chatId, input.on);
+        return {};
+      };
+    case "phone_history":
+      if (!input.anchor.ref.chatId)
+        throw new TypeError("phone history anchor chatId must not be empty");
+      if (!Number.isInteger(input.count) || input.count < 1 || input.count > 50)
+        throw new RangeError(`count must be an integer in 1..50, got ${input.count}`);
+      if (!session.requestHistory)
+        throw new TypeError("runtime session does not support requestHistory");
+      return () => session.requestHistory!(input.anchor, { count: input.count });
+  }
+}
+
 async function executeClaimed(
   store: WhatsAppOperationStore,
   media: MediaStore,
@@ -357,12 +383,9 @@ async function executeClaimed(
 ): Promise<void> {
   if (operation.state.status !== "claimed") return;
   const { attemptId } = operation.state;
-  const operationInput = operation.input;
-  let content: Outbound;
+  let call: () => Promise<unknown>;
   try {
-    validate(operationInput);
-    content = await executableOutbound(operation.accountId, media, operationInput.content);
-    if (!session.send) throw new TypeError("runtime session does not support sends");
+    call = await prepareSessionCall(operation.accountId, media, session, operation.input);
     if (!(await store.start(operation.accountId, operation.id, attemptId, ttlMs))) {
       await store.recoverExpired(operation.accountId);
       return;
@@ -380,9 +403,9 @@ async function executeClaimed(
     return;
   }
 
-  let result: MessageRef;
+  let result: unknown;
   try {
-    result = await session.send(operationInput.chatId, content, operationInput.options);
+    result = await call();
   } catch {
     if (
       !(await store.markUnknown(

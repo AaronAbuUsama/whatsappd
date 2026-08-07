@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createClient } from "@libsql/client";
+import { promisify } from "node:util";
 import { expect, test } from "./_expect.ts";
 import {
   createWhatsAppClient,
@@ -23,6 +25,7 @@ import { sanitizeOperationError } from "../src/runtime/operations.ts";
 import { createTestWhatsAppSession } from "../src/testing.ts";
 
 const CHAT = "operation-target@example.invalid";
+const execFileAsync = promisify(execFile);
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -203,6 +206,117 @@ test("operation accessors preserve send options and release abortable subscripti
   }
 });
 
+test("everyday actions each write one operation and make one exact Session call", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-actions-"));
+  const url = `file:${path.join(directory, "whatsapp.db")}`;
+  const backend = libsqlBackend({
+    url,
+    accountId: "personal",
+    media: memoryMediaStore(),
+  });
+  const oracle = createClient({ url });
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const first = { id: "first", chatId: CHAT, fromMe: false } as const;
+  const second = {
+    id: "second",
+    chatId: CHAT,
+    fromMe: false,
+    participant: "participant@example.invalid",
+  } as const;
+  const before = { ref: first, timestamp: 1_700_000_000_000 } as const;
+
+  try {
+    const operations = await Promise.all([
+      client.messages.markRead([first, second], { idempotencyKey: "mark-many-read" }),
+      client.messages.setTyping(CHAT, true, { idempotencyKey: "typing-on" }),
+      client.messages.setTyping(CHAT, false, { idempotencyKey: "typing-off" }),
+      client.messages.requestPhoneHistory(CHAT, { before }, { idempotencyKey: "history-default" }),
+      client.messages.requestPhoneHistory(
+        CHAT,
+        { before, count: 1 },
+        { idempotencyKey: "history-one" },
+      ),
+    ]);
+
+    await until(async () => {
+      const current = await client.operations.get(operations.map((operation) => operation.id));
+      return current.every((operation) => operation?.state.status === "succeeded");
+    });
+
+    const typeCounts = operations.reduce<Record<string, number>>((counts, operation) => {
+      counts[operation.input.type] = (counts[operation.input.type] ?? 0) + 1;
+      return counts;
+    }, {});
+    expect(typeCounts).toEqual({ mark_read: 1, typing: 2, phone_history: 2 });
+    expect(operations.map((operation) => operation.input)).toEqual([
+      { type: "mark_read", refs: [first, second] },
+      { type: "typing", chatId: CHAT, on: true },
+      { type: "typing", chatId: CHAT, on: false },
+      { type: "phone_history", anchor: before, count: 50 },
+      { type: "phone_history", anchor: before, count: 1 },
+    ]);
+    expect(driver.commands.read).toEqual([{ refs: [first, second] }]);
+    expect(
+      [...driver.commands.typing].sort((left, right) => Number(left.on) - Number(right.on)),
+    ).toEqual([
+      { chatId: CHAT, on: false },
+      { chatId: CHAT, on: true },
+    ]);
+    expect(
+      driver.commands.historyRequests
+        .map(({ anchor, count }) => ({ anchor, count }))
+        .sort((left, right) => left.count - right.count),
+    ).toEqual([
+      { anchor: before, count: 1 },
+      { anchor: before, count: 50 },
+    ]);
+    expect(driver.commands.historyRequests.map(({ result }) => result.requestId).sort()).toEqual([
+      "test-history-1",
+      "test-history-2",
+    ]);
+    const rowsBeforeRejections = await oracle.execute({
+      sql: "SELECT input_json FROM wa_operations WHERE account_id = ?",
+      args: ["personal"],
+    });
+    const persistedTypeCounts = rowsBeforeRejections.rows.reduce<Record<string, number>>(
+      (counts, row) => {
+        if (typeof row.input_json !== "string") assert.fail("operation input_json was not text");
+        const input = JSON.parse(row.input_json) as { readonly type: string };
+        counts[input.type] = (counts[input.type] ?? 0) + 1;
+        return counts;
+      },
+      {},
+    );
+    expect(persistedTypeCounts).toEqual({ mark_read: 1, typing: 2, phone_history: 2 });
+
+    for (const count of [0, 51, 1.5]) {
+      await assert.rejects(
+        client.messages.requestPhoneHistory(CHAT, { before, count }),
+        /count must be an integer in 1\.\.50/,
+      );
+    }
+    const rowsAfterRejections = await oracle.execute({
+      sql: "SELECT COUNT(*) AS count FROM wa_operations WHERE account_id = ?",
+      args: ["personal"],
+    });
+    expect(rowsAfterRejections.rows[0]?.count).toBe(5);
+    expect(driver.commands.historyRequests.length).toBe(2);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
+    oracle.close();
+    await backend.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("an already-aborted submission writes no operation", async () => {
   const backend = memoryBackend();
   const submit = backend.operations.submit.bind(backend.operations);
@@ -349,6 +463,12 @@ test("the memory Adapter replays equal input and rejects divergent input", async
 
   await submit(store, "later");
   await submit(store, "earlier");
+  expect((await store.list("personal")).map((operation) => operation.id)).toEqual([
+    "earlier",
+    "first",
+    "later",
+  ]);
+  expect(await store.list("other")).toEqual([]);
   const claimed = await store.claimNext("personal", 100);
   expect(claimed?.id).toBe("earlier");
   expect(await store.get("other", "first")).toBe(undefined);
@@ -1076,5 +1196,154 @@ test("outcome_unknown is not retried on restart, reconnect, or wake", async () =
       await client.close();
       await runtime.stop().catch(() => {});
     }
+  }
+});
+
+test("a separate process reads all six states and executes only queued work", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-states-"));
+  const databasePath = path.join(directory, "whatsapp.db");
+  const backend = libsqlBackend({
+    url: `file:${databasePath}`,
+    accountId: "personal",
+    media: memoryMediaStore(),
+  });
+  const stateIds = {
+    queued: "state-queued",
+    claimed: "state-claimed",
+    executing: "state-executing",
+    succeeded: "state-succeeded",
+    failed: "state-failed",
+    outcome_unknown: "state-outcome-unknown",
+  } as const;
+  let closed = false;
+
+  const add = (id: string, operation: WhatsAppOperationInput = sendInput(id)) =>
+    backend.operations.submit({
+      accountId: "personal",
+      id,
+      idempotencyKey: id,
+      operation,
+    });
+  const claim = async (id: string) => {
+    const claimed = await backend.operations.claimNext("personal", 86_400_000);
+    assert.equal(claimed?.id, id);
+    assert.equal(claimed.state.status, "claimed");
+    return claimed.state.attemptId;
+  };
+
+  try {
+    await add(stateIds.succeeded);
+    const succeededAttempt = await claim(stateIds.succeeded);
+    assert.equal(
+      await backend.operations.start("personal", stateIds.succeeded, succeededAttempt, 86_400_000),
+      true,
+    );
+    assert.equal(
+      await backend.operations.succeed("personal", stateIds.succeeded, succeededAttempt, {
+        receipt: "recorded",
+      }),
+      true,
+    );
+
+    await add(stateIds.failed);
+    const failedAttempt = await claim(stateIds.failed);
+    assert.equal(
+      await backend.operations.fail("personal", stateIds.failed, failedAttempt, {
+        name: "Error",
+        message: "known before execution",
+      }),
+      true,
+    );
+
+    await add(stateIds.outcome_unknown);
+    const unknownAttempt = await claim(stateIds.outcome_unknown);
+    assert.equal(
+      await backend.operations.start(
+        "personal",
+        stateIds.outcome_unknown,
+        unknownAttempt,
+        86_400_000,
+      ),
+      true,
+    );
+    assert.equal(
+      await backend.operations.markUnknown(
+        "personal",
+        stateIds.outcome_unknown,
+        unknownAttempt,
+        "result_lost",
+      ),
+      true,
+    );
+
+    await add(stateIds.executing);
+    const executingAttempt = await claim(stateIds.executing);
+    assert.equal(
+      await backend.operations.start("personal", stateIds.executing, executingAttempt, 86_400_000),
+      true,
+    );
+
+    await add(stateIds.claimed);
+    await claim(stateIds.claimed);
+
+    await add(stateIds.queued, { type: "typing", chatId: CHAT, on: true });
+    await backend.close();
+    closed = true;
+
+    const child = await execFileAsync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "--experimental-test-module-mocks",
+        path.join(import.meta.dirname, "operation-states-child.ts"),
+        databasePath,
+        JSON.stringify(stateIds),
+      ],
+      {
+        cwd: path.join(import.meta.dirname, ".."),
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          TMPDIR: process.env.TMPDIR,
+        },
+      },
+    );
+    const replacement = JSON.parse(child.stdout) as {
+      readonly pid: number;
+      readonly before: Record<keyof typeof stateIds, WhatsAppOperation["state"]>;
+      readonly after: Record<keyof typeof stateIds, WhatsAppOperation["state"]>;
+      readonly commands: {
+        readonly sent: number;
+        readonly read: number;
+        readonly typing: readonly { readonly chatId: string; readonly on: boolean }[];
+        readonly history: number;
+      };
+    };
+
+    assert.notEqual(replacement.pid, process.pid);
+    expect(
+      Object.fromEntries(
+        Object.entries(replacement.before).map(([name, state]) => [name, state.status]),
+      ),
+    ).toEqual({
+      queued: "queued",
+      claimed: "claimed",
+      executing: "executing",
+      succeeded: "succeeded",
+      failed: "failed",
+      outcome_unknown: "outcome_unknown",
+    });
+    expect(replacement.after.queued.status).toBe("succeeded");
+    for (const name of ["claimed", "executing", "succeeded", "failed", "outcome_unknown"] as const)
+      expect(replacement.after[name]).toEqual(replacement.before[name]);
+    expect(replacement.commands).toEqual({
+      sent: 0,
+      read: 0,
+      typing: [{ chatId: CHAT, on: true }],
+      history: 0,
+    });
+  } finally {
+    if (!closed) await backend.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });

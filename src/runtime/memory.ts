@@ -424,6 +424,25 @@ export function memoryOperationStore(
     replace({ ...current, state, updatedAt });
     return true;
   };
+  function get(accountId: string, operationIdValue: string): Promise<WhatsAppOperation | undefined>;
+  function get(
+    accountId: string,
+    operationIds: readonly string[],
+  ): Promise<readonly (WhatsAppOperation | undefined)[]>;
+  async function get(
+    accountId: string,
+    operationIdValue: string | readonly string[],
+  ): Promise<WhatsAppOperation | undefined | readonly (WhatsAppOperation | undefined)[]> {
+    await writes;
+    if (typeof operationIdValue === "string") {
+      const operation = records.get(key(accountId, operationIdValue));
+      return operation && copy(operation);
+    }
+    return operationIdValue.map((id) => {
+      const operation = records.get(key(accountId, id));
+      return operation && copy(operation);
+    });
+  }
 
   return {
     async submit({ accountId, id, idempotencyKey, operation }) {
@@ -451,10 +470,15 @@ export function memoryOperationStore(
         return replace(created);
       });
     },
-    async get(accountId, operationId) {
+    get,
+    async list(accountId) {
       await writes;
-      const operation = records.get(key(accountId, operationId));
-      return operation && copy(operation);
+      return [...records.values()]
+        .filter((operation) => operation.accountId === accountId)
+        .sort(
+          (left, right) => left.submittedAt - right.submittedAt || left.id.localeCompare(right.id),
+        )
+        .map(copy);
     },
     subscribe(accountId, operationId, listener) {
       const operationKey = key(accountId, operationId);

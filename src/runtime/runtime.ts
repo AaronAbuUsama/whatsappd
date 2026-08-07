@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 import { isOnline, isTerminal, type Status, type WaIdentity } from "../model/status.ts";
-import { refOf, type Outbound, type SendOptions } from "../model/outbound.ts";
+import { refOf } from "../model/outbound.ts";
 import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
@@ -43,6 +43,7 @@ import {
   type WhatsAppOperation,
   type WhatsAppOperationInput,
 } from "./operations.ts";
+import type { OperationSession } from "./operation-session.ts";
 
 const captureMessage = async (
   accountId: string,
@@ -128,7 +129,7 @@ const connectionInstant = (status: Status): "connected" | "disconnected" | undef
  * `start` and `stop` are optional so the deterministic test session — which has
  * no socket to open — is usable through the same runtime as the real one.
  */
-export interface RuntimeSession {
+export interface RuntimeSession extends OperationSession {
   readonly status?: Status;
   subscribe(
     handlers: WhatsAppSessionHandlers,
@@ -136,11 +137,6 @@ export interface RuntimeSession {
   ): Unsubscribe;
   start?(): Promise<void>;
   stop?(): Promise<void>;
-  send?(
-    to: string,
-    content: Outbound,
-    options?: SendOptions,
-  ): Promise<import("../model/outbound.ts").MessageRef>;
   /**
    * The linked account's own identity, once this session knows it.
    *
@@ -253,7 +249,7 @@ export interface ClientRuntimeSource {
     readonly operation: WhatsAppOperationInput;
   }): Promise<WhatsAppOperation>;
   submitMediaOperation(input: MediaOperationSubmission): Promise<WhatsAppOperation>;
-  operation(operationId: string): Promise<WhatsAppOperation | undefined>;
+  operations(operationIds: readonly string[]): Promise<readonly (WhatsAppOperation | undefined)[]>;
   onOperation(operationId: string, listener: (operation: WhatsAppOperation) => void): Unsubscribe;
 }
 
@@ -913,7 +909,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       setImmediate(() => operationExecutor?.wake());
       return operation;
     },
-    operation: (operationId) => backend.operations.get(accountId, operationId),
+    operations: (operationIds) => backend.operations.get(accountId, operationIds),
     onOperation: (operationId, listener) =>
       backend.operations.subscribe(accountId, operationId, listener),
   });

@@ -19,6 +19,7 @@
  *
  * @packageDocumentation
  */
+import type { MessageRef } from "../model/outbound.ts";
 import type { PresenceKind } from "../model/presence.ts";
 import type { Status, WaIdentity } from "../model/status.ts";
 import type { Unsubscribe } from "../subscription.ts";
@@ -43,7 +44,14 @@ import {
   type WhatsAppRuntime,
 } from "./runtime.ts";
 import { type MediaOutbound, type WhatsAppOperation } from "./operations.ts";
-import { createClientSend, type ClientSendOptions } from "./client-operations.ts";
+import {
+  createClientMessageActions,
+  createClientOperationGet,
+  createClientSend,
+  type ClientOperationOptions,
+  type ClientPhoneHistoryRequest,
+  type ClientSendOptions,
+} from "./client-operations.ts";
 export type { ClientOperationOptions, ClientSendOptions } from "./client-operations.ts";
 
 /**
@@ -433,6 +441,7 @@ export interface WhatsAppClient {
   };
   readonly operations: {
     get(operationId: string): Promise<WhatsAppOperation | undefined>;
+    get(operationIds: readonly string[]): Promise<readonly (WhatsAppOperation | undefined)[]>;
     subscribe(
       operationId: string,
       listener: (operation: WhatsAppOperation) => void,
@@ -458,6 +467,20 @@ export interface WhatsAppClient {
         options?: ClientSendOptions,
       ): Promise<WhatsAppOperation>;
     };
+    markRead(
+      refs: readonly MessageRef[],
+      options?: ClientOperationOptions,
+    ): Promise<WhatsAppOperation>;
+    setTyping(
+      chatId: string,
+      on: boolean,
+      options?: ClientOperationOptions,
+    ): Promise<WhatsAppOperation>;
+    requestPhoneHistory(
+      chatId: string,
+      request: ClientPhoneHistoryRequest,
+      options?: ClientOperationOptions,
+    ): Promise<WhatsAppOperation>;
     /**
      * What is held for one chat. Never touches storage.
      *
@@ -1087,7 +1110,6 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       signal?.addEventListener("abort", off, { once: true });
       return off;
     };
-
   const client: WhatsAppClient = {
     account: {
       subscribe: subscribeTo("account"),
@@ -1154,7 +1176,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     },
 
     operations: {
-      get: (operationIdValue) => source.operation(operationIdValue),
+      get: createClientOperationGet(source),
       subscribe(operationIdValue, listener, options) {
         const signal = options?.signal;
         if (signal?.aborted) return () => {};
@@ -1178,6 +1200,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     messages: {
       subscribe: subscribeTo("messages"),
       send: createClientSend(source),
+      ...createClientMessageActions(source),
       get: (chatId) => viewOf(entryFor(chatId)),
       older(chatId) {
         // Nothing to page against, and nothing that could ever announce the

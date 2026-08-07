@@ -381,8 +381,34 @@ export function libsqlOperationStore(
     if (value) publish(value);
     return value !== undefined;
   };
-  const get = (accountId: string, operationIdValue: string) =>
-    transact(client, "read", (transaction) => read(transaction, accountId, operationIdValue));
+  function get(accountId: string, operationIdValue: string): Promise<WhatsAppOperation | undefined>;
+  function get(
+    accountId: string,
+    operationIds: readonly string[],
+  ): Promise<readonly (WhatsAppOperation | undefined)[]>;
+  function get(
+    accountId: string,
+    operationIdValue: string | readonly string[],
+  ): Promise<WhatsAppOperation | undefined | readonly (WhatsAppOperation | undefined)[]> {
+    if (typeof operationIdValue === "string")
+      return transact(client, "read", (transaction) =>
+        read(transaction, accountId, operationIdValue),
+      );
+    if (operationIdValue.length === 0) return Promise.resolve([]);
+    return transact(client, "read", async (transaction) => {
+      const result = await transaction.execute({
+        sql: `SELECT ${columns} FROM wa_operations
+          WHERE account_id = ?
+            AND operation_id IN (SELECT value FROM json_each(?))`,
+        args: [accountId, JSON.stringify(operationIdValue)],
+      });
+      const byId = new Map(result.rows.map((row) => [text(row.operation_id, "operation_id"), row]));
+      return operationIdValue.map((id) => {
+        const row = byId.get(id);
+        return row && operation(row);
+      });
+    });
+  }
 
   return {
     async submit(input) {
@@ -422,6 +448,16 @@ export function libsqlOperationStore(
       return submitted.operation;
     },
     get,
+    list(accountId) {
+      return transact(client, "read", async (transaction) => {
+        const result = await transaction.execute({
+          sql: `SELECT ${columns} FROM wa_operations
+            WHERE account_id = ? ORDER BY submitted_at, operation_id`,
+          args: [accountId],
+        });
+        return result.rows.map(operation);
+      });
+    },
     subscribe(accountId, operationIdValue, listener) {
       const key = listenerKey(accountId, operationIdValue);
       const subscriptions = listeners.get(key) ?? new Set();

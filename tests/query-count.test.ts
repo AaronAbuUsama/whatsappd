@@ -96,8 +96,9 @@ mock.module("@libsql/client", {
   },
 });
 
-const { libsqlBackend, memoryMediaStore } = await import("../src/index.ts");
-const { textMessage } = await import("../src/testing.ts");
+const { createWhatsAppClient, createWhatsAppRuntime, libsqlBackend, memoryMediaStore } =
+  await import("../src/index.ts");
+const { createTestWhatsAppSession, textMessage } = await import("../src/testing.ts");
 
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,
@@ -137,6 +138,24 @@ const chatsWithMessages = (count: number): WhatsAppDataEvent[] =>
       }),
     }),
   );
+
+const operationIds = (count: number): string[] =>
+  Array.from({ length: count }, (_, index) => `operation-${index}`);
+
+const seedOperations = async (
+  backend: ReturnType<typeof libsqlBackend>,
+  count: number,
+): Promise<string[]> => {
+  const ids = operationIds(count);
+  for (const id of ids)
+    await backend.operations.submit({
+      accountId: ACCOUNT,
+      id,
+      idempotencyKey: id,
+      operation: { type: "typing", chatId: `${id}@example.invalid`, on: true },
+    });
+  return ids;
+};
 
 test("snapshot() issues the same number of queries for 3 chats as for 40", async () => {
   const small = await backendOn();
@@ -217,5 +236,125 @@ test("messages() issues the same number of queries for a 5-message page as for a
     );
   } finally {
     await resource.dispose();
+  }
+});
+
+test("operation hydration uses the same statement count for 3 rows as for 40", async () => {
+  const small = await backendOn();
+  const large = await backendOn();
+  try {
+    await seedOperations(small.backend, 3);
+    await seedOperations(large.backend, 40);
+
+    reset();
+    const few = await small.backend.operations.list(ACCOUNT);
+    const fewStatements = seen.length;
+
+    reset();
+    const many = await large.backend.operations.list(ACCOUNT);
+    const manyStatements = seen.length;
+
+    assert.ok(
+      fewStatements > 0,
+      "counted no statements at all — the interception is not observing operation hydration",
+    );
+    expect(few.length).toBe(3);
+    expect(many.length).toBe(40);
+    assert.equal(
+      manyStatements,
+      fewStatements,
+      `operation hydration issued ${fewStatements} statements for 3 rows and ${manyStatements} for 40`,
+    );
+  } finally {
+    await small.dispose();
+    await large.dispose();
+  }
+});
+
+test("operation claim scan uses the same statement count for 3 rows as for 40", async () => {
+  const small = await backendOn();
+  const large = await backendOn();
+  try {
+    await seedOperations(small.backend, 3);
+    await seedOperations(large.backend, 40);
+
+    reset();
+    const few = await small.backend.operations.claimNext(ACCOUNT, 30_000);
+    const fewStatements = seen.length;
+
+    reset();
+    const many = await large.backend.operations.claimNext(ACCOUNT, 30_000);
+    const manyStatements = seen.length;
+
+    assert.ok(
+      fewStatements > 0,
+      "counted no statements at all — the interception is not observing the claim scan",
+    );
+    assert.equal(few?.state.status, "claimed");
+    assert.equal(many?.state.status, "claimed");
+    assert.equal(
+      manyStatements,
+      fewStatements,
+      `operation claim issued ${fewStatements} statements for 3 rows and ${manyStatements} for 40`,
+    );
+  } finally {
+    await small.dispose();
+    await large.dispose();
+  }
+});
+
+test("batch operations.get uses the same statement count for 3 ids as for 40", async () => {
+  const small = await backendOn();
+  const large = await backendOn();
+  const smallDriver = createTestWhatsAppSession();
+  const largeDriver = createTestWhatsAppSession();
+  const smallRuntime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend: small.backend,
+    openSession: () => ({ ...smallDriver.session, status: { phase: "connecting" } }),
+  });
+  const largeRuntime = createWhatsAppRuntime({
+    accountId: ACCOUNT,
+    backend: large.backend,
+    openSession: () => ({ ...largeDriver.session, status: { phase: "connecting" } }),
+  });
+  let smallClient: Awaited<ReturnType<typeof createWhatsAppClient>> | undefined;
+  let largeClient: Awaited<ReturnType<typeof createWhatsAppClient>> | undefined;
+  try {
+    const smallIds = (await seedOperations(small.backend, 3)).reverse();
+    const largeIds = (await seedOperations(large.backend, 40)).reverse();
+    await smallRuntime.start();
+    await largeRuntime.start();
+    smallClient = await createWhatsAppClient(smallRuntime);
+    largeClient = await createWhatsAppClient(largeRuntime);
+
+    reset();
+    const few = await smallClient.operations.get(smallIds);
+    const fewStatements = seen.length;
+
+    reset();
+    const many = await largeClient.operations.get(largeIds);
+    const manyStatements = seen.length;
+
+    assert.ok(
+      fewStatements > 0,
+      "counted no statements at all — the interception is not observing batch operations.get",
+    );
+    expect(few.length).toBe(3);
+    expect(many.length).toBe(40);
+    expect(few.map((operation) => operation?.id)).toEqual(smallIds);
+    expect(many.map((operation) => operation?.id)).toEqual(largeIds);
+    assert.equal(
+      manyStatements,
+      fewStatements,
+      `batch operations.get issued ${fewStatements} statements for 3 ids and ${manyStatements} for 40`,
+    );
+  } finally {
+    await smallClient?.close();
+    await largeClient?.close();
+    await smallRuntime.stop().catch(() => {});
+    await largeRuntime.stop().catch(() => {});
+    await small.dispose();
+    await large.dispose();
   }
 });
