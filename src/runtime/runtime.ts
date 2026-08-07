@@ -35,6 +35,12 @@ import {
   type RuntimeLiveFrame,
   type CurrentMirrorSnapshot,
 } from "./contracts.ts";
+import {
+  createOperationExecutor,
+  type OperationExecutor,
+  type WhatsAppOperation,
+  type WhatsAppOperationInput,
+} from "./operations.ts";
 
 const captureMessage = async (
   accountId: string,
@@ -121,12 +127,18 @@ const connectionInstant = (status: Status): "connected" | "disconnected" | undef
  * no socket to open — is usable through the same runtime as the real one.
  */
 export interface RuntimeSession {
+  readonly status?: Status;
   subscribe(
     handlers: WhatsAppSessionHandlers,
     options?: { readonly signal?: AbortSignal },
   ): Unsubscribe;
   start?(): Promise<void>;
   stop?(): Promise<void>;
+  send?(
+    to: string,
+    content: { readonly text: string },
+    options?: import("../model/outbound.ts").SendOptions,
+  ): Promise<import("../model/outbound.ts").MessageRef>;
   /**
    * The linked account's own identity, once this session knows it.
    *
@@ -166,6 +178,8 @@ export interface WhatsAppRuntimeConfig {
    * @defaultValue `15_000`
    */
   readonly freshnessMs?: number;
+  /** Durable operation-attempt TTL. @defaultValue `30_000` */
+  readonly operationAttemptTtlMs?: number;
 }
 
 /** One account's runtime. Create it with {@link createWhatsAppRuntime}. */
@@ -231,6 +245,13 @@ export interface ClientRuntimeSource {
   read<T>(fn: (view: CurrentMirrorView) => Promise<T>): Promise<T>;
   identity(): WaIdentity | undefined;
   currentClaim(): ClientClaim | undefined;
+  submitOperation(input: {
+    readonly id: string;
+    readonly idempotencyKey: string;
+    readonly operation: WhatsAppOperationInput;
+  }): Promise<WhatsAppOperation>;
+  operation(operationId: string): Promise<WhatsAppOperation | undefined>;
+  onOperation(operationId: string, listener: (operation: WhatsAppOperation) => void): Unsubscribe;
 }
 
 /**
@@ -362,6 +383,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   const holderId = config.holderId ?? crypto.randomUUID();
   const leaseTtlMs = config.leaseTtlMs ?? 30_000;
   const freshnessMs = config.freshnessMs ?? 15_000;
+  const operationAttemptTtlMs = config.operationAttemptTtlMs ?? 30_000;
 
   const durableListeners = new Set<Registration<RuntimeDurableFrame>>();
   const liveListeners = new Set<Registration<RuntimeLiveFrame>>();
@@ -385,6 +407,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let renewing: Promise<void> | undefined;
   let supervisor: Promise<void> | undefined;
+  let operationExecutor: OperationExecutor | undefined;
   let starting: Promise<void> | undefined;
   let stopping: Promise<void> | undefined;
   /** A terminal session failure, held until a `stop()` reports it. */
@@ -500,6 +523,8 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       // Connection truth is only ever this claim's; without one there is
       // nothing a client could treat as current.
       if (!claim) return;
+      if (isOnline(status)) operationExecutor?.resume();
+      else operationExecutor?.pause();
       const observedAt = Date.now();
       publishLive({
         type: "connection",
@@ -560,14 +585,20 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     const claim = lease;
     const open = session;
     const running = supervisor;
+    const executor = operationExecutor;
     heartbeat = undefined;
     unsubscribe = undefined;
     lease = undefined;
     session = undefined;
     supervisor = undefined;
+    operationExecutor = undefined;
 
     if (timer) clearInterval(timer);
     off?.();
+    const [operationOutcome, closeOutcome] = await Promise.all([
+      settle(executor?.stop() ?? Promise.resolve()),
+      settle(Promise.resolve().then(() => open?.stop?.())),
+    ]);
     // The final disconnection is stamped here rather than from the connection
     // handler, and it has to be: teardown unsubscribes and gives the claim back
     // before the session reaches `disconnected` (`src/machine.ts`), so that
@@ -588,7 +619,6 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
             }),
           )
         : undefined;
-    const closeOutcome = await settle(Promise.resolve().then(() => open?.stop?.()));
     // Nothing awaited the supervisor while the session ran, so its terminal
     // failure — a rejected handler, a dead socket — arrives here. It is joined
     // even when stop() failed.
@@ -597,7 +627,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // expired, so releasing it does not depend on either close outcome.
     const releaseOutcome = claim ? await settle(backend.leases.release(claim)) : undefined;
     const rejected = firstRejection(
-      [runOutcome, closeOutcome, stampOutcome, releaseOutcome].filter(
+      [runOutcome, operationOutcome, closeOutcome, stampOutcome, releaseOutcome].filter(
         (result) => result !== undefined,
       ),
     );
@@ -722,7 +752,19 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // possibly alongside the worker that took the account over.
     if (stopped) throw stoppedWhileStarting();
 
+    operationExecutor = createOperationExecutor({
+      accountId,
+      store: backend.operations,
+      session: opened,
+      attemptTtlMs: operationAttemptTtlMs,
+      onError(error) {
+        failure ??= { error };
+        if (!stopped) void halt().catch(() => {});
+      },
+    });
+
     unsubscribe = opened.subscribe(handlers);
+    if (opened.status === undefined || isOnline(opened.status)) operationExecutor.resume();
     // A live session's start() resolves only once the session has ended, so it
     // is supervised rather than awaited: startup returns when the account is
     // being consumed, and the session's terminal failure surfaces from stop().
@@ -836,6 +878,19 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       }
     },
     currentClaim,
+    async submitOperation(input) {
+      const operation = await backend.operations.submit({
+        accountId,
+        id: input.id,
+        idempotencyKey: input.idempotencyKey,
+        operation: input.operation,
+      });
+      setImmediate(() => operationExecutor?.wake());
+      return operation;
+    },
+    operation: (operationId) => backend.operations.get(accountId, operationId),
+    onOperation: (operationId, listener) =>
+      backend.operations.subscribe(accountId, operationId, listener),
   });
 
   return runtime;

@@ -11,6 +11,17 @@
  */
 import { memoryStore } from "../stores/memory.ts";
 import { immutableMediaRef } from "./media.ts";
+import {
+  OperationIdempotencyConflictError,
+  fanoutOperationListeners,
+  notifyOperationListener,
+  operationId,
+  sameOperationInput,
+  type OperationClock,
+  type SerializedOperationError,
+  type WhatsAppOperation,
+  type WhatsAppOperationStore,
+} from "./operations.ts";
 import { projectCurrentMirror } from "./projection.ts";
 import {
   StaleAccountClaimError,
@@ -351,6 +362,225 @@ export function memoryMediaStore(): MediaStore {
   };
 }
 
+export interface MemoryOperationStoreOptions {
+  readonly clock?: OperationClock;
+}
+
+/** An in-memory durable-operation Adapter with the same conditional transitions as libSQL. */
+export function memoryOperationStore(
+  options: MemoryOperationStoreOptions = {},
+): WhatsAppOperationStore {
+  const clock = options.clock ?? { now: () => Date.now() };
+  const records = new Map<string, WhatsAppOperation>();
+  const idempotency = new Map<string, string>();
+  const listeners = new Map<string, Set<(operation: WhatsAppOperation) => void>>();
+  let writes: Promise<void> = Promise.resolve();
+  const key = (accountId: string, operationId: string): string => `${accountId}\0${operationId}`;
+  const keyForIdempotency = (accountId: string, idempotencyKey: string): string =>
+    `${accountId}\0${idempotencyKey}`;
+  const copy = <T>(value: T): T => structuredClone(value);
+  const serialize = <T>(write: () => Promise<T>): Promise<T> => {
+    const result = writes.then(write);
+    writes = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  };
+  const publish = (operation: WhatsAppOperation): void => {
+    fanoutOperationListeners(
+      listeners.get(key(operation.accountId, operation.id)) ?? new Set(),
+      operation,
+    );
+  };
+  const replace = (operation: WhatsAppOperation): WhatsAppOperation => {
+    records.set(key(operation.accountId, operation.id), operation);
+    publish(operation);
+    return copy(operation);
+  };
+  const now = async (): Promise<number> => {
+    const at = await clock.now();
+    if (!Number.isSafeInteger(at)) throw new RangeError(`operation clock returned ${at}`);
+    return at;
+  };
+  const transition = async (
+    accountId: string,
+    operationId: string,
+    attemptId: string,
+    allowed: "claimed" | "executing",
+    state: WhatsAppOperation["state"],
+    updatedAt: number,
+  ): Promise<boolean> => {
+    const current = records.get(key(accountId, operationId));
+    if (
+      !current ||
+      current.state.status !== allowed ||
+      current.state.attemptId !== attemptId ||
+      current.state.expiresAt <= updatedAt
+    )
+      return false;
+    replace({ ...current, state, updatedAt });
+    return true;
+  };
+
+  return {
+    submit({ accountId, id, idempotencyKey, operation }) {
+      return serialize(async () => {
+        const replayId = idempotency.get(keyForIdempotency(accountId, idempotencyKey));
+        if (replayId) {
+          const replay = records.get(key(accountId, replayId));
+          if (!replay) throw new Error("in-memory operation idempotency index is corrupt");
+          if (!sameOperationInput(replay.input, operation))
+            throw new OperationIdempotencyConflictError(accountId, idempotencyKey);
+          return copy(replay);
+        }
+        const submittedAt = await now();
+        const created: WhatsAppOperation = {
+          accountId,
+          id,
+          idempotencyKey,
+          input: copy(operation),
+          state: { status: "queued" },
+          submittedAt,
+          updatedAt: submittedAt,
+        };
+        idempotency.set(keyForIdempotency(accountId, idempotencyKey), id);
+        return replace(created);
+      });
+    },
+    async get(accountId, operationId) {
+      await writes;
+      const operation = records.get(key(accountId, operationId));
+      return operation && copy(operation);
+    },
+    subscribe(accountId, operationId, listener) {
+      const operationKey = key(accountId, operationId);
+      const subscriptions = listeners.get(operationKey) ?? new Set();
+      subscriptions.add(listener);
+      listeners.set(operationKey, subscriptions);
+      const current = records.get(operationKey);
+      if (current) notifyOperationListener(listener, current);
+      return () => {
+        subscriptions.delete(listener);
+        if (subscriptions.size === 0) listeners.delete(operationKey);
+      };
+    },
+    recoverExpired(accountId) {
+      return serialize(async () => {
+        const at = await now();
+        let recovered = 0;
+        for (const current of records.values()) {
+          if (
+            current.accountId !== accountId ||
+            (current.state.status !== "claimed" && current.state.status !== "executing") ||
+            current.state.expiresAt > at
+          )
+            continue;
+          const state: WhatsAppOperation["state"] =
+            current.state.status === "claimed"
+              ? { status: "queued" }
+              : {
+                  status: "outcome_unknown",
+                  reason: "execution_lease_expired",
+                  completedAt: at,
+                };
+          replace({ ...current, state, updatedAt: at });
+          recovered += 1;
+        }
+        return recovered;
+      });
+    },
+    claimNext(accountId, ttlMs) {
+      return serialize(async () => {
+        const current = [...records.values()]
+          .filter(
+            (operation) => operation.accountId === accountId && operation.state.status === "queued",
+          )
+          .sort(
+            (left, right) =>
+              left.submittedAt - right.submittedAt || left.id.localeCompare(right.id),
+          )[0];
+        if (!current) return undefined;
+        const at = await now();
+        return replace({
+          ...current,
+          state: { status: "claimed", attemptId: operationId(), expiresAt: at + ttlMs },
+          updatedAt: at,
+        });
+      });
+    },
+    start(accountId, operationIdValue, attemptId, ttlMs) {
+      return serialize(async () => {
+        const at = await now();
+        return transition(
+          accountId,
+          operationIdValue,
+          attemptId,
+          "claimed",
+          {
+            status: "executing",
+            attemptId,
+            startedAt: at,
+            expiresAt: at + ttlMs,
+          },
+          at,
+        );
+      });
+    },
+    succeed(accountId, operationIdValue, attemptId, result) {
+      return serialize(async () => {
+        const at = await now();
+        return transition(
+          accountId,
+          operationIdValue,
+          attemptId,
+          "executing",
+          {
+            status: "succeeded",
+            result: copy(result),
+            completedAt: at,
+          },
+          at,
+        );
+      });
+    },
+    fail(accountId, operationIdValue, attemptId, error: SerializedOperationError) {
+      return serialize(async () => {
+        const at = await now();
+        return transition(
+          accountId,
+          operationIdValue,
+          attemptId,
+          "claimed",
+          {
+            status: "failed",
+            error: copy(error),
+            completedAt: at,
+          },
+          at,
+        );
+      });
+    },
+    markUnknown(accountId, operationIdValue, attemptId, reason) {
+      return serialize(async () => {
+        const at = await now();
+        return transition(
+          accountId,
+          operationIdValue,
+          attemptId,
+          "executing",
+          {
+            status: "outcome_unknown",
+            reason,
+            completedAt: at,
+          },
+          at,
+        );
+      });
+    },
+  };
+}
+
 /**
  * Group in-memory implementations of every capability one runtime needs.
  *
@@ -360,11 +590,12 @@ export function memoryMediaStore(): MediaStore {
  *
  * @returns A backend whose state vanishes with the process.
  */
-export function memoryBackend(): WhatsAppBackend {
+export function memoryBackend(options: MemoryOperationStoreOptions = {}): WhatsAppBackend {
   return {
     credentials: memoryStore(),
     data: memoryDataStore(),
     leases: memoryLeaseStore(),
     media: memoryMediaStore(),
+    operations: memoryOperationStore(options),
   };
 }

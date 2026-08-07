@@ -20,6 +20,7 @@
  * @packageDocumentation
  */
 import type { PresenceKind } from "../model/presence.ts";
+import type { SendOptions } from "../model/outbound.ts";
 import type { Status, WaIdentity } from "../model/status.ts";
 import type { Unsubscribe } from "../subscription.ts";
 import type {
@@ -42,6 +43,7 @@ import {
   type ClientClaim,
   type WhatsAppRuntime,
 } from "./runtime.ts";
+import { awaitOperationSubmission, operationId, type WhatsAppOperation } from "./operations.ts";
 
 /**
  * Order two WhatsApp identifiers by code unit.
@@ -373,6 +375,13 @@ export interface ClientSubscribeOptions {
   readonly signal?: AbortSignal;
 }
 
+export interface ClientOperationOptions {
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface ClientSendOptions extends ClientOperationOptions, SendOptions {}
+
 /**
  * Observe one namespace.
  *
@@ -428,6 +437,14 @@ export interface WhatsAppClient {
     /** By identifier. */
     list(): readonly GroupRecord[];
   };
+  readonly operations: {
+    get(operationId: string): Promise<WhatsAppOperation | undefined>;
+    subscribe(
+      operationId: string,
+      listener: (operation: WhatsAppOperation) => void,
+      options?: ClientSubscribeOptions,
+    ): Unsubscribe;
+  };
   /**
    * One chat's saved messages, its live upserts, and how far back it can go.
    *
@@ -439,6 +456,9 @@ export interface WhatsAppClient {
    * rendering.
    */
   readonly messages: ClientNamespace & {
+    readonly send: {
+      text(chatId: string, text: string, options?: ClientSendOptions): Promise<WhatsAppOperation>;
+    };
     /**
      * What is held for one chat. Never touches storage.
      *
@@ -1134,8 +1154,49 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         )),
     },
 
+    operations: {
+      get: (operationIdValue) => source.operation(operationIdValue),
+      subscribe(operationIdValue, listener, options) {
+        const signal = options?.signal;
+        if (signal?.aborted) return () => {};
+        let off: Unsubscribe = () => {};
+        let released = false;
+        const release = (): void => {
+          if (released) return;
+          released = true;
+          off();
+          releases.delete(release);
+          signal?.removeEventListener("abort", release);
+        };
+        releases.add(release);
+        signal?.addEventListener("abort", release, { once: true });
+        off = source.onOperation(operationIdValue, listener);
+        if (released) off();
+        return release;
+      },
+    },
+
     messages: {
       subscribe: subscribeTo("messages"),
+      send: {
+        async text(chatId, text, options) {
+          const id = operationId();
+          const { idempotencyKey = operationId(), signal, ...sendOptions } = options ?? {};
+          return awaitOperationSubmission(
+            source.submitOperation({
+              id,
+              idempotencyKey,
+              operation: {
+                type: "send",
+                chatId,
+                content: { text },
+                ...(Object.keys(sendOptions).length > 0 && { options: sendOptions }),
+              },
+            }),
+            signal,
+          );
+        },
+      },
       get: (chatId) => viewOf(entryFor(chatId)),
       older(chatId) {
         // Nothing to page against, and nothing that could ever announce the

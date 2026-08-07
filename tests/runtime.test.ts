@@ -23,6 +23,7 @@ import {
   memoryDataStore,
   memoryLeaseStore,
   memoryMediaStore,
+  memoryOperationStore,
 } from "../src/runtime/memory.ts";
 import {
   createRuntimeFrameClient,
@@ -1193,6 +1194,7 @@ test("two accounts remain isolated in one backend", async () => {
     data,
     leases,
     media: memoryMediaStore(),
+    operations: memoryOperationStore(),
   });
   const alice = lane("alice", { backend: shared() });
   const bob = lane("bob", { backend: shared() });
@@ -1718,6 +1720,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
     credentials: memoryStore(),
     leases: fixedLeaseStore(1),
     media,
+    operations: memoryOperationStore(),
     data: {
       ...data,
       async accept(accountId, events, fencingToken) {
@@ -1733,6 +1736,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
     credentials: memoryStore(),
     leases: fixedLeaseStore(2),
     media,
+    operations: memoryOperationStore(),
     data,
   };
   const old = lane("personal", { backend: oldBackend });

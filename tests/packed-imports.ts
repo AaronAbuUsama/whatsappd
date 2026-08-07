@@ -28,6 +28,8 @@ const EXPECTED_ROOT_EXPORTS = [
   "ClientAccountState",
   "ClientChatMessages",
   "ClientNamespace",
+  "ClientOperationOptions",
+  "ClientSendOptions",
   "ContactRecord",
   "ContactUpdate",
   "ConversationSyncBatch",
@@ -65,6 +67,8 @@ const EXPECTED_ROOT_EXPORTS = [
   "MirrorAlias",
   "MirrorRecord",
   "ObservedInstant",
+  "OperationClock",
+  "OperationIdempotencyConflictError",
   "Outbound",
   "PairingError",
   "PairingState",
@@ -73,6 +77,7 @@ const EXPECTED_ROOT_EXPORTS = [
   "ReceiptStatus",
   "RuntimeSession",
   "SendOptions",
+  "SerializedOperationError",
   "SessionConfig",
   "StaleAccountClaimError",
   "Status",
@@ -92,6 +97,10 @@ const EXPECTED_ROOT_EXPORTS = [
   "WhatsAppDataStore",
   "WhatsAppDurableEvent",
   "WhatsAppFault",
+  "WhatsAppOperation",
+  "WhatsAppOperationInput",
+  "WhatsAppOperationState",
+  "WhatsAppOperationStore",
   "WhatsAppRuntime",
   "WhatsAppRuntimeConfig",
   "WhatsAppSession",
@@ -112,6 +121,7 @@ const EXPECTED_ROOT_EXPORTS = [
   "memoryDataStore",
   "memoryLeaseStore",
   "memoryMediaStore",
+  "memoryOperationStore",
   "memoryStore",
   "pairingAuth",
   "qrAuth",
@@ -554,8 +564,8 @@ try {
   });
   assert.deepEqual(
     clientMembers.sort(),
-    ["account", "chats", "close", "contacts", "groups", "messages"],
-    "WhatsAppClient must be the friendly account/chats/contacts/groups/messages/close shape",
+    ["account", "chats", "close", "contacts", "groups", "messages", "operations"],
+    "WhatsAppClient must expose the friendly namespaces, operation accessor, and close",
   );
   assert.equal(clientMembers.includes("watch"), false);
   for (const rawContract of [

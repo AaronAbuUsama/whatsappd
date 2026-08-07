@@ -41,12 +41,17 @@ import {
   type CurrentMirrorMutation,
   type CurrentMirrorRecords,
 } from "./projection.ts";
+import { libsqlOperationStore } from "./libsql-operations.ts";
+import { transact } from "./libsql-transaction.ts";
+import type { OperationClock } from "./operations.ts";
 
 export interface LibsqlBackendOptions {
   readonly url: string;
   readonly authToken?: string;
   readonly accountId: string;
   readonly media: MediaStore;
+  /** Deterministic operation-attempt clock for tests; production uses libSQL time. */
+  readonly operationClock?: OperationClock;
 }
 
 export interface LibsqlBackend extends WhatsAppBackend, AsyncDisposable {
@@ -124,6 +129,33 @@ const migrations = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS wa_operations (
+        operation_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        input_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (
+          status IN ('queued', 'claimed', 'executing', 'succeeded', 'failed', 'outcome_unknown')
+        ),
+        attempt_id TEXT,
+        lease_expires_at INTEGER,
+        started_at INTEGER,
+        result_json TEXT,
+        error_json TEXT,
+        unknown_reason TEXT,
+        submitted_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        PRIMARY KEY (account_id, operation_id),
+        UNIQUE (account_id, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS wa_operation_claim
+        ON wa_operations (account_id, status, submitted_at, operation_id);
+    `,
+  },
 ] as const;
 
 async function migrate(client: Client): Promise<void> {
@@ -156,26 +188,6 @@ async function migrate(client: Client): Promise<void> {
   } finally {
     transaction.close();
   }
-}
-
-async function transact<T>(
-  client: LazyLibsqlClient,
-  mode: "read" | "write",
-  work: (transaction: Transaction) => Promise<T>,
-): Promise<T> {
-  return client.run(async (opened) => {
-    const transaction = await opened.transaction(mode);
-    try {
-      const result = await work(transaction);
-      await transaction.commit();
-      return result;
-    } catch (error) {
-      if (!transaction.closed) await transaction.rollback().catch(() => {});
-      throw error;
-    } finally {
-      transaction.close();
-    }
-  }, mode);
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -1531,6 +1543,7 @@ export function libsqlBackend(options: LibsqlBackendOptions): LibsqlBackend {
     data: libsqlDataStore(client),
     leases: libsqlLeaseStore(client),
     media: options.media,
+    operations: libsqlOperationStore(client, options.operationClock),
     close,
     [Symbol.asyncDispose]: close,
   };

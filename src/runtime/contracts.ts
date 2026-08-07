@@ -28,6 +28,7 @@ import type {
 import type { MessageRef } from "../model/outbound.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { WhatsAppEvent } from "../subscription.ts";
+import type { WhatsAppOperationStore } from "./operations.ts";
 
 /**
  * One durable timestamp derived from an ephemeral signal (ADR-0020).
@@ -584,6 +585,7 @@ export interface WhatsAppBackend {
   readonly data: WhatsAppDataStore;
   readonly leases: AccountLeaseStore;
   readonly media: MediaStore;
+  readonly operations: WhatsAppOperationStore;
 }
 
 /** Thrown when a second runtime tries to open an account another one holds. */
