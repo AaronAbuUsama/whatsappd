@@ -34,6 +34,11 @@ import {
 // this source-public Client factory is the one seam #127 is proving.
 import { createWhatsAppClient, type WhatsAppClientCore } from "../src/runtime/client.ts";
 import { DEFAULT_ALLOWLIST_PATH, guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
+import {
+  captureClientProofRunStart,
+  writeClientProofReceipt,
+  type ClientProofSummary,
+} from "./client-proof-receipt.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
@@ -213,6 +218,10 @@ interface EnvProbe {
 export interface PeerProcessResult {
   readonly pid: number;
   readonly identityHash?: string;
+  readonly privateKnownValues?: {
+    readonly nonce?: string;
+    readonly peerJid: string;
+  };
   readonly link?: LinkSummary;
   readonly envProbe?: EnvProbe;
   readonly sent?:
@@ -733,8 +742,9 @@ async function peerChild(): Promise<void> {
   const peer = await openProfile("ios");
   try {
     let sent: PeerProcessResult["sent"];
+    let nonce: string | undefined;
     if (mode === "send-text") {
-      const nonce = randomBytes(24).toString("base64url");
+      nonce = randomBytes(24).toString("base64url");
       const target = resolveAllowlistedTarget(proofGroupId());
       await guardedSender(peer.session).send(target, { text: nonce });
       sent = { kind: "text", sha256: sha256(nonce), byteLength: Buffer.byteLength(nonce) };
@@ -766,6 +776,10 @@ async function peerChild(): Promise<void> {
     const result: PeerProcessResult = {
       pid: process.pid,
       identityHash: hashIdentity(salt, peer.identity),
+      privateKnownValues: {
+        ...(nonce && { nonce }),
+        peerJid: peer.identity,
+      },
       link: peer.link,
       ...(sent && { sent }),
     };
@@ -959,6 +973,10 @@ async function subjectRun(): Promise<void> {
     throw new Error("client proof refuses an interactive TTY; run it with stdin closed");
   }
 
+  const runStart = captureClientProofRunStart(root);
+  if (!runStart.treeClean) {
+    throw new Error("client proof refuses a dirty tree before opening either linked account");
+  }
   const salt = randomBytes(16).toString("hex");
   let subject: OpenProfile | undefined;
   try {
@@ -1098,61 +1116,81 @@ async function subjectRun(): Promise<void> {
     }
 
     proofStage = "summary";
-    process.stdout.write(
+    const summary = {
+      finalized: true,
+      interactive: false,
+      composition: [
+        "fileMediaStore",
+        "libsqlBackend",
+        "createWhatsAppRuntime",
+        "createWhatsAppClient",
+      ],
+      subjectImports: ["package-root", "runtime-client-public-factory"],
+      linkMode: subjectLink.linkMode,
+      challengeEventCount: subjectLink.challengeEventCount,
+      qrDisplayed: subjectLink.qrDisplayed,
+      stdoutContainedChallenge: false,
+      subjectPid: process.pid,
+      peerPid: textPeer.pid,
+      documentPeerPid: documentPeer.pid,
+      ...(pageSeedPeer && { pageSeedPeerPid: pageSeedPeer.pid }),
+      replacementPid: replacementProcess.pid,
+      subjectIdentityHash,
+      peerIdentityHash,
+      peer: {
+        mode: "second-account-own-process",
+        linkMode: textPeer.link.linkMode,
+        challengeEventCount:
+          textPeer.link.challengeEventCount +
+          documentPeer.link.challengeEventCount +
+          (pageSeedPeer?.link?.challengeEventCount ?? 0),
+        qrDisplayed:
+          textPeer.link.qrDisplayed ||
+          documentPeer.link.qrDisplayed ||
+          (pageSeedPeer?.link?.qrDisplayed ?? false),
+      },
+      inboundText: text,
+      inboundDocument: document,
+      pageSeed: {
+        sentThisRun: seededThisRun,
+        retainedBeforeWalk: paging.retainedCount,
+        ...(seedBodyDigest && { orderedBodyDigest: seedBodyDigest }),
+      },
+      paging,
+      replacement: {
+        distinctPid: true,
+        durableDigestEqual: true,
+        durableDigest: replacement.durableDigest,
+        connectionPresent: replacement.connectionPresent,
+        identityPresent: replacement.identityPresent,
+        presenceAddressCount: replacement.presenceAddressCount,
+        presenceObservationsRestored: replacement.presenceObservationsRestored,
+        lastConnectedAtPresent: replacement.lastConnectedAtPresent,
+        lastDisconnectedAtPresent: replacement.lastDisconnectedAtPresent,
+      },
+    } satisfies ClientProofSummary;
+    const nonce = textPeer.privateKnownValues?.nonce;
+    const peerJid = textPeer.privateKnownValues?.peerJid;
+    if (!nonce || !peerJid) {
+      throw new Error("the receipt negative control is missing an in-memory known value");
+    }
+    const receipt = writeClientProofReceipt(root, {
+      runStart,
+      finalizedAt: new Date().toISOString(),
+      summary,
+      knownValues: [nonce, peerJid, chatId],
+    });
+    process.stderr.write(
       `${JSON.stringify({
-        finalized: true,
-        interactive: false,
-        composition: [
-          "fileMediaStore",
-          "libsqlBackend",
-          "createWhatsAppRuntime",
-          "createWhatsAppClient",
-        ],
-        subjectImports: ["package-root", "runtime-client-public-factory"],
-        linkMode: subjectLink.linkMode,
-        challengeEventCount: subjectLink.challengeEventCount,
-        qrDisplayed: subjectLink.qrDisplayed,
-        stdoutContainedChallenge: false,
-        subjectPid: process.pid,
-        peerPid: textPeer.pid,
-        documentPeerPid: documentPeer.pid,
-        ...(pageSeedPeer && { pageSeedPeerPid: pageSeedPeer.pid }),
-        replacementPid: replacementProcess.pid,
-        subjectIdentityHash,
-        peerIdentityHash,
-        peer: {
-          mode: "second-account-own-process",
-          linkMode: textPeer.link.linkMode,
-          challengeEventCount:
-            textPeer.link.challengeEventCount +
-            documentPeer.link.challengeEventCount +
-            (pageSeedPeer?.link?.challengeEventCount ?? 0),
-          qrDisplayed:
-            textPeer.link.qrDisplayed ||
-            documentPeer.link.qrDisplayed ||
-            (pageSeedPeer?.link?.qrDisplayed ?? false),
-        },
-        inboundText: text,
-        inboundDocument: document,
-        pageSeed: {
-          sentThisRun: seededThisRun,
-          retainedBeforeWalk: paging.retainedCount,
-          ...(seedBodyDigest && { orderedBodyDigest: seedBodyDigest }),
-        },
-        paging,
-        replacement: {
-          distinctPid: true,
-          durableDigestEqual: true,
-          durableDigest: replacement.durableDigest,
-          connectionPresent: replacement.connectionPresent,
-          identityPresent: replacement.identityPresent,
-          presenceAddressCount: replacement.presenceAddressCount,
-          presenceObservationsRestored: replacement.presenceObservationsRestored,
-          lastConnectedAtPresent: replacement.lastConnectedAtPresent,
-          lastDisconnectedAtPresent: replacement.lastDisconnectedAtPresent,
-        },
+        receipt: path.relative(root, receipt.file),
+        schemaUnknownFields: receipt.scan.schemaUnknownFields,
+        schemaInvalidFields: receipt.scan.schemaInvalidFields,
+        patternHits: receipt.scan.patternHits,
+        knownValueHits: receipt.scan.knownValueHits,
+        floorPassed: receipt.scan.floorPassed,
       })}\n`,
     );
+    process.stdout.write(`${JSON.stringify(summary)}\n`);
   } finally {
     await subject?.close();
   }
