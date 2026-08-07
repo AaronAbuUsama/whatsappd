@@ -14,6 +14,7 @@ import { immutableMediaRef } from "./media.ts";
 import {
   OperationIdempotencyConflictError,
   fanoutOperationListeners,
+  normalizeOperationInput,
   notifyOperationListener,
   operationId,
   sameOperationInput,
@@ -424,13 +425,14 @@ export function memoryOperationStore(
   };
 
   return {
-    submit({ accountId, id, idempotencyKey, operation }) {
+    async submit({ accountId, id, idempotencyKey, operation }) {
+      const normalized = normalizeOperationInput(operation);
       return serialize(async () => {
         const replayId = idempotency.get(keyForIdempotency(accountId, idempotencyKey));
         if (replayId) {
           const replay = records.get(key(accountId, replayId));
           if (!replay) throw new Error("in-memory operation idempotency index is corrupt");
-          if (!sameOperationInput(replay.input, operation))
+          if (!sameOperationInput(replay.input, normalized))
             throw new OperationIdempotencyConflictError(accountId, idempotencyKey);
           return copy(replay);
         }
@@ -439,7 +441,7 @@ export function memoryOperationStore(
           accountId,
           id,
           idempotencyKey,
-          input: copy(operation),
+          input: copy(normalized),
           state: { status: "queued" },
           submittedAt,
           updatedAt: submittedAt,

@@ -7,6 +7,7 @@ import { expect, test } from "./_expect.ts";
 import {
   createWhatsAppClient,
   createWhatsAppRuntime,
+  type DurableOutbound,
   libsqlBackend,
   memoryBackend,
   memoryMediaStore,
@@ -87,7 +88,9 @@ async function operationStores(): Promise<readonly StoreLane[]> {
   ];
 }
 
-const sendInput = (text: string): WhatsAppOperationInput => ({
+type SendOperationInput = Extract<WhatsAppOperationInput, { readonly type: "send" }>;
+
+const sendInput = (text: string): SendOperationInput => ({
   type: "send",
   chatId: CHAT,
   content: { text },
@@ -357,6 +360,279 @@ test("the memory Adapter replays equal input and rejects divergent input", async
     }),
     /operation clock returned 1.5/,
   );
+});
+
+test("both operation stores reject numbers JSON cannot preserve without mutation", async () => {
+  const lanes = await operationStores();
+
+  try {
+    for (const lane of lanes) {
+      const id = `${lane.name}-non-finite`;
+      await assert.rejects(
+        async () =>
+          lane.store.submit({
+            accountId: "personal",
+            id,
+            idempotencyKey: id,
+            operation: {
+              type: "send",
+              chatId: CHAT,
+              content: {
+                media: { ref: "media-ref", byteLength: Number.NaN },
+              },
+            },
+          }),
+        /must be finite/,
+      );
+      expect(await lane.store.get("personal", id)).toBe(undefined);
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+  }
+});
+
+test("Client idempotency replays normalized input once through libSQL", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-replay-"));
+  const url = `file:${path.join(directory, "whatsapp.db")}`;
+  const backend = libsqlBackend({
+    url,
+    accountId: "personal",
+    media: memoryMediaStore(),
+  });
+  const oracle = createClient({ url });
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+
+  try {
+    const quote = { id: "quoted", chatId: CHAT, fromMe: false };
+    const first = await client.messages.send.text(CHAT, "same", {
+      idempotencyKey: "normalized-replay",
+      quote,
+    });
+    await until(async () => {
+      const current = await client.operations.get(first.id);
+      return current?.state.status === "succeeded";
+    });
+    const replay = await client.messages.send.text(CHAT, "same", {
+      mentions: [],
+      idempotencyKey: "normalized-replay",
+      quote: { fromMe: false, chatId: CHAT, id: "quoted" },
+    });
+
+    expect(replay.id).toBe(first.id);
+    expect(driver.commands.sent.length).toBe(1);
+    const rows = await oracle.execute({
+      sql: "SELECT operation_id FROM wa_operations WHERE account_id = ? AND idempotency_key = ?",
+      args: ["personal", "normalized-replay"],
+    });
+    expect(rows.rows.map((row) => row.operation_id)).toEqual([first.id]);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
+    oracle.close();
+    await backend.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("six typed divergent inputs throw the exported conflict without mutation", async () => {
+  const media = (ref: string): DurableOutbound => ({
+    media: { ref, byteLength: 4 },
+  });
+  const quote = { id: "quote", chatId: CHAT, fromMe: false };
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly original: WhatsAppOperationInput;
+    readonly conflict: WhatsAppOperationInput;
+  }> = [
+    {
+      name: "text",
+      original: sendInput("first"),
+      conflict: sendInput("different"),
+    },
+    {
+      name: "chatId",
+      original: sendInput("same"),
+      conflict: { ...sendInput("same"), chatId: "different@example.invalid" },
+    },
+    {
+      name: "quote",
+      original: { ...sendInput("same"), options: { quote } },
+      conflict: {
+        ...sendInput("same"),
+        options: { quote: { ...quote, id: "different-quote" } },
+      },
+    },
+    {
+      name: "mentions",
+      original: { ...sendInput("same"), options: { mentions: ["first@example.invalid"] } },
+      conflict: { ...sendInput("same"), options: { mentions: ["other@example.invalid"] } },
+    },
+    {
+      name: "type",
+      original: sendInput("same"),
+      conflict: { type: "typing", chatId: CHAT, on: true },
+    },
+    {
+      name: "media ref",
+      original: { type: "send", chatId: CHAT, content: media("media-a") },
+      conflict: { type: "send", chatId: CHAT, content: media("media-b") },
+    },
+  ];
+  const lanes = await operationStores();
+
+  try {
+    for (const lane of lanes) {
+      for (const example of cases) {
+        const key = `${lane.name}-${example.name}`;
+        const originalId = `${key}-original`;
+        const conflictId = `${key}-conflict`;
+        const original = await lane.store.submit({
+          accountId: "personal",
+          id: originalId,
+          idempotencyKey: key,
+          operation: example.original,
+        });
+        await assert.rejects(
+          lane.store.submit({
+            accountId: "personal",
+            id: conflictId,
+            idempotencyKey: key,
+            operation: example.conflict,
+          }),
+          (error) => {
+            expect(error instanceof OperationIdempotencyConflictError).toBe(true);
+            return true;
+          },
+        );
+        expect(await lane.store.get("personal", originalId)).toEqual(original);
+        expect(await lane.store.get("personal", conflictId)).toBe(undefined);
+      }
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+  }
+});
+
+test("idempotency keys are account-scoped through the public store", async () => {
+  const lanes = await operationStores();
+
+  try {
+    for (const lane of lanes) {
+      const first = await lane.store.submit({
+        accountId: "first-account",
+        id: `${lane.name}-first`,
+        idempotencyKey: "shared-key",
+        operation: sendInput("first"),
+      });
+      const second = await lane.store.submit({
+        accountId: "second-account",
+        id: `${lane.name}-second`,
+        idempotencyKey: "shared-key",
+        operation: sendInput("second"),
+      });
+
+      expect(first.id === second.id).toBe(false);
+      expect(await lane.store.get("first-account", first.id)).toEqual(first);
+      expect(await lane.store.get("second-account", second.id)).toEqual(second);
+      expect(await lane.store.get("second-account", first.id)).toBe(undefined);
+      expect(await lane.store.get("first-account", second.id)).toBe(undefined);
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.close()));
+  }
+});
+
+test("libSQL schema enforces account-scoped idempotency uniqueness", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "whatsappd-operation-unique-"));
+  const url = `file:${path.join(directory, "whatsapp.db")}`;
+  const backend = libsqlBackend({
+    url,
+    accountId: "personal",
+    media: memoryMediaStore(),
+  });
+  const oracle = createClient({ url });
+
+  try {
+    const original = await backend.operations.submit({
+      accountId: "personal",
+      id: "schema-original",
+      idempotencyKey: "schema-key",
+      operation: sendInput("same"),
+    });
+    const rawInsert = (accountId: string, operationIdValue: string) =>
+      oracle.execute({
+        sql: `INSERT INTO wa_operations
+          (operation_id, account_id, idempotency_key, input_json, status, submitted_at, updated_at)
+          VALUES (?, ?, ?, ?, 'queued', ?, ?)`,
+        args: [
+          operationIdValue,
+          accountId,
+          original.idempotencyKey,
+          JSON.stringify(sendInput("same")),
+          1_000,
+          1_000,
+        ],
+      });
+
+    await assert.rejects(rawInsert("personal", "schema-duplicate"), (error) => {
+      if (typeof error !== "object" || error === null) assert.fail("expected a constraint error");
+      expect(String(Reflect.get(error, "code")).startsWith("SQLITE_CONSTRAINT")).toBe(true);
+      return true;
+    });
+    await rawInsert("other-account", "schema-other-account");
+    const rows = await oracle.execute({
+      sql: "SELECT account_id FROM wa_operations WHERE idempotency_key = ? ORDER BY account_id",
+      args: [original.idempotencyKey],
+    });
+    expect(rows.rows.map((row) => row.account_id)).toEqual(["other-account", "personal"]);
+  } finally {
+    oracle.close();
+    await backend.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("identical Client sends without a key mint distinct UUID operations", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+
+  try {
+    const first = await client.messages.send.text(CHAT, "repeat");
+    const second = await client.messages.send.text(CHAT, "repeat");
+    await until(async () => {
+      const operations = await Promise.all([
+        client.operations.get(first.id),
+        client.operations.get(second.id),
+      ]);
+      return operations.every((operation) => operation?.state.status === "succeeded");
+    });
+
+    expect(first.id === second.id).toBe(false);
+    expect(first.idempotencyKey === second.idempotencyKey).toBe(false);
+    expect(
+      [first.idempotencyKey, second.idempotencyKey].every((key) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key),
+      ),
+    ).toBe(true);
+    expect(driver.commands.sent.length).toBe(2);
+  } finally {
+    await client.close();
+    await runtime.stop().catch(() => {});
+  }
 });
 
 test("error sanitization tolerates hostile Error property accessors", () => {

@@ -72,6 +72,8 @@ export {
 } from "./runtime/memory.ts";
 export { OperationIdempotencyConflictError } from "./runtime/operations.ts";
 export type {
+  DurableMediaInput,
+  DurableOutbound,
   OperationClock,
   SerializedOperationError,
   WhatsAppOperation,

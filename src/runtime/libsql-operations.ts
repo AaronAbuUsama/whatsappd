@@ -3,10 +3,12 @@ import type { LazyLibsqlClient } from "../stores/libsql.ts";
 import { transact } from "./libsql-transaction.ts";
 import {
   fanoutOperationListeners,
+  normalizeOperationInput,
   OperationIdempotencyConflictError,
   notifyOperationListener,
   operationId,
   sameOperationInput,
+  type DurableOutbound,
   type OperationClock,
   type SerializedOperationError,
   type WhatsAppOperation,
@@ -40,19 +42,115 @@ function parsed(value: unknown, label: string): unknown {
   }
 }
 
-function operationInput(value: unknown): WhatsAppOperationInput {
+function object(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error("invalid libSQL operation input_json");
-  const input = value as Record<string, unknown>;
-  if (input.type !== "send") throw new Error("invalid libSQL operation input type");
-  if (
-    typeof input.content !== "object" ||
-    input.content === null ||
-    Array.isArray(input.content) ||
-    typeof (input.content as Record<string, unknown>).text !== "string"
-  )
-    throw new Error("invalid libSQL operation send content");
-  return structuredClone(value) as WhatsAppOperationInput;
+    throw new Error(`invalid libSQL operation ${label}`);
+  return value as Record<string, unknown>;
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  label: string,
+): void {
+  if (Object.keys(value).some((key) => !allowed.includes(key)))
+    throw new Error(`invalid libSQL operation ${label}`);
+}
+
+function boolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`invalid libSQL operation ${label}`);
+  return value;
+}
+
+function messageRef(value: unknown, label: string) {
+  const ref = object(value, label);
+  exactKeys(ref, ["id", "chatId", "fromMe", "participant"], label);
+  return {
+    id: text(ref.id, `${label}.id`),
+    chatId: text(ref.chatId, `${label}.chatId`),
+    fromMe: boolean(ref.fromMe, `${label}.fromMe`),
+    ...(ref.participant !== undefined && {
+      participant: text(ref.participant, `${label}.participant`),
+    }),
+  };
+}
+
+function operationInput(value: unknown): WhatsAppOperationInput {
+  try {
+    const input = object(value, "input_json");
+    switch (input.type) {
+      case "send": {
+        exactKeys(input, ["type", "chatId", "content", "options"], "input_json");
+        const content = object(input.content, "send content");
+        let normalizedContent: DurableOutbound;
+        if ("text" in content) {
+          exactKeys(content, ["text"], "send text content");
+          normalizedContent = { text: text(content.text, "send text") };
+        } else {
+          exactKeys(content, ["media"], "send media content");
+          const media = object(content.media, "send media");
+          exactKeys(media, ["ref", "byteLength"], "send media");
+          const byteLength = integer(media.byteLength, "send media byteLength");
+          if (byteLength < 0) throw new Error("invalid libSQL operation send media byteLength");
+          normalizedContent = { media: { ref: text(media.ref, "send media ref"), byteLength } };
+        }
+        const options =
+          input.options === undefined
+            ? undefined
+            : (() => {
+                const value = object(input.options, "send options");
+                exactKeys(value, ["quote", "mentions"], "send options");
+                if (value.mentions !== undefined && !Array.isArray(value.mentions))
+                  throw new Error("invalid libSQL operation send mentions");
+                return {
+                  ...(value.quote !== undefined && {
+                    quote: messageRef(value.quote, "send quote"),
+                  }),
+                  ...(value.mentions !== undefined && {
+                    mentions: value.mentions.map((mention) => text(mention, "send mention")),
+                  }),
+                };
+              })();
+        return normalizeOperationInput({
+          type: "send",
+          chatId: text(input.chatId, "send chatId"),
+          content: normalizedContent,
+          ...(options && { options }),
+        });
+      }
+      case "mark_read":
+        exactKeys(input, ["type", "refs"], "input_json");
+        if (!Array.isArray(input.refs)) throw new Error("invalid libSQL operation mark_read refs");
+        return normalizeOperationInput({
+          type: "mark_read",
+          refs: input.refs.map((ref) => messageRef(ref, "mark_read ref")),
+        });
+      case "typing":
+        exactKeys(input, ["type", "chatId", "on"], "input_json");
+        return normalizeOperationInput({
+          type: "typing",
+          chatId: text(input.chatId, "typing chatId"),
+          on: boolean(input.on, "typing on"),
+        });
+      case "phone_history": {
+        exactKeys(input, ["type", "anchor", "count"], "input_json");
+        const anchor = object(input.anchor, "phone_history anchor");
+        exactKeys(anchor, ["ref", "timestamp"], "phone_history anchor");
+        return normalizeOperationInput({
+          type: "phone_history",
+          anchor: {
+            ref: messageRef(anchor.ref, "phone_history ref"),
+            timestamp: integer(anchor.timestamp, "phone_history timestamp"),
+          },
+          count: integer(input.count, "phone_history count"),
+        });
+      }
+      default:
+        throw new Error("invalid libSQL operation input type");
+    }
+  } catch (error) {
+    throw new Error("invalid libSQL operation input_json", { cause: error });
+  }
 }
 
 function serializedError(value: unknown): SerializedOperationError {
@@ -202,6 +300,7 @@ export function libsqlOperationStore(
 
   return {
     async submit(input) {
+      const normalized = normalizeOperationInput(input.operation);
       const submitted = await transact(client, "write", async (transaction) => {
         const existing = await transaction.execute({
           sql: `SELECT ${columns} FROM wa_operations
@@ -211,7 +310,7 @@ export function libsqlOperationStore(
         const row = existing.rows[0];
         if (row) {
           const replay = operation(row);
-          if (!sameOperationInput(replay.input, input.operation))
+          if (!sameOperationInput(replay.input, normalized))
             throw new OperationIdempotencyConflictError(input.accountId, input.idempotencyKey);
           return { operation: replay, created: false };
         }
@@ -224,7 +323,7 @@ export function libsqlOperationStore(
             input.id,
             input.accountId,
             input.idempotencyKey,
-            JSON.stringify(input.operation),
+            JSON.stringify(normalized),
             at,
             at,
           ],

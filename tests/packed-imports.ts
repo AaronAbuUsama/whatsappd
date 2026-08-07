@@ -39,6 +39,8 @@ const EXPECTED_ROOT_EXPORTS = [
   "Disposition",
   "DurableInboundMessage",
   "DurableMedia",
+  "DurableMediaInput",
+  "DurableOutbound",
   "DurableUpdate",
   "FaultReason",
   "FileMediaStoreOptions",

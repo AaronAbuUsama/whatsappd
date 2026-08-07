@@ -13,12 +13,27 @@ export interface SerializedOperationError {
   readonly code?: string | number;
 }
 
-export type WhatsAppOperationInput = {
-  readonly type: "send";
-  readonly chatId: string;
-  readonly content: { readonly text: string };
-  readonly options?: SendOptions;
-};
+export interface DurableMediaInput {
+  readonly ref: string;
+  readonly byteLength: number;
+}
+
+export type DurableOutbound = { readonly text: string } | { readonly media: DurableMediaInput };
+
+export type WhatsAppOperationInput =
+  | {
+      readonly type: "send";
+      readonly chatId: string;
+      readonly content: DurableOutbound;
+      readonly options?: SendOptions;
+    }
+  | { readonly type: "mark_read"; readonly refs: readonly MessageRef[] }
+  | { readonly type: "typing"; readonly chatId: string; readonly on: boolean }
+  | {
+      readonly type: "phone_history";
+      readonly anchor: { readonly ref: MessageRef; readonly timestamp: number };
+      readonly count: number;
+    };
 
 export type WhatsAppOperationState<Result = unknown> =
   | { readonly status: "queued" }
@@ -119,6 +134,44 @@ export function fanoutOperationListeners(
     if (listeners.has(listener)) notifyOperationListener(listener, operation);
 }
 
+function normalizedJson(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError("operation input numbers must be finite");
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value !== "object")
+    throw new TypeError(`operation input contains unsupported ${typeof value}`);
+  if (seen.has(value)) throw new TypeError("operation input must not contain cycles");
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) return value.map((item) => normalizedJson(item, seen));
+    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+      throw new TypeError("operation input must contain only plain JSON objects");
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, nested]) => nested !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, normalizedJson(nested, seen)]),
+    );
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function normalizeOperationInput(input: WhatsAppOperationInput): WhatsAppOperationInput {
+  const normalized = normalizedJson(input) as WhatsAppOperationInput;
+  if (normalized.type !== "send" || normalized.options === undefined) return normalized;
+  const options = normalized.options as {
+    quote?: MessageRef;
+    mentions?: readonly string[];
+  };
+  if (options.mentions?.length === 0) delete options.mentions;
+  if (options.quote === undefined && options.mentions === undefined)
+    delete (normalized as { options?: SendOptions }).options;
+  return normalized;
+}
+
 export function sameOperationInput(
   left: WhatsAppOperationInput,
   right: WhatsAppOperationInput,
@@ -180,7 +233,16 @@ export interface OperationExecutor {
   stop(): Promise<void>;
 }
 
-function validate(input: WhatsAppOperationInput): void {
+type ExecutableOperationInput = {
+  readonly type: "send";
+  readonly chatId: string;
+  readonly content: { readonly text: string };
+  readonly options?: SendOptions;
+};
+
+function validate(input: WhatsAppOperationInput): asserts input is ExecutableOperationInput {
+  if (input.type !== "send" || !("text" in input.content))
+    throw new TypeError(`operation type ${input.type} is not executable yet`);
   if (!input.chatId) throw new TypeError("send chatId must not be empty");
   if (typeof input.content.text !== "string" || input.content.text.length === 0)
     throw new TypeError("send text must not be empty");
@@ -194,10 +256,11 @@ async function executeClaimed(
 ): Promise<void> {
   if (operation.state.status !== "claimed") return;
   const { attemptId } = operation.state;
+  const operationInput = operation.input;
   const send = (...args: Parameters<NonNullable<OperationSession["send"]>>) =>
     session.send!(...args);
   try {
-    validate(operation.input);
+    validate(operationInput);
     if (!session.send) throw new TypeError("runtime session does not support sends");
     if (!(await store.start(operation.accountId, operation.id, attemptId, ttlMs))) {
       await store.recoverExpired(operation.accountId);
@@ -218,7 +281,7 @@ async function executeClaimed(
 
   let result: MessageRef;
   try {
-    result = await send(operation.input.chatId, operation.input.content, operation.input.options);
+    result = await send(operationInput.chatId, operationInput.content, operationInput.options);
   } catch {
     if (
       !(await store.markUnknown(
