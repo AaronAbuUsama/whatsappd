@@ -365,13 +365,23 @@ process.stdout.write(JSON.stringify({ ...JSON.parse(receipt), nodeVersion: proce
     });
   }
 
-  // 6. The side effects this feature must NOT have produced.
+  // 6. The side effects this feature must NOT have produced. The listing is
+  //    proved able to see a tag — by finding the already-released one — before
+  //    the absence of the candidate tag is allowed to mean anything.
   const localReleaseTags = execFileSync("git", ["tag", "--list", "v*"], {
     cwd: root,
     encoding: "utf8",
   })
     .split("\n")
     .filter(Boolean);
+  const candidateTag = `v${packageJson.version}`;
+  const tagExists = (tag: string): boolean =>
+    execFileSync("git", ["tag", "--list", tag], { cwd: root, encoding: "utf8" }).trim() === tag;
+  // The same targeted query the candidate is asked through, aimed at a tag this
+  // repository already has. If that returns nothing, the query is broken and the
+  // candidate's absence would be an artifact of the tool, not a fact.
+  const knownTag = localReleaseTags.find((tag) => tag !== candidateTag);
+  const tagListingSawKnownTag = knownTag !== undefined && tagExists(knownTag);
 
   const { file, scan } = writeReleaseCandidateReceipt(root, {
     runStart,
@@ -397,7 +407,12 @@ process.stdout.write(JSON.stringify({ ...JSON.parse(receipt), nodeVersion: proce
     distIdentity: { digests: packedDist, packedMatchesFreshBuild },
     leakScan,
     nodeMatrix,
-    localReleaseTagCount: localReleaseTags.length,
+    releaseSideEffects: {
+      localReleaseTagCount: localReleaseTags.length,
+      candidateTag,
+      candidateTagPresent: tagExists(candidateTag),
+      tagListingSawKnownTag,
+    },
   });
 
   process.stdout.write(

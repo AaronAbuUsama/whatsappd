@@ -111,7 +111,23 @@ export interface ReleaseCandidateObservationStore {
   readonly distIdentity: DistIdentityObservation;
   readonly leakScan: LeakScanObservation;
   readonly nodeMatrix: readonly NodeLegObservation[];
+  readonly releaseSideEffects: ReleaseSideEffectObservation;
+}
+
+/**
+ * The side effects this feature is forbidden to have produced.
+ *
+ * `localReleaseTagCount` alone could not disagree with the claim that matters —
+ * it counts tags that already existed. The load-bearing field is
+ * `candidateTagPresent`, measured by asking git for `v<version>` specifically,
+ * with the total recorded beside it so a listing that suddenly sees nothing is
+ * visible rather than silently reassuring.
+ */
+export interface ReleaseSideEffectObservation {
   readonly localReleaseTagCount: number;
+  readonly candidateTag: string;
+  readonly candidateTagPresent: boolean;
+  readonly tagListingSawKnownTag: boolean;
 }
 
 export interface CurrentRepoState {
@@ -198,6 +214,9 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
 
   ["/releaseSideEffects/captureSite", field("enum", ["local-git-tag-listing"])],
   ["/releaseSideEffects/localReleaseTagCount", field("count")],
+  ["/releaseSideEffects/candidateTag", field("free_form")],
+  ["/releaseSideEffects/candidateTagPresent", field("boolean")],
+  ["/releaseSideEffects/tagListingSawKnownTag", field("boolean")],
 
   ["/sanitization/captureSite", field("enum", ["receipt-writer-in-memory"])],
   ["/sanitization/schemaUnknownFields", field("count")],
@@ -230,6 +249,31 @@ export function scanReleaseCandidateReceipt(
   knownValues: readonly string[],
 ): ReceiptScanReport {
   return scanSchemaDrivenReceipt(receipt, knownValues, RECEIPT_SCHEMA);
+}
+
+function leafPointers(value: unknown, pointer = ""): string[] {
+  if (Array.isArray(value))
+    return value.flatMap((entry, i) => leafPointers(entry, `${pointer}/${i}`));
+  if (value !== null && typeof value === "object")
+    return Object.entries(value).flatMap(([key, entry]) =>
+      leafPointers(entry, `${pointer}/${key}`),
+    );
+  return [pointer];
+}
+
+/**
+ * Schema fields the receipt does not carry.
+ *
+ * The scanner counts *unknown* fields; it is silent about *missing* ones, so a
+ * receipt that simply dropped half its observations passes every sanitization
+ * check ever written. This is the other half: an unschema'd field is a refusal,
+ * and so is a schema'd field that never arrived.
+ */
+export function missingReleaseCandidateFields(receipt: unknown): readonly string[] {
+  const present = new Set(
+    leafPointers(receipt).map((pointer) => pointer.replace(/\/\d+(?=\/|$)/gu, "/*")),
+  );
+  return [...RECEIPT_SCHEMA.keys()].filter((key) => !present.has(key)).sort();
 }
 
 /**
@@ -330,6 +374,15 @@ export function validateReleaseCandidateStore(
   const pids = store.nodeMatrix.flatMap((leg) => [leg.writePid, leg.readPid]);
   if (new Set(pids).size !== pids.length)
     throw new Error("refusing receipt: observed proof processes are not distinct");
+
+  // Tagging and publishing are owner-held (#113). A tag for this version means
+  // this run did something it had no authority to do.
+  if (store.releaseSideEffects.candidateTag !== `v${store.version.packageVersion}`)
+    throw new Error("refusing receipt: the candidate tag does not name the packaged version");
+  if (store.releaseSideEffects.candidateTagPresent)
+    throw new Error("refusing receipt: a tag for this version exists; tagging is owner-held");
+  if (!store.releaseSideEffects.tagListingSawKnownTag)
+    throw new Error("refusing receipt: the tag listing saw no known tag, so it proves no absence");
 }
 
 function scanMetricsWithoutByteLength(scan: ReceiptScanReport): Record<string, unknown> {
@@ -377,7 +430,7 @@ export function buildReleaseCandidateReceipt(
         distIdentity: store.distIdentity,
         leakScan: store.leakScan,
         nodeMatrix: store.nodeMatrix,
-        localReleaseTagCount: store.localReleaseTagCount,
+        releaseSideEffects: store.releaseSideEffects,
       }),
     )
     .digest("hex");
@@ -446,10 +499,7 @@ export function buildReleaseCandidateReceipt(
         observedLegs.length > 1 &&
         new Set(observedLegs.map((leg) => leg.deterministicDigest)).size === 1,
     },
-    releaseSideEffects: {
-      captureSite: "local-git-tag-listing",
-      localReleaseTagCount: store.localReleaseTagCount,
-    },
+    releaseSideEffects: { captureSite: "local-git-tag-listing", ...store.releaseSideEffects },
   };
   const preEmbedding = scanReleaseCandidateReceipt(withoutSanitization, store.knownValues);
   const receipt = {
@@ -461,6 +511,9 @@ export function buildReleaseCandidateReceipt(
     },
   };
   assertReleaseCandidateSanitizationDescribesFinalObject(receipt, store.knownValues);
+  const missing = missingReleaseCandidateFields(receipt);
+  if (missing.length > 0)
+    throw new Error(`refusing incomplete receipt, missing: ${missing.join(", ")}`);
   const finalScan = scanReleaseCandidateReceipt(receipt, store.knownValues);
   if (
     finalScan.schemaUnknownFields !== 0 ||

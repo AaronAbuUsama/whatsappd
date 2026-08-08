@@ -11,6 +11,7 @@ import {
   assertReleaseCandidateSanitizationDescribesFinalObject,
   buildReleaseCandidateReceipt,
   deterministicDigestOf,
+  missingReleaseCandidateFields,
   scanReleaseCandidateReceipt,
   validateReleaseCandidateStore,
   type CurrentRepoState,
@@ -110,7 +111,12 @@ const store = (
     plantedControlHiddenFileHits: 1,
   },
   nodeMatrix: [leg("node22", 22), leg("node24", 24)],
-  localReleaseTagCount: 0,
+  releaseSideEffects: {
+    localReleaseTagCount: 2,
+    candidateTag: `v${EXPECTED_VERSION}`,
+    candidateTagPresent: false,
+    tagListingSawKnownTag: true,
+  },
   ...overrides,
 });
 
@@ -263,6 +269,21 @@ test("the writer refuses a Node matrix that did not observe two distinct majors"
   );
 });
 
+test("the writer refuses a run that tagged the release or proved no absence", () => {
+  refuses(
+    { releaseSideEffects: { ...store().releaseSideEffects, candidateTagPresent: true } },
+    /tagging is owner-held/u,
+  );
+  refuses(
+    { releaseSideEffects: { ...store().releaseSideEffects, tagListingSawKnownTag: false } },
+    /proves no absence/u,
+  );
+  refuses(
+    { releaseSideEffects: { ...store().releaseSideEffects, candidateTag: "v9.9.9" } },
+    /does not name the packaged version/u,
+  );
+});
+
 test("a leg must observe the live state before its absence means anything", () => {
   for (const absent of [
     { liveConnectionObserved: false },
@@ -295,6 +316,31 @@ test("a not_observed leg is never presented as success", () => {
     receipt.crossVersion.deterministicDigestsEqual,
     false,
     "one observed leg cannot agree with a leg that never ran",
+  );
+});
+
+test("a receipt missing a schema field is refused, not quietly scanned clean", () => {
+  const receipt = buildReleaseCandidateReceipt(store(), current) as Record<string, unknown>;
+  assert.deepEqual(missingReleaseCandidateFields(receipt), []);
+
+  const stripped = structuredClone(receipt);
+  delete (stripped.releaseSideEffects as Record<string, unknown>).candidateTagPresent;
+  assert.equal(
+    scanReleaseCandidateReceipt(stripped, []).schemaUnknownFields,
+    0,
+    "the pattern scanner is blind to an absent field, which is why the floor exists",
+  );
+  assert.deepEqual(missingReleaseCandidateFields(stripped), [
+    "/releaseSideEffects/candidateTagPresent",
+  ]);
+
+  assert.throws(
+    () =>
+      buildReleaseCandidateReceipt(
+        store({ leakScan: { ...store().leakScan, plantedControlHits: 0 } }),
+        current,
+      ),
+    /planted positive/u,
   );
 });
 
@@ -428,6 +474,11 @@ test("every committed release-candidate receipt is sanitary and head-bound to it
       readonly nodeMatrix: readonly { readonly observedMajor: number }[];
     };
     const scan = scanReleaseCandidateReceipt(receipt, [...KNOWN_VALUES]);
+    assert.deepEqual(
+      missingReleaseCandidateFields(receipt),
+      [],
+      `${name} is missing schema fields; the scanner alone cannot see an absent observation`,
+    );
     assert.equal(scan.schemaUnknownFields, 0, `${name} has fields outside its schema`);
     assert.equal(scan.schemaInvalidFields, 0, `${name} has schema-invalid fields`);
     assert.equal(scan.patternHits, 0, `${name} free-form fields contain a leak pattern`);
