@@ -49,13 +49,15 @@ be present and still miss the path that carries the secret.
 
 Baileys message envelopes are the exception. A property literally named
 `message` can appear at more than one depth, so the default logger applies a
-value-aware formatter before serialization. It censors a string body and an
-object carrying message-content keys such as `conversation`,
-`extendedTextMessage`, `text`, or `caption`. It does not blanket-censor every
-`message`: a real `Error` still serializes its diagnostic `message` verbatim.
-This distinction is tested as a positive control, because restoring a generic
-`*.message` path would hide the leak but also blind operators to every error
-diagnostic.
+value-aware formatter before serialization. Once it reaches a property named
+`message`, it censors that entire envelope subtree. This is structural rather
+than an allowlist of protocol subtype names: document filenames, contacts,
+locations, response labels, polls, nested view-once or ephemeral wrappers, and
+future message subtypes are all covered without waiting for the protocol list
+to be updated. A real `Error` still serializes its diagnostic `message`
+verbatim. This distinction is tested as a positive control, because restoring
+a generic `*.message` path would hide the leak but also blind operators to every
+error diagnostic.
 
 ## Consequences
 
@@ -65,7 +67,8 @@ survive, which preserves the diagnostic value that made those two call sites
 worth having; the payload that a debugger might have wanted is the payload this
 decision exists to withhold. Passing an explicit `logger` opts out entirely.
 
-The explicit list and the focused message-envelope walk are maintenance burdens
-that grow when the wire format grows. That is accepted in exchange for not
-walking every field recursively on every log call, and it is the reason the
-redaction has tests that fail loudly rather than a comment asking for care.
+The explicit path list remains a maintenance burden as new non-message wire
+fields appear. Message subtype growth is deliberately not part of that burden:
+the envelope rule is protocol-shape independent. The formatter still avoids
+pattern-scanning every value on every log call, and its byte-level tests fail
+loudly rather than leaving this boundary to a comment asking for care.

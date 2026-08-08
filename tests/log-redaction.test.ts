@@ -78,42 +78,73 @@ test("message fields are censored wherever they appear in a logged object", () =
   assert.ok(out.includes('"attempt":2'), `the surrounding context was lost: ${out}`);
 });
 
-test("nested message content is censored without hiding Error diagnostics", () => {
+test("every message envelope subtree is censored without hiding Error diagnostics", () => {
   const { logger, written } = captured();
-  const shallowContent = "nested-message-content-canary";
-  const deepContent = "deep-message-content-canary";
-  const stringContent = "plain-message-body-canary";
-  const errorContent = "error-attached-message-content-canary";
-  const arrayContent = "array-message-content-canary";
+  const content = {
+    documentFileName: "MyDivorcePapers.pdf",
+    contactDisplayName: "Dr Sarah Klein",
+    contactVcard: "BEGIN:VCARD FN:Jane",
+    locationName: "Home - 42 Elm St",
+    selectedDisplayText: "Private button answer",
+    listTitle: "Private list choice",
+    pollName: "Should I resign?",
+    wrappedContent: "view-once ephemeral secret",
+    futureContent: "future protocol secret",
+  };
   const diagnostic = "connection reset by peer";
   const error = Object.assign(new Error(diagnostic), {
-    node: { message: { conversation: errorContent } },
+    node: { message: { futureUnknownMessage: { payload: content.futureContent } } },
   });
 
   logger.warn(
     {
-      node: { message: { conversation: shallowContent } },
-      wrapper: { node: { message: { extendedTextMessage: { text: deepContent } } } },
-      event: { message: stringContent },
-      events: [{ message: { caption: arrayContent } }],
-      diagnostic: { message: { code: 503 } },
+      document: { message: { documentMessage: { fileName: content.documentFileName } } },
+      contact: {
+        message: {
+          contactMessage: {
+            displayName: content.contactDisplayName,
+            vcard: content.contactVcard,
+          },
+        },
+      },
+      location: { message: { locationMessage: { name: content.locationName } } },
+      buttons: {
+        message: {
+          buttonsResponseMessage: { selectedDisplayText: content.selectedDisplayText },
+        },
+      },
+      list: { message: { listResponseMessage: { title: content.listTitle } } },
+      poll: { message: { pollCreationMessage: { name: content.pollName } } },
+      wrapped: {
+        message: {
+          viewOnceMessage: {
+            message: {
+              ephemeralMessage: {
+                message: { futureUnknownMessage: { payload: content.wrappedContent } },
+              },
+            },
+          },
+        },
+      },
+      future: {
+        message: { futureUnknownMessage: { payload: content.futureContent } },
+      },
       err: error,
     },
     "decrypt failure",
   );
 
   const out = written();
-  assertKnownValueAbsent(out, shallowContent);
-  assertKnownValueAbsent(out, deepContent);
-  assertKnownValueAbsent(out, stringContent);
-  assertKnownValueAbsent(out, errorContent);
-  assertKnownValueAbsent(out, arrayContent);
+  // A caption-only probe can pass through the separate `*.caption` path.
+  // documentMessage.fileName and futureUnknownMessage.payload have no such
+  // path, so their absence proves the structural message-envelope formatter.
+  for (const value of Object.values(content)) assertKnownValueAbsent(out, value);
   assert.ok(out.includes(diagnostic), "the Error diagnostic was censored with message content");
-  assert.ok(out.includes('"code":503'), "a non-content message object was censored");
+  assert.ok(out.includes('"stack":"[Redacted]"'), "the Error stack was not censored");
 
-  const planted = `${out}${JSON.stringify({ message: shallowContent })}`;
+  const planted = `${out}${JSON.stringify({ message: content.documentFileName })}`;
   assert.equal(
-    knownValueHits(planted, [shallowContent]),
+    knownValueHits(planted, [content.documentFileName]),
     1,
     "the known-value scanner missed deliberately planted content",
   );

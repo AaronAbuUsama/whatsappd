@@ -110,19 +110,11 @@ export const REDACTED_PATHS = [
 ];
 
 const REDACTED = "[Redacted]";
-const MESSAGE_CONTENT_KEYS = new Set(["conversation", "extendedTextMessage", "text", "caption"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
-}
-
-function carriesMessageContent(value: unknown): boolean {
-  return (
-    typeof value === "string" ||
-    (isRecord(value) && Object.keys(value).some((key) => MESSAGE_CONTENT_KEYS.has(key)))
-  );
 }
 
 function carriesSensitiveLogValue(value: string): boolean {
@@ -148,9 +140,7 @@ function censorMessageFields(value: unknown): unknown {
   if (!isRecord(value)) return value;
   return Object.fromEntries(
     Object.entries(value).map(([key, nested]) => {
-      if (key === "message" && carriesMessageContent(nested)) {
-        return [key, REDACTED];
-      }
+      if (key === "message") return [key, REDACTED];
       return [key, censorMessageFields(nested)];
     }),
   );
