@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "issue": 109,
+  "scope": "Clean-stop draining with real durable iOS mirror rows",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "teardown-proof-run-start",
+    "gitHead": "25e2a9ebeb0cb8d0d2ef69c1228286e7ee361ad6",
+    "sourceTreeHash": "03d65cfd3e1de73a6f5e60812401befe7ba56c2c",
+    "proofHarnessSha256": "ce18ab0461318e0f9a0af6a2af428935d7fb59e038f92f8405537ebe7f342c76",
+    "treeClean": true,
+    "startedAt": "2026-08-08T09:47:50.980Z",
+    "finalizedAt": "2026-08-08T09:49:42.119Z",
+    "command": "pnpm proof:teardown < /dev/null"
+  },
+  "matrix": [
+    {
+      "id": "synthetic-teardown-regression-control",
+      "verdict": "observed",
+      "captureSite": "session-pipeline-empty-control",
+      "evidence": {
+        "kind": "synthetic_regression_control",
+        "attemptBudget": 10,
+        "qualifyingStops": 10,
+        "unqualifiedStops": 0,
+        "stopFailures": 0,
+        "inFlightAtStop": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "stopPendingWhileHeld": 10,
+        "syncAcceptances": 10,
+        "leaseHeldWhileDraining": 10,
+        "leaseFreeAfterStop": 10,
+        "challengeProduced": false,
+        "countsTowardNativeFloor": false,
+        "countsTowardReplacementFloor": false,
+        "durableRowsReplayed": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "historySyncOriginObserved": false
+      }
+    },
+    {
+      "id": "clean-stop-durable-replay",
+      "verdict": "observed",
+      "captureSite": "ios-durable-row-replay",
+      "evidence": {
+        "kind": "durable_replay_observation",
+        "attemptBudget": 10,
+        "qualifyingStops": 10,
+        "unqualifiedStops": 0,
+        "stopFailures": 0,
+        "inFlightAtStop": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        "stopPendingWhileHeld": 10,
+        "syncAcceptances": 10,
+        "leaseHeldWhileDraining": 10,
+        "leaseFreeAfterStop": 10,
+        "challengeProduced": false,
+        "countsTowardNativeFloor": false,
+        "countsTowardReplacementFloor": true,
+        "durableRowsReplayed": [8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+        "historySyncOriginObserved": false
+      }
+    },
+    {
+      "id": "lease-loss-guard",
+      "verdict": "observed",
+      "captureSite": "renewal-loss-and-libsql-revision",
+      "evidence": {
+        "lossKind": "renewal_lost",
+        "rejectionObserved": true,
+        "mirrorRevisionBefore": 0,
+        "mirrorRevisionAfter": 0,
+        "mirrorUnchanged": true
+      }
+    },
+    {
+      "id": "history-sync-limitation",
+      "verdict": "not_observed",
+      "captureSite": "socket-history-delivery-limitation",
+      "evidence": {
+        "limitation": "History-sync-origin in-flight work was not observed on the already-linked iOS profile because socket.ts:166 emits conversation_sync only for a non-empty messaging-history.set batch, and WhatsApp delivers that history once at initial link. The drained work used real already-durable iOS mirror rows replayed through the production serial event pipeline, not a fresh history sync."
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "knownValueControlCount": 3,
+    "freeFormFields": 2,
+    "digestFields": 1,
+    "nonEmpty": true,
+    "floorPassed": true
+  }
+}
