@@ -80,3 +80,57 @@ test("credentials are censored", () => {
   assert.ok(!out.includes(SECRET), `a credential reached the log: ${out}`);
   assert.ok(out.includes("auth refreshed"), "the log line's own message was lost");
 });
+
+test("baileys decrypt-failure addresses are censored at their observed paths", () => {
+  const { logger, written } = captured();
+  const peerJid = "100000000000000@lid";
+  const participantAlt = "15551230000@s.whatsapp.net";
+  const groupId = "120363042384062365@g.us";
+
+  logger.warn(
+    {
+      err: Object.assign(new Error("failed to decrypt message"), {
+        data: {
+          remoteJid: groupId,
+          participant: peerJid,
+          participantAlt,
+        },
+      }),
+    },
+    "session run errored",
+  );
+
+  const out = written();
+  assert.ok(out.length > 0, "the logger wrote nothing — this test would otherwise pass vacuously");
+  assert.ok(!out.includes(peerJid), `the participant reached the log: ${out}`);
+  assert.ok(!out.includes(groupId), `the group id reached the log: ${out}`);
+  assert.ok(!out.includes(NUMBER), `the alternate participant reached the log: ${out}`);
+  assert.ok(out.includes("failed to decrypt message"), "the error diagnostic was lost");
+});
+
+test("baileys trace handshake and protocol fields are censored", () => {
+  const { logger, written } = captured();
+  const wireValue = "A".repeat(48);
+  const peerJid = "100000000000000@lid";
+
+  logger.warn(
+    {
+      helloMsg: { clientHello: { ephemeral: wireValue } },
+      handshake: { serverHello: { ephemeral: wireValue, static: wireValue, payload: wireValue } },
+      node: { username: NUMBER },
+      xml: `<message from="${peerJid}">${wireValue}</message>`,
+      pnUser: peerJid,
+      lidUser: peerJid,
+      fromJid: peerJid,
+      myPN: peerJid,
+      myLID: peerJid,
+    },
+    "baileys trace control",
+  );
+
+  const out = written();
+  assert.ok(!out.includes(wireValue), `handshake material reached the log: ${out}`);
+  assert.ok(!out.includes(peerJid), `an address reached the log: ${out}`);
+  assert.ok(!out.includes(NUMBER), `a phone number reached the log: ${out}`);
+  assert.ok(out.includes("baileys trace control"), "the log diagnostic was lost");
+});

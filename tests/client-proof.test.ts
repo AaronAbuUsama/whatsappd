@@ -486,6 +486,7 @@ test("every real-profile harness uses the production allowlist authority and gua
       "client-proof.ts",
       "history-proof.ts",
       "live-send-proof.ts",
+      "logger-redaction-proof.ts",
       "pairing-proof.ts",
       "proof-profile.ts",
       "teardown-proof.ts",

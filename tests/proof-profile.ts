@@ -24,7 +24,6 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import pino from "pino";
 import qrcode from "qrcode-terminal";
 import {
   createSession,
@@ -47,11 +46,6 @@ const SCAN_TIMEOUT_MS = 300_000;
 const QUIET_MS = 5_000;
 const SETTLE_TIMEOUT_MS = 180_000;
 
-const logger = pino({
-  level: process.env.LOG_LEVEL ?? "warn",
-  transport: { target: "pino-pretty", options: { colorize: true } },
-});
-
 mkdirSync(directory, { recursive: true, mode: 0o700 });
 
 const media = fileMediaStore({ directory });
@@ -73,7 +67,7 @@ const runtime = createWhatsAppRuntime({
   accountId: profile,
   backend,
   openSession(credentials: CredentialStore) {
-    const session = createSession({ store: credentials, auth: qrAuth(), logger });
+    const session = createSession({ store: credentials, auth: qrAuth() });
     // A throwing subscriber becomes a session failure (ADR-0021), so this one
     // only ever prints.
     session.subscribe({
