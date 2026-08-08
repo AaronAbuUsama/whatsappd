@@ -67,3 +67,16 @@ directly showed the restore also redacts every `err.message`, blinding operators
 to error diagnostics — which is why it had been removed. Both the finding and
 the removal were right; the suggested fix was not. Verify the remedy against the
 same evidence you used to verify the defect, or you trade one fault for another.
+
+### A redaction probe can pass for the wrong reason
+
+Round 2 reported that nested media captions leaked from the default logger.
+Probing `message.imageMessage.caption` showed it redacted, which looked like a
+false finding. It was redacted by the `*.caption` wildcard in `REDACTED_PATHS`,
+not by the envelope censor the finding was about. Subtypes whose content key is
+not separately wildcarded — `documentMessage.fileName`, `contactMessage.vcard`,
+`locationMessage.name`, `pollCreationMessage.name` — leaked verbatim.
+
+Two mechanisms guarding the same value means a probe can confirm the wrong one.
+Before concluding a redaction works, establish which mechanism caught it, and
+test a case the other mechanism cannot reach.
