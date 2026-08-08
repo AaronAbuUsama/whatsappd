@@ -152,7 +152,8 @@ let linkedBackend: ReturnType<typeof libsqlBackend> | undefined;
 try {
   const syntheticChallengeObserverControl = runSyntheticPairingChallengeObserverControl();
   assert.equal(syntheticChallengeObserverControl.kind, "synthetic");
-  assert.ok(syntheticChallengeObserverControl.challengeEventCount >= 1);
+  assert.equal(syntheticChallengeObserverControl.nonChallengeEventCount, 0);
+  assert.equal(syntheticChallengeObserverControl.liveChallengeEventCount, 1);
 
   const deterministicBackend = memoryBackend();
   let deterministicOpenCalls = 0;
@@ -288,7 +289,9 @@ try {
         deterministicOpenCalls: observedZero(summary.deterministicOpenCalls),
         syntheticChallengeObserverControl: {
           kind: summary.syntheticChallengeObserverControl.kind,
-          challengeEventCount: summary.syntheticChallengeObserverControl.challengeEventCount,
+          nonChallengeEventCount: summary.syntheticChallengeObserverControl.nonChallengeEventCount,
+          liveChallengeEventCount:
+            summary.syntheticChallengeObserverControl.liveChallengeEventCount,
         },
         linkMode: observedResumed(summary.linked.linkMode),
         resumeMs: summary.linked.resumeMs,

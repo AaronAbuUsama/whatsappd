@@ -208,7 +208,8 @@ function completePairingStore(): PairingProofObservationStore {
       deterministicOpenCalls: 0,
       syntheticChallengeObserverControl: {
         kind: "synthetic",
-        challengeEventCount: 1,
+        nonChallengeEventCount: 0,
+        liveChallengeEventCount: 1,
       },
       linkMode: "resumed",
       resumeMs: 2_500,
@@ -312,7 +313,8 @@ test("the pairing receipt is head-bound, complete, and schema-sanitized", () => 
             ...store.summary!,
             syntheticChallengeObserverControl: {
               kind: "synthetic",
-              challengeEventCount: 0,
+              nonChallengeEventCount: 0,
+              liveChallengeEventCount: 0,
             },
           },
         },

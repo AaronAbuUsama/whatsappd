@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { Status } from "../src/index.ts";
 
 export interface PairingChallengeObserver {
@@ -26,11 +27,20 @@ export function createPairingChallengeObserver(
 
 export function runSyntheticPairingChallengeObserverControl(): {
   readonly kind: "synthetic";
-  readonly challengeEventCount: number;
+  readonly nonChallengeEventCount: number;
+  readonly liveChallengeEventCount: number;
 } {
-  let status: Status | undefined;
+  let status: Status | undefined = {
+    phase: "pairing",
+    pairing: { step: "awaiting_ready" },
+  };
   const observer = createPairingChallengeObserver(() => status);
   observer.observe();
+  assert.equal(observer.count(), 0);
+  status = { phase: "online" };
+  observer.observe();
+  const nonChallengeEventCount = observer.count();
+  assert.equal(nonChallengeEventCount, 0);
   status = {
     phase: "pairing",
     pairing: {
@@ -41,5 +51,9 @@ export function runSyntheticPairingChallengeObserverControl(): {
     },
   };
   observer.observe();
-  return { kind: "synthetic", challengeEventCount: observer.count() };
+  const liveChallengeEventCount = observer.count();
+  assert.equal(liveChallengeEventCount, 1);
+  observer.observe();
+  assert.equal(observer.count(), 1);
+  return { kind: "synthetic", nonChallengeEventCount, liveChallengeEventCount };
 }

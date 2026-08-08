@@ -109,6 +109,8 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/interactive", field("boolean")],
   ["/matrix/*/evidence/linkMode", field("enum", ["resumed", "paired"])],
   ["/matrix/*/evidence/challengeEventCount", field("count")],
+  ["/matrix/*/evidence/nonChallengeEventCount", field("count")],
+  ["/matrix/*/evidence/liveChallengeEventCount", field("count")],
   ["/matrix/*/evidence/qrDisplayed", field("boolean")],
   ["/matrix/*/evidence/stdoutContainedChallenge", field("boolean")],
   ["/matrix/*/evidence/subjectPid", field("count")],
@@ -361,7 +363,8 @@ export interface PairingProofObservationStore {
     readonly deterministicOpenCalls: 0;
     readonly syntheticChallengeObserverControl: {
       readonly kind: "synthetic";
-      readonly challengeEventCount: number;
+      readonly nonChallengeEventCount: number;
+      readonly liveChallengeEventCount: number;
     };
     readonly linkMode: "resumed";
     readonly resumeMs: number;
@@ -754,7 +757,8 @@ export function buildPairingProofReceipt(
     summary.netControlCount < 1 ||
     summary.deterministicOpenCalls !== 0 ||
     summary.syntheticChallengeObserverControl.kind !== "synthetic" ||
-    summary.syntheticChallengeObserverControl.challengeEventCount < 1 ||
+    summary.syntheticChallengeObserverControl.nonChallengeEventCount !== 0 ||
+    summary.syntheticChallengeObserverControl.liveChallengeEventCount !== 1 ||
     summary.linkMode !== "resumed" ||
     summary.challengeEventCount !== 0 ||
     summary.challengeProduced ||
@@ -794,7 +798,10 @@ export function buildPairingProofReceipt(
           captureSite: "client-account-observer-synthetic-control",
           evidence: {
             synthetic: true,
-            challengeEventCount: summary.syntheticChallengeObserverControl.challengeEventCount,
+            nonChallengeEventCount:
+              summary.syntheticChallengeObserverControl.nonChallengeEventCount,
+            liveChallengeEventCount:
+              summary.syntheticChallengeObserverControl.liveChallengeEventCount,
           },
         },
         {

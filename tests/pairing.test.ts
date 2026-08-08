@@ -22,10 +22,11 @@ import { runSyntheticPairingChallengeObserverControl } from "./pairing-proof-obs
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-test("the pairing proof observer counts an isolated synthetic challenge control", () => {
+test("the pairing proof observer discriminates non-challenges and counts one live edge", () => {
   const control = runSyntheticPairingChallengeObserverControl();
   expect(control.kind).toBe("synthetic");
-  expect(control.challengeEventCount >= 1).toBe(true);
+  expect(control.nonChallengeEventCount).toBe(0);
+  expect(control.liveChallengeEventCount).toBe(1);
 });
 
 async function until(done: () => boolean | Promise<boolean>, turns = 50): Promise<void> {
