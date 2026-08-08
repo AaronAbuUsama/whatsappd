@@ -617,8 +617,19 @@ test("every real-profile harness uses the production allowlist authority and gua
     if (file.endsWith(".test.ts")) continue;
     const source = await readFile(file, "utf8");
     const code = codeWithoutComments(source);
-    if (!code.includes(".proof-private") && !/\bopenProfile\s*\(/u.test(code)) continue;
-    if (!/\b(?:createSession|createWhatsAppRuntime|openProfile)\s*\(/u.test(code)) continue;
+    // A harness that opens a real profile through a *helper* is still a
+    // harness. `run-b-cold-child.ts` opened the throwaway slot via
+    // `openThrowawayProfile` and named no protected path itself, so the two
+    // clauses below both missed it and it never reached the pinned list.
+    if (
+      !code.includes(".proof-private") &&
+      !/\b(?:openProfile|openThrowawayProfile)\s*\(/u.test(code)
+    )
+      continue;
+    if (
+      !/\b(?:createSession|createWhatsAppRuntime|openProfile|openThrowawayProfile)\s*\(/u.test(code)
+    )
+      continue;
     harnesses.push({ file, source });
   }
 
@@ -632,7 +643,10 @@ test("every real-profile harness uses the production allowlist authority and gua
       "proof-profile.ts",
       "run-a-diagnosis.ts",
       "run-a-proof.ts",
+      "run-b-cold-child.ts",
+      "run-b-link.ts",
       "run-b-proof.ts",
+      "run-b-unlink.ts",
       "teardown-proof.ts",
     ],
     "the mechanical real-profile harness enumeration changed",

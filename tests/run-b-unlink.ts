@@ -120,6 +120,75 @@ const idsOf = (profile: ThrowawayProfile): Ids => ({
 /** Order-independent: drift reorders a mirror, and a reorder is not a loss. */
 const idDigest = (ids: readonly string[]): string => sha256([...ids].sort().join("\u0000"));
 
+interface ColdChildObservation {
+  readonly pid: number;
+  readonly link: string;
+  readonly closed: boolean;
+  readonly sessionFactoryOpenCalls: number;
+  readonly credentialsCleared: boolean;
+  readonly outstandingLifecycleOperations: number;
+  readonly chats: readonly string[];
+  readonly contacts: readonly string[];
+  readonly groups: readonly string[];
+}
+
+/**
+ * Run the cold leg in a child process, under the same filesystem sandbox.
+ *
+ * The child inherits neither this process's environment nor its permissions by
+ * accident: the flags are stated here, and `.proof-private/android` and
+ * `.proof-private/ios` are absent from them exactly as they are absent here.
+ */
+function runColdChild(accountId: string, directory: string): ColdChildObservation {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--permission",
+      "--allow-addons",
+      "--allow-wasi",
+      "--allow-fs-read=./src",
+      "--allow-fs-read=./tests",
+      "--allow-fs-read=./node_modules",
+      "--allow-fs-read=./package.json",
+      "--allow-fs-read=./.proof-private/throwaway-*",
+      "--allow-fs-write=./.proof-private/throwaway-*",
+      path.join(root, "tests", "run-b-cold-child.ts"),
+      accountId,
+      directory,
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "inherit"],
+      // Never spread process.env into a child: an explicit allowlist only.
+      env: { PATH: process.env.PATH ?? "", WA_LOG_LEVEL: "silent" },
+    },
+  );
+  const line = stdout.trim().split("\n").at(-1);
+  if (!line) throw new Error("the cold child produced no observation");
+  return JSON.parse(line) as ColdChildObservation;
+}
+
+/** Every durable message across every chat, paged through the backend view. */
+async function durableMessageCount(
+  profile: ThrowawayProfile,
+  chatIds: readonly string[],
+): Promise<number> {
+  return profile.backend.data.read(profile.accountId, async (view) => {
+    let total = 0;
+    for (const chatId of chatIds) {
+      let before: { readonly timestamp: number; readonly messageId: string } | undefined;
+      do {
+        const page = await view.messages(chatId, before && { before });
+        total += page.messages.length;
+        before = page.nextBefore;
+      } while (before);
+    }
+    return total;
+  });
+}
+
 async function main(): Promise<void> {
   if (process.stdin.isTTY)
     throw new Error("Run B phase 2 refuses an interactive TTY; run it with stdin closed");
@@ -155,7 +224,6 @@ async function main(): Promise<void> {
   let finalizedRows: readonly RunBMatrixRow[] | undefined;
   let mode: RunBMode = "unlink";
   let profile: ThrowawayProfile | undefined;
-  let cold: ThrowawayProfile | undefined;
 
   try {
     rows.push({
@@ -376,31 +444,31 @@ async function main(): Promise<void> {
     stage = "durable-compare";
     failedId = "unlink-preserves-durable-chats-and-media";
     const afterIds = idsOf(opened);
-    const messages = opened.client.chats
-      .list()
-      .reduce((total, { chatId }) => total + opened.client.messages.get(chatId).messages.length, 0);
+    // Read through the durable view, not `client.messages.get()`: the Client
+    // only holds what has been paged in, so that route reports 0 on a mirror
+    // nothing has read yet — a number that looks like total loss.
+    const messages = await durableMessageCount(opened, afterIds.chats);
     const media = mediaDigest(handoff.directory);
 
     stage = "cold-open";
     await opened.close();
     profile = undefined;
 
-    // A NEW process boundary over the same files. Every lifecycle operation is
-    // terminal by now, so `needs_pairing` measures the unlink rather than the
-    // executor's progress through a queue.
-    cold = await openThrowawayProfile({
-      accountId: handoff.accountId,
-      directory: handoff.directory,
-    });
-    const coldProfile = cold;
-    await sleep(1_000);
-    const coldIds = idsOf(coldProfile);
+    // A genuinely distinct process over the same files — a second Runtime in
+    // *this* process would share the module registry and every in-memory latch
+    // the unlink just touched, and so could not tell a durable `needs_pairing`
+    // from a remembered one. Every lifecycle operation is terminal by now, so
+    // `needs_pairing` measures the unlink rather than the executor's progress
+    // through a queue.
+    const coldChild = runColdChild(handoff.accountId, handoff.directory);
+    const coldIds = {
+      chats: coldChild.chats,
+      contacts: coldChild.contacts,
+      groups: coldChild.groups,
+    };
     const coldMedia = mediaDigest(handoff.directory);
-    const coldLink = coldProfile.client.account.get().link?.status ?? "none";
-    const coldOperations = await coldProfile.backend.operations.list(handoff.accountId);
-    const outstanding = coldOperations.filter(
-      (o) => (o.input.type === "pair" || o.input.type === "unlink") && !isTerminal(o),
-    ).length;
+    const coldLink = coldChild.link;
+    const outstanding = coldChild.outstandingLifecycleOperations;
 
     // Asymmetric on purpose: live drift only ever adds or mutates, so a loss
     // fails outright while an addition is reported rather than tolerated.
@@ -451,11 +519,8 @@ async function main(): Promise<void> {
       "a cold process lost durable rows",
     );
     assert.equal(media.digest, coldMedia.digest, "captured media changed across the unlink");
-    assert.equal(
-      coldProfile.sessionFactoryOpenCalls(),
-      0,
-      "an unlinked cold process opened a Session",
-    );
+    assert.equal(coldChild.sessionFactoryOpenCalls, 0, "an unlinked cold process opened a Session");
+    assert.notEqual(coldChild.pid, process.pid, "the cold leg ran in this process");
     // The `needs_pairing` clause is only meaningful once nothing is in flight;
     // asserting the absence of outstanding work is what stops it passing for
     // the wrong reason.
@@ -471,14 +536,13 @@ async function main(): Promise<void> {
         repairTerminalStatus: repairSettled[0]!.state.status,
         // Accepted, then aborted before a scan, so it must not have linked.
         repairReachedSucceeded: repairSettled[0]!.state.status === "succeeded",
-        credentialsStillClearedAfterRepair:
-          (await coldProfile.backend.credentials.read("creds")) === null,
-        coldRuntimeClosed: coldProfile.client.account.get().closed === true,
+        credentialsStillClearedAfterRepair: coldChild.credentialsCleared,
+        coldRuntimeClosed: coldChild.closed,
         coldBackendReadable: true,
         coldLinkStatus: coldLink,
-        coldSessionFactoryOpenCalls: coldProfile.sessionFactoryOpenCalls(),
-        coldPid: process.pid,
-        distinctFromPhaseOnePid: true,
+        coldSessionFactoryOpenCalls: coldChild.sessionFactoryOpenCalls,
+        coldPid: coldChild.pid,
+        distinctFromPhaseOnePid: coldChild.pid !== process.pid,
         outstandingLifecycleOperations: outstanding,
       },
     });
@@ -493,7 +557,6 @@ async function main(): Promise<void> {
       }\n`,
     );
   } finally {
-    await cold?.close().catch(() => {});
     await profile?.close().catch(() => {});
   }
 
