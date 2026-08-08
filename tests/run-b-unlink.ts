@@ -43,7 +43,6 @@ import {
   captureRunBRunStart,
   finalizeRunBFailure,
   gatingRows,
-  writeRunBReceipt,
   type RunBMatrixId,
   type RunBMatrixRow,
   type RunBMode,
@@ -495,6 +494,11 @@ async function main(): Promise<void> {
     // agrees, not because a run is allowed to reach here unfinalized.
     rows: finalizedRows ?? finalizeRunBFailure(rows, failedId, stage),
   } satisfies RunBObservationStore;
+  // The runner captures; the writer transcribes. This process runs under a
+  // filesystem sandbox that deliberately cannot reach the formatter, so the
+  // observation store — which holds the run's known-value controls and is
+  // therefore private — is finalized here and transcribed into a receipt by
+  // `pnpm proof:run-b:receipt`, which re-reads the head and refuses a mismatch.
   const privateStore = path.join(
     root,
     ".proof-private",
@@ -502,18 +506,12 @@ async function main(): Promise<void> {
   );
   writeFileSync(privateStore, `${JSON.stringify(store, null, 2)}\n`, { flag: "wx" });
 
-  const receipt = writeRunBReceipt(root, store);
   process.stdout.write(
     `${JSON.stringify({
       stage: "finalized",
       mode,
-      receipt: path.relative(root, receipt.file),
+      observationStore: path.relative(root, privateStore),
       verdicts: store.rows.map(({ id, verdict }) => ({ id, verdict })),
-      schemaUnknownFields: receipt.scan.schemaUnknownFields,
-      schemaInvalidFields: receipt.scan.schemaInvalidFields,
-      patternHits: receipt.scan.patternHits,
-      knownValueHits: receipt.scan.knownValueHits,
-      floorPassed: receipt.scan.floorPassed,
     })}\n`,
   );
   if (gatingRows(store.rows).some(({ verdict }) => verdict !== "observed")) process.exitCode = 1;
