@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MessageRecord, MessageRef, WhatsAppOperation } from "../src/index.ts";
 import {
+  allStoredMessages,
   compareDurableSnapshots,
   credentialIdentityDigest,
   durableSnapshot,
@@ -18,6 +19,7 @@ import {
   observeInboundText,
   openProfile,
   proofGroupId,
+  proveStoredPaging,
   runPeerProcess,
   type OpenProfile,
 } from "./client-proof.ts";
@@ -303,6 +305,13 @@ async function main(): Promise<void> {
     failedId = "saved-state";
     stage = "subject-close";
     const salt = randomBytes(16).toString("hex");
+    const subjectBackend = subject.backend;
+    await proveStoredPaging({
+      client: subject.client,
+      chatId,
+      digestSalt: salt,
+      oracle: () => allStoredMessages(subjectBackend, "android", chatId),
+    });
     const durableBeforeReplacement = await durableSnapshot({
       client: subject.client,
       media: subject.media,

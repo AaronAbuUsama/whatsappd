@@ -4,13 +4,14 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  allStoredMessages,
   compareDurableSnapshots,
   credentialIdentityDigest,
   durableSnapshot,
   openProfile,
   proofGroupId,
+  proveStoredPaging,
   runPeerProcess,
-  type DurableComparison,
   type OpenProfile,
 } from "./client-proof.ts";
 import {
@@ -27,14 +28,6 @@ const PRIOR_RECEIPT = path.join(root, ".proof-receipts", "issue111-p4.run2-9c134
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const sha256 = (value: string | Uint8Array): string =>
   createHash("sha256").update(value).digest("hex");
-
-function accountCollectionsDrifted(comparison: DurableComparison): boolean {
-  return (
-    !comparison.componentMatches.chats ||
-    !comparison.componentMatches.contacts ||
-    !comparison.componentMatches.groups
-  );
-}
 
 function priorOutboundEvidence(runStartSourceTreeHash: string): {
   readonly sourceReceiptSha256: string;
@@ -133,6 +126,43 @@ async function main(): Promise<void> {
     await subject.close();
     subject = undefined;
 
+    const unnormalizedProcess = await runPeerProcess({
+      mode: "replacement",
+      identityHashSalt: salt,
+      originalCredentialIdentityDigest,
+      timeoutMs: 120_000,
+    });
+    const unnormalizedReplacement = unnormalizedProcess.replacement;
+    if (!unnormalizedReplacement)
+      throw new Error("the unnormalized replacement child returned no observation");
+    if (unnormalizedProcess.pid === process.pid)
+      throw new Error("the replacement did not run in a distinct process");
+    const unnormalizedComparison = compareDurableSnapshots(after, {
+      digest: unnormalizedReplacement.durableDigest,
+      collectionCounts: unnormalizedReplacement.collectionCounts,
+    });
+
+    subject = await openProfile("android");
+    if (subject.link.linkMode !== "resumed" || subject.sessionSendInvocations() !== 0)
+      throw new Error("the normalization pass did not resume read-only");
+    await proveStoredPaging({
+      client: subject.client,
+      chatId,
+      digestSalt: salt,
+      oracle: () => allStoredMessages(subject!.backend, "android", chatId),
+    });
+    const normalized = await durableSnapshot({
+      client: subject.client,
+      media: subject.media,
+      accountId: "android",
+      chatId,
+      salt,
+    });
+    if (subject.sessionSendInvocations() !== 0)
+      throw new Error("the normalization pass invoked a send");
+    await subject.close();
+    subject = undefined;
+
     const replacementProcess = await runPeerProcess({
       mode: "replacement",
       identityHashSalt: salt,
@@ -140,42 +170,42 @@ async function main(): Promise<void> {
       timeoutMs: 120_000,
     });
     const replacement = replacementProcess.replacement;
-    if (!replacement) throw new Error("the replacement child returned no observation");
-    if (replacementProcess.pid === process.pid)
-      throw new Error("the replacement did not run in a distinct process");
-    const replacementComparison = compareDurableSnapshots(after, {
+    if (!replacement) throw new Error("the normalized replacement child returned no observation");
+    if (
+      replacementProcess.pid === process.pid ||
+      replacementProcess.pid === unnormalizedProcess.pid
+    )
+      throw new Error("the normalized replacement did not run in a distinct process");
+    const replacementComparison = compareDurableSnapshots(normalized, {
       digest: replacement.durableDigest,
       collectionCounts: replacement.collectionCounts,
     });
-    const liveDriftSupportsHypothesis =
-      liveDrift.stableProofStateEqual &&
-      liveDrift.collectionFloorsSatisfied &&
-      accountCollectionsDrifted(liveDrift);
-    const replacementSupportsHypothesis =
-      replacementComparison.stableProofStateEqual &&
-      replacementComparison.collectionFloorsSatisfied &&
-      accountCollectionsDrifted(replacementComparison);
     const diagnostic = {
       liveDriftComponentMatches: liveDrift.componentMatches,
       liveDriftStableProofStateEqual: liveDrift.stableProofStateEqual,
       liveDriftCollectionFloorsSatisfied: liveDrift.collectionFloorsSatisfied,
-      replacementComponentMatches: replacementComparison.componentMatches,
-      replacementStableProofStateEqual: replacementComparison.stableProofStateEqual,
-      replacementCollectionFloorsSatisfied: replacementComparison.collectionFloorsSatisfied,
+      unnormalizedComponentMatches: unnormalizedComparison.componentMatches,
+      unnormalizedStableProofStateEqual: unnormalizedComparison.stableProofStateEqual,
+      normalizedComponentMatches: replacementComparison.componentMatches,
+      normalizedStableProofStateEqual: replacementComparison.stableProofStateEqual,
+      normalizedCollectionFloorsSatisfied: replacementComparison.collectionFloorsSatisfied,
       credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
       sessionAttached: replacement.sessionAttached,
       liveSocketResumed: replacement.liveSocketResumed,
       durableReconstructedWhileNoLive: replacement.durableReconstructedWhileNoLive,
     };
     if (
-      (!liveDriftSupportsHypothesis && !replacementSupportsHypothesis) ||
+      unnormalizedComparison.stableProofStateEqual ||
+      !unnormalizedComparison.collectionFloorsSatisfied ||
+      !replacementComparison.stableProofStateEqual ||
+      !replacementComparison.collectionFloorsSatisfied ||
       !replacement.credentialIdentityMatchesOriginal ||
       !replacement.sessionAttached ||
       replacement.liveSocketResumed ||
       !replacement.durableReconstructedWhileNoLive
     )
       throw new Error(
-        `the non-sending observation did not support the live-drift hypothesis: ${JSON.stringify(diagnostic)}`,
+        `the non-sending observation did not isolate proof-chat window asymmetry: ${JSON.stringify(diagnostic)}`,
       );
 
     const store = {
@@ -191,6 +221,19 @@ async function main(): Promise<void> {
         stableProofStateEqual: true,
         collectionFloorsSatisfied: true,
       },
+      unnormalizedReplacement: {
+        replacementPid: unnormalizedProcess.pid,
+        distinctPid: true,
+        noSendInvocations: 0,
+        componentMatches: unnormalizedComparison.componentMatches,
+        stableProofStateEqual: false,
+        collectionFloorsSatisfied: true,
+        credentialIdentityMatchesOriginal:
+          unnormalizedReplacement.credentialIdentityMatchesOriginal,
+        sessionAttached: unnormalizedReplacement.sessionAttached,
+        liveSocketResumed: unnormalizedReplacement.liveSocketResumed,
+        durableReconstructedWhileNoLive: unnormalizedReplacement.durableReconstructedWhileNoLive,
+      },
       replacement: {
         replacementPid: replacementProcess.pid,
         distinctPid: true,
@@ -203,7 +246,7 @@ async function main(): Promise<void> {
         liveSocketResumed: replacement.liveSocketResumed,
         durableReconstructedWhileNoLive: replacement.durableReconstructedWhileNoLive,
       },
-      conclusion: "live-account-collection-drift",
+      conclusion: "proof-chat-window-asymmetry",
     } satisfies RunADiagnosisObservationStore;
     const privateStore = path.join(
       root,

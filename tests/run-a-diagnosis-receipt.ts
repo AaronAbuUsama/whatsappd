@@ -41,6 +41,18 @@ export interface RunADiagnosisObservationStore {
     readonly stableProofStateEqual: true;
     readonly collectionFloorsSatisfied: true;
   };
+  readonly unnormalizedReplacement: {
+    readonly replacementPid: number;
+    readonly distinctPid: true;
+    readonly noSendInvocations: 0;
+    readonly componentMatches: ComponentMatches;
+    readonly stableProofStateEqual: false;
+    readonly collectionFloorsSatisfied: true;
+    readonly credentialIdentityMatchesOriginal: true;
+    readonly sessionAttached: true;
+    readonly liveSocketResumed: false;
+    readonly durableReconstructedWhileNoLive: true;
+  };
   readonly replacement: {
     readonly replacementPid: number;
     readonly distinctPid: true;
@@ -53,7 +65,7 @@ export interface RunADiagnosisObservationStore {
     readonly liveSocketResumed: false;
     readonly durableReconstructedWhileNoLive: true;
   };
-  readonly conclusion: "live-account-collection-drift";
+  readonly conclusion: "proof-chat-window-asymmetry";
 }
 
 const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
@@ -90,6 +102,21 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/liveDriftControl/componentMatches/media", field("boolean")],
   ["/liveDriftControl/stableProofStateEqual", field("boolean")],
   ["/liveDriftControl/collectionFloorsSatisfied", field("boolean")],
+  ["/unnormalizedReplacement/captureSite", field("enum", ["replacement-child-result"])],
+  ["/unnormalizedReplacement/replacementPid", field("count")],
+  ["/unnormalizedReplacement/distinctPid", field("boolean")],
+  ["/unnormalizedReplacement/noSendInvocations", field("count")],
+  ["/unnormalizedReplacement/componentMatches/chats", field("boolean")],
+  ["/unnormalizedReplacement/componentMatches/contacts", field("boolean")],
+  ["/unnormalizedReplacement/componentMatches/groups", field("boolean")],
+  ["/unnormalizedReplacement/componentMatches/orderedIds", field("boolean")],
+  ["/unnormalizedReplacement/componentMatches/media", field("boolean")],
+  ["/unnormalizedReplacement/stableProofStateEqual", field("boolean")],
+  ["/unnormalizedReplacement/collectionFloorsSatisfied", field("boolean")],
+  ["/unnormalizedReplacement/credentialIdentityMatchesOriginal", field("boolean")],
+  ["/unnormalizedReplacement/sessionAttached", field("boolean")],
+  ["/unnormalizedReplacement/liveSocketResumed", field("boolean")],
+  ["/unnormalizedReplacement/durableReconstructedWhileNoLive", field("boolean")],
   ["/replacement/captureSite", field("enum", ["replacement-child-result"])],
   ["/replacement/replacementPid", field("count")],
   ["/replacement/distinctPid", field("boolean")],
@@ -105,8 +132,11 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/replacement/sessionAttached", field("boolean")],
   ["/replacement/liveSocketResumed", field("boolean")],
   ["/replacement/durableReconstructedWhileNoLive", field("boolean")],
-  ["/conclusion", field("enum", ["live-account-collection-drift"])],
-  ["/assertionChange", field("enum", ["stable-proof-chat-exact-collections-relative-floor"])],
+  ["/conclusion", field("enum", ["proof-chat-window-asymmetry"])],
+  [
+    "/assertionChange",
+    field("enum", ["normalize-proof-chat-window-stable-exact-collections-relative-floor"]),
+  ],
   ["/sanitization/captureSite", field("enum", ["receipt-writer-in-memory"])],
   ["/sanitization/schemaUnknownFields", field("count")],
   ["/sanitization/schemaInvalidFields", field("count")],
@@ -155,10 +185,24 @@ export function buildRunADiagnosisReceipt(
     store.priorOutbound.sourceTreeMatches !== true
   )
     throw new Error("refusing diagnosis receipt: outbound evidence must be carried from run2");
-  if (store.liveDriftControl.noSendInvocations !== 0 || store.replacement.noSendInvocations !== 0)
+  if (
+    store.liveDriftControl.noSendInvocations !== 0 ||
+    store.unnormalizedReplacement.noSendInvocations !== 0 ||
+    store.replacement.noSendInvocations !== 0
+  )
     throw new Error("refusing diagnosis receipt: the read-only run invoked a send");
-  if (store.liveDriftControl.subjectPid === store.replacement.replacementPid)
+  if (
+    store.liveDriftControl.subjectPid === store.unnormalizedReplacement.replacementPid ||
+    store.liveDriftControl.subjectPid === store.replacement.replacementPid ||
+    store.unnormalizedReplacement.replacementPid === store.replacement.replacementPid
+  )
     throw new Error("refusing diagnosis receipt: replacement pid is not distinct");
+  if (
+    store.unnormalizedReplacement.stableProofStateEqual !== false ||
+    (store.unnormalizedReplacement.componentMatches.orderedIds &&
+      store.unnormalizedReplacement.componentMatches.media)
+  )
+    throw new Error("refusing diagnosis receipt: unnormalized proof-chat asymmetry is absent");
   if (!store.replacement.stableProofStateEqual)
     throw new Error("refusing diagnosis receipt: stable proof-chat state changed");
 
@@ -184,12 +228,16 @@ export function buildRunADiagnosisReceipt(
       captureSite: "same-process-read-only-snapshots",
       ...store.liveDriftControl,
     },
+    unnormalizedReplacement: {
+      captureSite: "replacement-child-result",
+      ...store.unnormalizedReplacement,
+    },
     replacement: {
       captureSite: "replacement-child-result",
       ...store.replacement,
     },
     conclusion: store.conclusion,
-    assertionChange: "stable-proof-chat-exact-collections-relative-floor",
+    assertionChange: "normalize-proof-chat-window-stable-exact-collections-relative-floor",
   };
   const preEmbedding = scanRunADiagnosisReceipt(withoutSanitization, store.knownValues);
   const receipt = {

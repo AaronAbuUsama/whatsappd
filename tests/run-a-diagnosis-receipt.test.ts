@@ -40,23 +40,41 @@ function completeStore(): RunADiagnosisObservationStore {
       intervalMs: 30_000,
       noSendInvocations: 0,
       componentMatches: {
-        chats: false,
+        chats: true,
         contacts: true,
-        groups: false,
+        groups: true,
         orderedIds: true,
         media: true,
       },
       stableProofStateEqual: true,
       collectionFloorsSatisfied: true,
     },
-    replacement: {
+    unnormalizedReplacement: {
       replacementPid: 20,
       distinctPid: true,
       noSendInvocations: 0,
       componentMatches: {
-        chats: false,
+        chats: true,
         contacts: true,
-        groups: false,
+        groups: true,
+        orderedIds: false,
+        media: false,
+      },
+      stableProofStateEqual: false,
+      collectionFloorsSatisfied: true,
+      credentialIdentityMatchesOriginal: true,
+      sessionAttached: true,
+      liveSocketResumed: false,
+      durableReconstructedWhileNoLive: true,
+    },
+    replacement: {
+      replacementPid: 30,
+      distinctPid: true,
+      noSendInvocations: 0,
+      componentMatches: {
+        chats: true,
+        contacts: true,
+        groups: true,
         orderedIds: true,
         media: true,
       },
@@ -67,7 +85,7 @@ function completeStore(): RunADiagnosisObservationStore {
       liveSocketResumed: false,
       durableReconstructedWhileNoLive: true,
     },
-    conclusion: "live-account-collection-drift",
+    conclusion: "proof-chat-window-asymmetry",
   };
 }
 
