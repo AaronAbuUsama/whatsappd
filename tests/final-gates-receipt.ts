@@ -220,6 +220,9 @@ export interface ProofPrivateObservation {
 export interface ProfileObservation {
   readonly id: string;
   readonly verdict: Verdict;
+  readonly evidenceSource: "direct-read-only-copy" | "prior-receipt";
+  readonly evidenceAgeCommitCount: number;
+  readonly sourceTreeCurrent: boolean;
   readonly directoryInode: number;
   readonly databaseInode: number;
   readonly databaseByteLength: number;
@@ -462,7 +465,13 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
 
   ["/safety/profiles/*/id", field("enum", ["android", "ios"])],
   ["/safety/profiles/*/verdict", field("enum", ["observed", "not_observed", "failed"])],
-  ["/safety/profiles/*/captureSite", field("enum", ["filesystem-inode-and-read-only-copy"])],
+  ["/safety/profiles/*/evidenceSource", field("enum", ["direct-read-only-copy", "prior-receipt"])],
+  ["/safety/profiles/*/evidenceAgeCommitCount", field("count")],
+  ["/safety/profiles/*/sourceTreeCurrent", field("boolean")],
+  [
+    "/safety/profiles/*/captureSite",
+    field("enum", ["filesystem-inode-and-read-only-copy", "prior-receipt-source-current"]),
+  ],
   ["/safety/profiles/*/directoryInode", field("count")],
   ["/safety/profiles/*/databaseInode", field("count")],
   ["/safety/profiles/*/databaseByteLength", field("count")],
@@ -620,7 +629,7 @@ const CONDITIONAL_FIELDS = /^\/coverage\/regressions\//u;
  * to be hand-edited or deleted, which is the one thing a receipt must never
  * invite.
  */
-export const RECEIPT_SCHEMA_VERSION = 4;
+export const RECEIPT_SCHEMA_VERSION = 5;
 
 /**
  * Pointers introduced after version 1.
@@ -636,6 +645,8 @@ const FIELDS_ADDED_IN_VERSION_3 =
   /^\/coverage\/(preExistingSourceIdentityCount|headUncoveredSourceIdentityCount|newlyUncoveredPreExistingCount|uncoveredNewSourceCount|newSourceMissesTrackedByIssue|selfTestPlantedPreExistingRegressionCount)$/u;
 const FIELDS_ADDED_IN_VERSION_4 =
   /^\/(coverage\/(unclassifiedRegressionCount|selfTestPlantedPreExistingFunctionRegressionCount|selfTestPlantedPreExistingBranchRegressionCount)|process\/(ledger\/(baselineClassCount|missingRequiredClassCount)|pullRequests\/\*\/roundNumbersSequential))$/u;
+const FIELDS_ADDED_IN_VERSION_5 =
+  /^\/safety\/profiles\/\*\/(evidenceSource|evidenceAgeCommitCount|sourceTreeCurrent)$/u;
 
 export function missingFinalGatesFields(receipt: unknown): readonly string[] {
   const present = new Set(
@@ -658,6 +669,7 @@ export function missingFinalGatesFields(receipt: unknown): readonly string[] {
     .filter((key) => version >= 2 || !FIELDS_ADDED_IN_VERSION_2.test(key))
     .filter((key) => version >= 3 || !FIELDS_ADDED_IN_VERSION_3.test(key))
     .filter((key) => version >= 4 || !FIELDS_ADDED_IN_VERSION_4.test(key))
+    .filter((key) => version >= 5 || !FIELDS_ADDED_IN_VERSION_5.test(key))
     .sort();
 }
 
@@ -885,8 +897,21 @@ export function validateFinalGatesStore(
   if (new Set(inodes).size !== inodes.length)
     throw new Error("refusing receipt: two profiles share an inode, so they are not distinct");
   for (const profile of store.profiles) {
-    if (profile.verdict !== "observed")
-      throw new Error(`refusing receipt: profile ${profile.id} was not observed`);
+    if (profile.evidenceSource === "direct-read-only-copy") {
+      if (profile.evidenceAgeCommitCount !== 0)
+        throw new Error(`refusing receipt: profile ${profile.id} direct evidence is aged`);
+      if (!profile.sourceTreeCurrent)
+        throw new Error(`refusing receipt: profile ${profile.id} direct source tree is stale`);
+      if (profile.verdict !== "observed")
+        throw new Error(`refusing receipt: profile ${profile.id} direct evidence was not observed`);
+    } else {
+      if (profile.evidenceAgeCommitCount === 0)
+        throw new Error(`refusing receipt: profile ${profile.id} carried evidence has zero age`);
+      if (!profile.sourceTreeCurrent)
+        throw new Error(`refusing receipt: profile ${profile.id} carried source tree is stale`);
+      if (profile.verdict !== "not_observed")
+        throw new Error(`refusing receipt: profile ${profile.id} carried evidence was observed`);
+    }
     if (profile.credentialRowCount !== 1)
       throw new Error(`refusing receipt: profile ${profile.id} has no single credential row`);
     if (!profile.hasIdentity || !profile.hasAccount || !profile.hasNoiseKey)
@@ -1103,7 +1128,10 @@ export function buildFinalGatesReceipt(
       proofPrivate: { captureSite: "git-ls-files-and-check-ignore", ...store.proofPrivate },
       profiles: store.profiles.map((profile) => ({
         ...profile,
-        captureSite: "filesystem-inode-and-read-only-copy",
+        captureSite:
+          profile.evidenceSource === "direct-read-only-copy"
+            ? "filesystem-inode-and-read-only-copy"
+            : "prior-receipt-source-current",
       })),
     },
     process: {

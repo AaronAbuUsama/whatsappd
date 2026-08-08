@@ -597,6 +597,9 @@ try {
     let observation: ProfileObservation = {
       id,
       verdict: "not_observed",
+      evidenceSource: "direct-read-only-copy",
+      evidenceAgeCommitCount: 0,
+      sourceTreeCurrent: true,
       directoryInode: 0,
       databaseInode: 0,
       databaseByteLength: 0,
@@ -627,6 +630,9 @@ try {
       observation = {
         id,
         verdict: query.code === 0 ? "observed" : "failed",
+        evidenceSource: "direct-read-only-copy",
+        evidenceAgeCommitCount: 0,
+        sourceTreeCurrent: true,
         directoryInode: directoryStat.ino,
         databaseInode: databaseStat.ino,
         databaseByteLength: databaseStat.size,

@@ -182,6 +182,9 @@ const store = (
     {
       id: "android",
       verdict: "observed",
+      evidenceSource: "direct-read-only-copy",
+      evidenceAgeCommitCount: 0,
+      sourceTreeCurrent: true,
       directoryInode: 464_236_357,
       databaseInode: 464_236_382,
       databaseByteLength: 954_368,
@@ -194,6 +197,9 @@ const store = (
     {
       id: "ios",
       verdict: "observed",
+      evidenceSource: "direct-read-only-copy",
+      evidenceAgeCommitCount: 0,
+      sourceTreeCurrent: true,
       directoryInode: 464_236_385,
       databaseInode: 464_236_660,
       databaseByteLength: 6_397_952,
@@ -573,6 +579,86 @@ test("lost profile material and a shared inode are refusals", () => {
         current,
       ),
     /share an inode/u,
+  );
+});
+
+test("direct profile evidence refuses aged, stale, or unobserved claims for that invariant", () => {
+  const direct = store().profiles;
+  const withAndroid = (
+    patch: Partial<FinalGatesObservationStore["profiles"][number]>,
+  ): FinalGatesObservationStore["profiles"] =>
+    direct.map((profile) => (profile.id === "android" ? { ...profile, ...patch } : profile));
+
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ profiles: withAndroid({ evidenceAgeCommitCount: 1 }) }),
+        current,
+      ),
+    /profile android direct evidence is aged/u,
+  );
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ profiles: withAndroid({ sourceTreeCurrent: false }) }),
+        current,
+      ),
+    /profile android direct source tree is stale/u,
+  );
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ profiles: withAndroid({ verdict: "not_observed" }) }),
+        current,
+      ),
+    /profile android direct evidence was not observed/u,
+  );
+});
+
+test("carried profile evidence refuses zero-age, stale, or observed claims for that invariant", () => {
+  const carried = store().profiles.map((profile) => ({
+    ...profile,
+    verdict: "not_observed" as const,
+    evidenceSource: "prior-receipt" as const,
+    evidenceAgeCommitCount: 3,
+    sourceTreeCurrent: true,
+  }));
+  const withAndroid = (
+    patch: Partial<FinalGatesObservationStore["profiles"][number]>,
+  ): FinalGatesObservationStore["profiles"] =>
+    carried.map((profile) => (profile.id === "android" ? { ...profile, ...patch } : profile));
+
+  assert.doesNotThrow(() => validateFinalGatesStore(store({ profiles: carried }), current));
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ profiles: withAndroid({ evidenceAgeCommitCount: 0 }) }),
+        current,
+      ),
+    /profile android carried evidence has zero age/u,
+  );
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ profiles: withAndroid({ sourceTreeCurrent: false }) }),
+        current,
+      ),
+    /profile android carried source tree is stale/u,
+  );
+  assert.throws(
+    () =>
+      validateFinalGatesStore(store({ profiles: withAndroid({ verdict: "observed" }) }), current),
+    /profile android carried evidence was observed/u,
+  );
+
+  const receipt = buildFinalGatesReceipt(store({ profiles: carried }), current);
+  const profiles = (receipt.safety as Record<string, unknown>).profiles as Record<
+    string,
+    unknown
+  >[];
+  assert.ok(
+    profiles.every(({ captureSite }) => captureSite === "prior-receipt-source-current"),
+    "carried rows must name their prior-receipt capture site",
   );
 });
 
@@ -1357,6 +1443,27 @@ test("an older receipt is complete for its own version, a new one for the curren
     missingFinalGatesFields(lyingVersion4).includes(
       "/coverage/selfTestPlantedPreExistingFunctionRegressionCount",
     ),
+  );
+
+  const version4 = structuredClone(fresh);
+  version4.schemaVersion = 4;
+  const version4Safety = version4.safety as Record<string, unknown>;
+  version4Safety.profiles = (version4Safety.profiles as Record<string, unknown>[]).map(
+    ({
+      evidenceSource: _evidenceSource,
+      evidenceAgeCommitCount: _evidenceAgeCommitCount,
+      sourceTreeCurrent: _sourceTreeCurrent,
+      ...profile
+    }) => profile,
+  );
+  assert.deepEqual(missingFinalGatesFields(version4), []);
+  const lyingVersion5 = { ...structuredClone(version4), schemaVersion: RECEIPT_SCHEMA_VERSION };
+  assert.ok(missingFinalGatesFields(lyingVersion5).includes("/safety/profiles/*/evidenceSource"));
+  assert.ok(
+    missingFinalGatesFields(lyingVersion5).includes("/safety/profiles/*/evidenceAgeCommitCount"),
+  );
+  assert.ok(
+    missingFinalGatesFields(lyingVersion5).includes("/safety/profiles/*/sourceTreeCurrent"),
   );
 
   // And a version 1 receipt is still held to every field version 1 had, so the
