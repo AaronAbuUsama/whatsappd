@@ -30,6 +30,7 @@
 import path from "node:path";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import {
   assert,
   assertDurableProfileSandbox,
@@ -54,6 +55,10 @@ import type { ThrowawayProfile } from "./run-b-proof.ts";
 
 const OPERATION_TIMEOUT_MS = 120_000;
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+/** The `src` tree a commit names, read from git rather than remembered. */
+const sourceTreeHashOf = (commit: string): string =>
+  execFileSync("git", ["rev-parse", `${commit}:src`], { cwd: root, encoding: "utf8" }).trim();
 const isTerminal = (operation: WhatsAppOperation): boolean =>
   operation.state.status === "succeeded" ||
   operation.state.status === "failed" ||
@@ -175,15 +180,22 @@ async function main(): Promise<void> {
     // into, and the writer refuses one captured against a different `src`.
     stage = "handoff";
     failedId = "challenge-consumed-exactly-once";
+    // Currency is a tree comparison, not a judgement and not head equality:
+    // phase 1 and phase 2 are separate commits by construction, because phase 2
+    // and its receipt writer are themselves committed between the two. What has
+    // to be unchanged is the behaviour the run observed — `src` — so that is
+    // what is compared. A `src` that moved makes every carried-forward phase-1
+    // row stale, and the receipt writer refuses it separately.
+    const phaseOneSourceTreeHash = sourceTreeHashOf(handoff.gitHead);
     assert.equal(
-      handoff.gitHead,
-      runStart.gitHead,
-      "phase 1 was linked against a different head than this receipt claims",
+      phaseOneSourceTreeHash,
+      runStart.sourceTreeHash,
+      "src moved since phase 1, so its carried-forward observations are stale",
     );
     const phaseOne = {
       phaseOneRunIdSha256: sha256(handoff.runId),
       phaseOneGitHead: handoff.gitHead,
-      phaseOneSourceTreeHash: runStart.sourceTreeHash,
+      phaseOneSourceTreeHash,
       phaseOneLinkedAt: handoff.linkedAt,
       handoffFinalized: true,
     } as const;
