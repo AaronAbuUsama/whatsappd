@@ -38,6 +38,7 @@ import {
   readHandoff,
   root,
   scanForChallengeValue,
+  sha256,
   sleep,
 } from "./run-b-proof.ts";
 import {
@@ -54,7 +55,6 @@ import type { WhatsAppOperation } from "../src/index.ts";
 import type { ThrowawayProfile } from "./run-b-proof.ts";
 
 const OPERATION_TIMEOUT_MS = 120_000;
-const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
 
 /** The `src` tree a commit names, read from git rather than remembered. */
 const sourceTreeHashOf = (commit: string): string =>

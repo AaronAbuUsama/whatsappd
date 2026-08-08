@@ -437,6 +437,34 @@ provable only if the substrate changes.
   "need idempotent keys and orphan cleanup", and only the first half exists. The
   missing half is a Media Store reconciliation capability, not a looser
   durable-before-submit boundary.
+- **An aborted `pair()` leaves a durable operation a later process resumes into
+  `pairing`, and `pairingLink` outlives a pair that failed terminally.** Found
+  by Run B (#112), whose phase-2 cold process reported `pairing` where the
+  contract expects `needs_pairing`. Two distinct mechanisms, both reproduced
+  synthetically with no real account:
+  1. `ClientOperationOptions.signal` is honoured by `awaitOperationSubmission`
+     (`operations.ts:264-277`), which rejects the _caller's await_. It does not
+     cancel the durable row. So an aborted `pair()` leaves a `queued` row, and
+     the next process's executor claims it (`claimNext`) and runs it — link
+     state `pairing`, one Session opened, on a process nobody asked to pair. A
+     row left `claimed` by a process that died is re-queued by `recoverExpired`
+     (`libsql-operations.ts:475-496`) and reaches the same place.
+  2. `pair()` returns the `linked` promise rather than awaiting it
+     (`runtime.ts:576`), so a pairing that fails _after_ `attach()` succeeds —
+     the Session ending before it links — rejects through `attach`'s `ended()`
+     path and never enters the `catch` that clears `pairingLink`
+     (`runtime.ts:577-587`). The operation lands `outcome_unknown` while
+     `account.get().link` still reports `pairing`, indefinitely.
+
+  Both are arguably the operation machine working as designed — a durable
+  operation is _meant_ to survive a process — but the pair of them means
+  "aborted the pair" and "not pairing" are different states with no surface
+  distinguishing them, and no way for a caller to withdraw a submitted pair.
+  Out of scope for #112, which only needed its own proof not to race the
+  executor: Run B now drives the repair pair to a terminal state before
+  asserting, and asserts `outstandingLifecycleOperations === 0` alongside
+  `needs_pairing` so that clause cannot pass for the wrong reason. **The
+  product was not changed to make the proof pass.**
 
 ## #106 / the `messages` namespace — review rounds
 
