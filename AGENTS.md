@@ -65,3 +65,16 @@ The default logger is an ordinary, unredacted `pino` logger writing to stderr.
 Real-account harnesses must either supply a logger configured for their artifact
 policy or keep raw output under `.proof-private/`. Committed receipts remain
 schema-sanitized and carry counts, booleans and verdicts rather than log output.
+
+### A tolerance in the loss direction is not a tolerance
+
+Strict digest equality across a process replacement is unsound on a live
+account: inbound traffic legitimately adds a chat, reorders one, or updates a
+contact name between the two snapshots. The fix was a floor — accept the later
+count at 90% of the earlier one. That accepts losing a tenth of the mirror.
+
+Live drift only ever adds or mutates. It never deletes a durable row. So the
+comparison is asymmetric: the earlier id set must be a subset of the later one,
+losses fail outright, and additions are reported rather than tolerated in
+silence. When a comparison has to absorb noise, work out which direction the
+noise actually moves before widening it in both.
