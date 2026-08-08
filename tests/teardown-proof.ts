@@ -1,5 +1,5 @@
 /**
- * Live iOS teardown proof for the deliberate-stop conversation-sync race.
+ * Live iOS teardown proof for deliberate-stop draining.
  *
  * Prints only counts and booleans. It never sends, reads message content, or
  * records account identifiers from the mirror.
@@ -20,8 +20,9 @@ import {
   type WhatsAppSessionHandlers,
 } from "../src/index.ts";
 import { createTestWhatsAppRuntime, createTestWhatsAppSession } from "../src/testing.ts";
+import { captureTeardownProofRunStart, writeTeardownProofReceipt } from "./client-proof-receipt.ts";
 import {
-  assertNativeTeardownObservation,
+  assertDurableReplayTeardownObservation,
   assertSyntheticTeardownControl,
   type LeaseLossGuardSummary,
   type TeardownProofKind,
@@ -30,23 +31,25 @@ import {
 
 const requiredStops = 10;
 const syntheticAttempts = Number(process.env.SYNTHETIC_STOP_ATTEMPTS ?? String(requiredStops));
-const nativeAttempts = Number(process.env.NATIVE_STOP_ATTEMPTS ?? "20");
-const nativeWaitMs = Number(process.env.NATIVE_SYNC_WAIT_MS ?? "12000");
+const replayAttempts = Number(process.env.REPLAY_STOP_ATTEMPTS ?? String(requiredStops));
 const mode = process.env.TEARDOWN_PROOF_MODE ?? "all";
 if (
   !Number.isSafeInteger(syntheticAttempts) ||
   syntheticAttempts < requiredStops ||
-  !Number.isSafeInteger(nativeAttempts) ||
-  nativeAttempts < 1 ||
-  !Number.isSafeInteger(nativeWaitMs) ||
-  nativeWaitMs < 1_000 ||
-  !["all", "synthetic", "native"].includes(mode)
+  !Number.isSafeInteger(replayAttempts) ||
+  replayAttempts < requiredStops ||
+  !["all", "synthetic", "replay"].includes(mode)
 )
   throw new Error("invalid teardown proof configuration");
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const directory = path.join(here, "..", ".proof-private", "ios");
-const proofRoot = path.join(here, "..", ".proof-private");
+const root = path.join(here, "..");
+const directory = path.join(root, ".proof-private", "ios");
+const proofRoot = path.join(root, ".proof-private");
+const runStart = captureTeardownProofRunStart(root, fileURLToPath(import.meta.url));
+const knownValues = new Set<string>();
+const limitation =
+  "History-sync-origin in-flight work was not observed on the already-linked iOS profile because socket.ts:166 emits conversation_sync only for a non-empty messaging-history.set batch, and WhatsApp delivers that history once at initial link. The drained work used real already-durable iOS mirror rows replayed through the production serial event pipeline, not a fresh history sync.";
 
 interface StopAttempt {
   readonly inFlightAtStop: number;
@@ -56,6 +59,8 @@ interface StopAttempt {
   readonly leaseHeldWhileDraining: boolean;
   readonly leaseFreeAfterStop: boolean;
   readonly challengeProduced: boolean;
+  readonly durableRowsReplayed: number;
+  readonly historySyncOriginObserved: boolean;
 }
 
 async function runStopAttempt(kind: TeardownProofKind, attempt: number): Promise<StopAttempt> {
@@ -65,9 +70,22 @@ async function runStopAttempt(kind: TeardownProofKind, attempt: number): Promise
     accountId: "ios",
     media,
   });
+  const replayChats =
+    kind === "durable_replay_observation"
+      ? (await base.data.snapshot("ios")).chats.slice(0, 8).map((chat) => ({
+          id: chat.chatId,
+          ...(chat.subject !== undefined && { subject: chat.subject }),
+          isGroup: chat.isGroup,
+          lastMessageAt: chat.lastMessageAt,
+        }))
+      : [];
+  if (kind === "durable_replay_observation" && replayChats.length === 0)
+    throw new Error("the durable replay observation found no real iOS mirror rows");
+  for (const chat of replayChats.slice(0, 3)) knownValues.add(chat.id);
   let activeSync = 0;
   let syncAccepted = false;
   let challengeProduced = false;
+  let historySyncOriginObserved = false;
   let releaseSync!: () => void;
   const held = new Promise<void>((resolve) => {
     releaseSync = resolve;
@@ -110,21 +128,46 @@ async function runStopAttempt(kind: TeardownProofKind, attempt: number): Promise
       return {
         ...session,
         subscribe(handlers: WhatsAppSessionHandlers) {
+          let injectingControl = false;
+          const conversationSync: WhatsAppSessionHandlers["conversationSync"] = async (batch) => {
+            if (!injectingControl && batch.context.source !== "unknown")
+              historySyncOriginObserved = true;
+            await handlers.conversationSync?.(batch);
+          };
           return session.subscribe({
             ...handlers,
+            conversationSync,
             async connection(status) {
               if (status.phase === "pairing" && status.pairing.step === "challenge_live")
                 challengeProduced = true;
               await handlers.connection?.(status);
-              // Synthetic only: a fast regression control for deliberate-stop
-              // draining. It is never counted toward the native observation.
-              if (kind === "synthetic_regression_control" && status.phase === "online")
-                await handlers.conversationSync?.({
-                  context: { source: "recent", projection: { mode: "upsert" } },
-                  chats: [],
-                  contacts: [],
-                  messages: [],
-                });
+              if (status.phase !== "online") return;
+              injectingControl = true;
+              try {
+                if (kind === "synthetic_regression_control") {
+                  // Kept exactly as a fast, empty regression control. It is
+                  // labelled synthetic and never counts toward either floor.
+                  await conversationSync?.({
+                    context: { source: "recent", projection: { mode: "upsert" } },
+                    chats: [],
+                    contacts: [],
+                    messages: [],
+                  });
+                } else {
+                  // Real, already-durable rows from the iOS mirror are offered
+                  // again through the production serial Session handler. This
+                  // proves draining real queued storage work, not fresh
+                  // WhatsApp history delivery.
+                  await conversationSync?.({
+                    context: { source: "unknown", projection: { mode: "upsert" } },
+                    chats: replayChats,
+                    contacts: [],
+                    messages: [],
+                  });
+                }
+              } finally {
+                injectingControl = false;
+              }
             },
           });
         },
@@ -143,10 +186,7 @@ async function runStopAttempt(kind: TeardownProofKind, attempt: number): Promise
     const observed = await Promise.race([
       syncEntered.then(() => true),
       new Promise<false>((resolve) => {
-        timeout = setTimeout(
-          () => resolve(false),
-          kind === "native_observation" ? nativeWaitMs : 90_000,
-        );
+        timeout = setTimeout(() => resolve(false), 90_000);
         timeout.unref?.();
       }),
     ]);
@@ -208,6 +248,8 @@ async function runStopAttempt(kind: TeardownProofKind, attempt: number): Promise
     leaseHeldWhileDraining: heldWhileDraining,
     leaseFreeAfterStop: freeAfterStop,
     challengeProduced,
+    durableRowsReplayed: replayChats.length,
+    historySyncOriginObserved,
   };
 }
 
@@ -336,6 +378,7 @@ async function observeStops(
   for (let attempt = 1; attempt <= attemptBudget; attempt++)
     attempts.push(await runStopAttempt(kind, attempt));
   const inFlightAtStop = attempts.map((attempt) => attempt.inFlightAtStop);
+  const durableRowsReplayed = attempts.map((attempt) => attempt.durableRowsReplayed);
   const qualifyingStops = inFlightAtStop.filter((count) => count >= 1).length;
   return {
     kind,
@@ -350,25 +393,48 @@ async function observeStops(
     leaseHeldWhileDraining: attempts.filter((attempt) => attempt.leaseHeldWhileDraining).length,
     leaseFreeAfterStop: attempts.filter((attempt) => attempt.leaseFreeAfterStop).length,
     challengeProduced: attempts.some((attempt) => attempt.challengeProduced),
-    countsTowardNativeFloor: kind === "native_observation",
+    countsTowardNativeFloor: false,
+    countsTowardReplacementFloor: kind === "durable_replay_observation",
+    durableRowsReplayed,
+    historySyncOriginObserved: attempts.some((attempt) => attempt.historySyncOriginObserved),
     ...(leaseLossGuard && { leaseLossGuard }),
   };
 }
 
 const output: {
   syntheticRegressionControl?: TeardownProofSummary;
-  nativeObservation?: TeardownProofSummary & { readonly nativeFloorReached: boolean };
-} = {};
+  durableReplayObservation?: TeardownProofSummary;
+  limitation: string;
+} = {
+  limitation,
+};
 if (mode === "all" || mode === "synthetic") {
   const synthetic = await observeStops("synthetic_regression_control", syntheticAttempts);
   assertSyntheticTeardownControl(synthetic, requiredStops);
   output.syntheticRegressionControl = synthetic;
 }
-if (mode === "all" || mode === "native") {
+if (mode === "all" || mode === "replay") {
   const guard = await runLeaseLossGuard();
-  const native = await observeStops("native_observation", nativeAttempts, guard);
-  const nativeFloorReached = assertNativeTeardownObservation(native, requiredStops);
-  output.nativeObservation = { ...native, nativeFloorReached };
-  if (!nativeFloorReached) process.exitCode = 2;
+  const replay = await observeStops("durable_replay_observation", replayAttempts, guard);
+  assertDurableReplayTeardownObservation(replay, requiredStops);
+  output.durableReplayObservation = replay;
 }
 console.log(JSON.stringify(output));
+if (process.env.TEARDOWN_PROOF_RECEIPT === "1") {
+  if (!output.syntheticRegressionControl || !output.durableReplayObservation)
+    throw new Error("a teardown receipt requires TEARDOWN_PROOF_MODE=all");
+  const receipt = writeTeardownProofReceipt(root, {
+    runStart,
+    finalizedAt: new Date().toISOString(),
+    knownValues: [...knownValues],
+    limitation,
+    syntheticRegressionControl: output.syntheticRegressionControl,
+    durableReplayObservation: output.durableReplayObservation,
+  });
+  console.log(
+    JSON.stringify({
+      receipt: path.relative(root, receipt.file),
+      sanitization: receipt.scan,
+    }),
+  );
+}

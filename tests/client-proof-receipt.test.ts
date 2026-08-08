@@ -8,11 +8,13 @@ import {
   buildClientGuardProofReceipt,
   buildClientProofReceipt,
   buildPairingProofReceipt,
+  buildTeardownProofReceipt,
   scanClientProofReceipt,
   writeClientProofReceiptExclusive,
   type ClientGuardProofObservationStore,
   type ClientProofObservationStore,
   type PairingProofObservationStore,
+  type TeardownProofObservationStore,
 } from "./client-proof-receipt.ts";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -219,6 +221,57 @@ function completePairingStore(): PairingProofObservationStore {
   };
 }
 
+function completeTeardownStore(): TeardownProofObservationStore {
+  const common = {
+    attemptBudget: 10,
+    qualifyingStops: 10,
+    totalStops: 10,
+    unqualifiedStops: 0,
+    stopFailures: 0,
+    inFlightAtStop: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    stopPendingWhileHeld: 10,
+    syncAcceptances: 10,
+    leaseHeldWhileDraining: 10,
+    leaseFreeAfterStop: 10,
+    challengeProduced: false,
+    countsTowardNativeFloor: false,
+    historySyncOriginObserved: false,
+  } as const;
+  return {
+    runStart: {
+      captureSite: "teardown-proof-run-start",
+      gitHead: "38aab9cd0e17181ece2e0c6f3a8128208ef139e5",
+      sourceTreeHash: "1".repeat(40),
+      proofHarnessSha256: "2".repeat(64),
+      treeClean: true,
+      startedAt: "2026-08-07T00:00:00.000Z",
+    },
+    finalizedAt: "2026-08-07T00:01:00.000Z",
+    knownValues: ["private row one", "private row two", "private row three"],
+    limitation:
+      "History-sync-origin in-flight work was not observed on the already-linked iOS profile because socket.ts:166 emits conversation_sync only for a non-empty messaging-history.set batch, and WhatsApp delivers that history once at initial link. The drained work used real already-durable iOS mirror rows replayed through the production serial event pipeline, not a fresh history sync.",
+    syntheticRegressionControl: {
+      ...common,
+      kind: "synthetic_regression_control",
+      countsTowardReplacementFloor: false,
+      durableRowsReplayed: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    },
+    durableReplayObservation: {
+      ...common,
+      kind: "durable_replay_observation",
+      countsTowardReplacementFloor: true,
+      durableRowsReplayed: [8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+      leaseLossGuard: {
+        lossKind: "renewal_lost",
+        rejectionObserved: true,
+        mirrorRevisionBefore: 0,
+        mirrorRevisionAfter: 0,
+        mirrorUnchanged: true,
+      },
+    },
+  };
+}
+
 test("the pairing receipt is head-bound, complete, and schema-sanitized", () => {
   const store = completePairingStore();
   const current = { gitHead: store.runStart.gitHead, treeClean: true };
@@ -266,6 +319,38 @@ test("the pairing receipt is head-bound, complete, and schema-sanitized", () => 
         current,
       ),
     /incomplete/,
+  );
+});
+
+test("the teardown receipt names the history-sync limitation and real-row replacement floor", () => {
+  const store = completeTeardownStore();
+  const current = { gitHead: store.runStart.gitHead, treeClean: true };
+  const receipt = buildTeardownProofReceipt(store, current);
+  const scan = scanClientProofReceipt(receipt, store.knownValues);
+  assert.equal(scan.schemaUnknownFields, 0);
+  assert.equal(scan.schemaInvalidFields, 0);
+  assert.equal(scan.patternHits, 0);
+  assert.equal(scan.knownValueHits, 0);
+  assert.equal(scan.floorPassed, true);
+  assert.match(JSON.stringify(receipt), /not a fresh history sync/);
+
+  assert.throws(
+    () =>
+      buildTeardownProofReceipt(
+        {
+          ...store,
+          durableReplayObservation: {
+            ...store.durableReplayObservation!,
+            historySyncOriginObserved: true,
+          },
+        },
+        current,
+      ),
+    /incomplete/,
+  );
+  assert.throws(
+    () => buildTeardownProofReceipt({ ...store, limitation: "missing" }, current),
+    /limitation/,
   );
 });
 

@@ -22,7 +22,7 @@ import {
   type PeerProcessResult,
 } from "./client-proof.ts";
 import {
-  assertNativeTeardownObservation,
+  assertDurableReplayTeardownObservation,
   assertSyntheticTeardownControl,
   type TeardownProofSummary,
 } from "./teardown-proof-summary.ts";
@@ -44,11 +44,17 @@ test("the synthetic teardown control is labelled and excluded from the native fl
     leaseFreeAfterStop: 10,
     challengeProduced: false,
     countsTowardNativeFloor: false,
+    countsTowardReplacementFloor: false,
+    durableRowsReplayed: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    historySyncOriginObserved: false,
   };
   assert.doesNotThrow(() => assertSyntheticTeardownControl(complete));
   for (const incomplete of [
-    { ...complete, kind: "native_observation" as const },
+    { ...complete, kind: "durable_replay_observation" as const },
     { ...complete, countsTowardNativeFloor: true },
+    { ...complete, countsTowardReplacementFloor: true },
+    { ...complete, durableRowsReplayed: complete.durableRowsReplayed.map(() => 1) },
+    { ...complete, historySyncOriginObserved: true },
     { ...complete, qualifyingStops: 9 },
     { ...complete, totalStops: 9 },
     { ...complete, unqualifiedStops: 1 },
@@ -63,21 +69,24 @@ test("the synthetic teardown control is labelled and excluded from the native fl
     assert.throws(() => assertSyntheticTeardownControl(incomplete));
 });
 
-test("the native teardown observation reports a fixed-budget shortfall without faking success", () => {
+test("the durable replay teardown observation requires ten real-row stops and the lease guard", () => {
   const observed: TeardownProofSummary = {
-    kind: "native_observation",
-    attemptBudget: 20,
-    qualifyingStops: 2,
-    totalStops: 20,
-    unqualifiedStops: 18,
+    kind: "durable_replay_observation",
+    attemptBudget: 10,
+    qualifyingStops: 10,
+    totalStops: 10,
+    unqualifiedStops: 0,
     stopFailures: 0,
-    inFlightAtStop: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    stopPendingWhileHeld: 2,
-    syncAcceptances: 2,
-    leaseHeldWhileDraining: 2,
-    leaseFreeAfterStop: 2,
+    inFlightAtStop: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    stopPendingWhileHeld: 10,
+    syncAcceptances: 10,
+    leaseHeldWhileDraining: 10,
+    leaseFreeAfterStop: 10,
     challengeProduced: false,
-    countsTowardNativeFloor: true,
+    countsTowardNativeFloor: false,
+    countsTowardReplacementFloor: true,
+    durableRowsReplayed: [8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+    historySyncOriginObserved: false,
     leaseLossGuard: {
       lossKind: "renewal_lost",
       rejectionObserved: true,
@@ -86,22 +95,18 @@ test("the native teardown observation reports a fixed-budget shortfall without f
       mirrorUnchanged: true,
     },
   };
-  assert.equal(assertNativeTeardownObservation(observed), false);
-  assert.equal(
-    assertNativeTeardownObservation({
-      ...observed,
-      qualifyingStops: 10,
-      unqualifiedStops: 10,
-      inFlightAtStop: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-      stopPendingWhileHeld: 10,
-      syncAcceptances: 10,
-      leaseHeldWhileDraining: 10,
-      leaseFreeAfterStop: 10,
-    }),
-    true,
-  );
+  assert.doesNotThrow(() => assertDurableReplayTeardownObservation(observed));
   for (const incomplete of [
-    { ...observed, countsTowardNativeFloor: false },
+    { ...observed, countsTowardNativeFloor: true },
+    { ...observed, countsTowardReplacementFloor: false },
+    {
+      ...observed,
+      qualifyingStops: 9,
+      unqualifiedStops: 1,
+      inFlightAtStop: [0, ...observed.inFlightAtStop.slice(1)],
+    },
+    { ...observed, durableRowsReplayed: [0, ...observed.durableRowsReplayed.slice(1)] },
+    { ...observed, historySyncOriginObserved: true },
     { ...observed, leaseLossGuard: undefined },
     {
       ...observed,
@@ -112,7 +117,7 @@ test("the native teardown observation reports a fixed-budget shortfall without f
       leaseLossGuard: { ...observed.leaseLossGuard!, mirrorRevisionAfter: 1 },
     },
   ])
-    assert.throws(() => assertNativeTeardownObservation(incomplete));
+    assert.throws(() => assertDurableReplayTeardownObservation(incomplete));
 });
 
 test("resume is derived from observed challenge_live events", () => {

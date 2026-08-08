@@ -8,6 +8,11 @@ import {
   type ReceiptFieldSchema,
   type ReceiptScanReport,
 } from "./proof-receipt-scan.ts";
+import {
+  assertDurableReplayTeardownObservation,
+  assertSyntheticTeardownControl,
+  type TeardownProofSummary,
+} from "./teardown-proof-summary.ts";
 
 const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/schemaVersion", field("count")],
@@ -20,6 +25,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "client-proof-run-start",
       "client-proof-guard-run-start",
       "pairing-proof-run-start",
+      "teardown-proof-run-start",
     ]),
   ],
   ["/provenance/gitHead", field("git_sha")],
@@ -34,6 +40,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "pnpm proof:client < /dev/null",
       "pnpm proof:client:guard",
       "pnpm proof:pairing < /dev/null",
+      "pnpm proof:teardown < /dev/null",
     ]),
   ],
   [
@@ -54,6 +61,10 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "linked-challenge-observer-synthetic-control",
       "linked-resume-no-challenge",
       "linked-pair-rejected",
+      "synthetic-teardown-regression-control",
+      "clean-stop-durable-replay",
+      "lease-loss-guard",
+      "history-sync-limitation",
     ]),
   ],
   ["/matrix/*/verdict", field("enum", ["observed", "not_observed", "failed"])],
@@ -76,6 +87,10 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "client-account-observer",
       "client-account-observer-synthetic-control",
       "operation-store-and-diagnostics",
+      "session-pipeline-empty-control",
+      "ios-durable-row-replay",
+      "renewal-loss-and-libsql-revision",
+      "socket-history-delivery-limitation",
     ]),
   ],
   [
@@ -112,7 +127,6 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/nonceLength", field("length")],
   ["/matrix/*/evidence/chatsList", field("boolean")],
   ["/matrix/*/evidence/messagesGet", field("boolean")],
-  ["/matrix/*/evidence/kind", field("enum", ["document"])],
   ["/matrix/*/evidence/mediaState", field("enum", ["stored"])],
   ["/matrix/*/evidence/byteLength", field("length")],
   ["/matrix/*/evidence/byteLengthMatches", field("boolean")],
@@ -163,6 +177,29 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/pairOperationCount", field("count")],
   ["/matrix/*/evidence/secondSocketCount", field("count")],
   ["/matrix/*/evidence/sessionStillOnline", field("boolean")],
+  [
+    "/matrix/*/evidence/kind",
+    field("enum", ["document", "synthetic_regression_control", "durable_replay_observation"]),
+  ],
+  ["/matrix/*/evidence/attemptBudget", field("count")],
+  ["/matrix/*/evidence/qualifyingStops", field("count")],
+  ["/matrix/*/evidence/unqualifiedStops", field("count")],
+  ["/matrix/*/evidence/stopFailures", field("count")],
+  ["/matrix/*/evidence/inFlightAtStop/*", field("count")],
+  ["/matrix/*/evidence/stopPendingWhileHeld", field("count")],
+  ["/matrix/*/evidence/syncAcceptances", field("count")],
+  ["/matrix/*/evidence/leaseHeldWhileDraining", field("count")],
+  ["/matrix/*/evidence/leaseFreeAfterStop", field("count")],
+  ["/matrix/*/evidence/countsTowardNativeFloor", field("boolean")],
+  ["/matrix/*/evidence/countsTowardReplacementFloor", field("boolean")],
+  ["/matrix/*/evidence/durableRowsReplayed/*", field("count")],
+  ["/matrix/*/evidence/historySyncOriginObserved", field("boolean")],
+  ["/matrix/*/evidence/lossKind", field("enum", ["renewal_lost"])],
+  ["/matrix/*/evidence/rejectionObserved", field("boolean")],
+  ["/matrix/*/evidence/mirrorRevisionBefore", field("count")],
+  ["/matrix/*/evidence/mirrorRevisionAfter", field("count")],
+  ["/matrix/*/evidence/mirrorUnchanged", field("boolean")],
+  ["/matrix/*/evidence/limitation", field("free_form")],
   ["/sanitization/captureSite", field("enum", ["receipt-writer-in-memory"])],
   ["/sanitization/schemaUnknownFields", field("count")],
   ["/sanitization/schemaInvalidFields", field("count")],
@@ -200,6 +237,15 @@ export interface ClientGuardProofRunStart {
 
 export interface PairingProofRunStart {
   readonly captureSite: "pairing-proof-run-start";
+  readonly gitHead: string;
+  readonly sourceTreeHash: string;
+  readonly proofHarnessSha256: string;
+  readonly treeClean: boolean;
+  readonly startedAt: string;
+}
+
+export interface TeardownProofRunStart {
+  readonly captureSite: "teardown-proof-run-start";
   readonly gitHead: string;
   readonly sourceTreeHash: string;
   readonly proofHarnessSha256: string;
@@ -327,6 +373,15 @@ export interface PairingProofObservationStore {
   };
 }
 
+export interface TeardownProofObservationStore {
+  readonly runStart: TeardownProofRunStart;
+  readonly finalizedAt?: string;
+  readonly knownValues: readonly string[];
+  readonly limitation: string;
+  readonly syntheticRegressionControl?: TeardownProofSummary;
+  readonly durableReplayObservation?: TeardownProofSummary;
+}
+
 export interface CurrentRepoState {
   readonly gitHead: string;
   readonly treeClean: boolean;
@@ -352,6 +407,20 @@ export function capturePairingProofRunStart(
 ): PairingProofRunStart {
   return {
     captureSite: "pairing-proof-run-start",
+    gitHead: git(root, ["rev-parse", "HEAD"]),
+    sourceTreeHash: git(root, ["rev-parse", "HEAD:src"]),
+    proofHarnessSha256: createHash("sha256").update(readFileSync(proofHarness)).digest("hex"),
+    treeClean: git(root, ["status", "--porcelain"]).length === 0,
+    startedAt: new Date().toISOString(),
+  };
+}
+
+export function captureTeardownProofRunStart(
+  root: string,
+  proofHarness: string,
+): TeardownProofRunStart {
+  return {
+    captureSite: "teardown-proof-run-start",
     gitHead: git(root, ["rev-parse", "HEAD"]),
     sourceTreeHash: git(root, ["rev-parse", "HEAD:src"]),
     proofHarnessSha256: createHash("sha256").update(readFileSync(proofHarness)).digest("hex"),
@@ -755,6 +824,84 @@ export function buildPairingProofReceipt(
   );
 }
 
+const teardownEvidence = (summary: TeardownProofSummary): Record<string, unknown> => ({
+  kind: summary.kind,
+  attemptBudget: summary.attemptBudget,
+  qualifyingStops: summary.qualifyingStops,
+  unqualifiedStops: summary.unqualifiedStops,
+  stopFailures: summary.stopFailures,
+  inFlightAtStop: summary.inFlightAtStop,
+  stopPendingWhileHeld: summary.stopPendingWhileHeld,
+  syncAcceptances: summary.syncAcceptances,
+  leaseHeldWhileDraining: summary.leaseHeldWhileDraining,
+  leaseFreeAfterStop: summary.leaseFreeAfterStop,
+  challengeProduced: summary.challengeProduced,
+  countsTowardNativeFloor: summary.countsTowardNativeFloor,
+  countsTowardReplacementFloor: summary.countsTowardReplacementFloor,
+  durableRowsReplayed: summary.durableRowsReplayed,
+  historySyncOriginObserved: summary.historySyncOriginObserved,
+});
+
+export function buildTeardownProofReceipt(
+  store: TeardownProofObservationStore,
+  current: CurrentRepoState,
+): Record<string, unknown> {
+  if (!store.runStart.treeClean || !current.treeClean)
+    throw new Error("refusing receipt: the run or current worktree is dirty");
+  if (store.runStart.gitHead !== current.gitHead)
+    throw new Error("refusing receipt: current head does not match the captured run head");
+  if (!store.finalizedAt || !store.syntheticRegressionControl || !store.durableReplayObservation)
+    throw new Error("refusing receipt: the teardown run is not finalized");
+  assertSyntheticTeardownControl(store.syntheticRegressionControl);
+  assertDurableReplayTeardownObservation(store.durableReplayObservation);
+  const guard = store.durableReplayObservation.leaseLossGuard!;
+  if (
+    !store.limitation.includes("History-sync-origin in-flight work was not observed") ||
+    !store.limitation.includes("not a fresh history sync")
+  )
+    throw new Error("refusing receipt: the history-sync limitation is missing");
+  return sanitizedReceipt(
+    {
+      schemaVersion: 1,
+      issue: 109,
+      scope: "Clean-stop draining with real durable iOS mirror rows",
+      tier: "P4",
+      provenance: {
+        ...store.runStart,
+        finalizedAt: store.finalizedAt,
+        command: "pnpm proof:teardown < /dev/null",
+      },
+      matrix: [
+        {
+          id: "synthetic-teardown-regression-control",
+          verdict: "observed",
+          captureSite: "session-pipeline-empty-control",
+          evidence: teardownEvidence(store.syntheticRegressionControl),
+        },
+        {
+          id: "clean-stop-durable-replay",
+          verdict: "observed",
+          captureSite: "ios-durable-row-replay",
+          evidence: teardownEvidence(store.durableReplayObservation),
+        },
+        {
+          id: "lease-loss-guard",
+          verdict: "observed",
+          captureSite: "renewal-loss-and-libsql-revision",
+          evidence: guard,
+        },
+        {
+          id: "history-sync-limitation",
+          verdict: "not_observed",
+          captureSite: "socket-history-delivery-limitation",
+          evidence: { limitation: store.limitation },
+        },
+      ],
+    },
+    store.knownValues,
+  );
+}
+
 export function writeClientProofReceiptExclusive(
   root: string,
   file: string,
@@ -807,6 +954,37 @@ export function writePairingProofReceipt(
     !scan.floorPassed
   )
     throw new Error(`written pairing receipt failed sanitization: ${JSON.stringify(scan)}`);
+  return { file, scan };
+}
+
+export function writeTeardownProofReceipt(
+  root: string,
+  store: TeardownProofObservationStore,
+): { readonly file: string; readonly scan: ReceiptScanReport } {
+  const current = {
+    gitHead: git(root, ["rev-parse", "HEAD"]),
+    treeClean: git(root, ["status", "--porcelain"]).length === 0,
+  };
+  const receipt = buildTeardownProofReceipt(store, current);
+  const outDir = path.join(root, ".proof-receipts");
+  mkdirSync(outDir, { recursive: true });
+  const runNumber =
+    1 + readdirSync(outDir).filter((name) => name.startsWith("issue109-teardown-p4.run")).length;
+  const file = path.join(
+    outDir,
+    `issue109-teardown-p4.run${runNumber}-${store.runStart.gitHead.slice(0, 7)}.json`,
+  );
+  writeClientProofReceiptExclusive(root, file, receipt);
+  const written = JSON.parse(readFileSync(file, "utf8")) as unknown;
+  const scan = scanClientProofReceipt(written, store.knownValues);
+  if (
+    scan.schemaUnknownFields !== 0 ||
+    scan.schemaInvalidFields !== 0 ||
+    scan.patternHits !== 0 ||
+    scan.knownValueHits !== 0 ||
+    !scan.floorPassed
+  )
+    throw new Error(`written teardown receipt failed sanitization: ${JSON.stringify(scan)}`);
   return { file, scan };
 }
 

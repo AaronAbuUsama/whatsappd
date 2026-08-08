@@ -1,4 +1,4 @@
-export type TeardownProofKind = "synthetic_regression_control" | "native_observation";
+export type TeardownProofKind = "synthetic_regression_control" | "durable_replay_observation";
 
 export interface LeaseLossGuardSummary {
   readonly lossKind: "renewal_lost";
@@ -22,6 +22,9 @@ export interface TeardownProofSummary {
   readonly leaseFreeAfterStop: number;
   readonly challengeProduced: boolean;
   readonly countsTowardNativeFloor: boolean;
+  readonly countsTowardReplacementFloor: boolean;
+  readonly durableRowsReplayed: readonly number[];
+  readonly historySyncOriginObserved: boolean;
   readonly leaseLossGuard?: LeaseLossGuardSummary;
 }
 
@@ -31,6 +34,7 @@ function assertAccounting(summary: TeardownProofSummary): number {
     summary.attemptBudget !== summary.totalStops ||
     summary.qualifyingStops !== qualifying ||
     summary.totalStops !== summary.inFlightAtStop.length ||
+    summary.totalStops !== summary.durableRowsReplayed.length ||
     summary.unqualifiedStops !== summary.totalStops - qualifying ||
     summary.stopFailures !== 0 ||
     summary.stopPendingWhileHeld < qualifying ||
@@ -52,6 +56,9 @@ export function assertSyntheticTeardownControl(
   if (
     summary.kind !== "synthetic_regression_control" ||
     summary.countsTowardNativeFloor ||
+    summary.countsTowardReplacementFloor ||
+    summary.durableRowsReplayed.some((count) => count !== 0) ||
+    summary.historySyncOriginObserved ||
     qualifying < requiredStops ||
     summary.leaseLossGuard !== undefined
   )
@@ -59,26 +66,28 @@ export function assertSyntheticTeardownControl(
 }
 
 /**
- * Validate an honest fixed-budget native observation.
- *
- * Returns whether the historical ten-qualifying-stop floor was reached. A
- * shortfall remains a valid observation, but must be reported for adjudication.
+ * Validate the replacement floor using real durable rows replayed through the
+ * production serial event pipeline. This is deliberately not history-sync
+ * observation on the already-linked profile.
  */
-export function assertNativeTeardownObservation(
+export function assertDurableReplayTeardownObservation(
   summary: TeardownProofSummary,
   requiredStops = 10,
-): boolean {
+): void {
   const qualifying = assertAccounting(summary);
   const guard = summary.leaseLossGuard;
   if (
-    summary.kind !== "native_observation" ||
-    !summary.countsTowardNativeFloor ||
+    summary.kind !== "durable_replay_observation" ||
+    summary.countsTowardNativeFloor ||
+    !summary.countsTowardReplacementFloor ||
+    summary.durableRowsReplayed.some((count) => count < 1) ||
+    summary.historySyncOriginObserved ||
+    qualifying < requiredStops ||
     !guard ||
     guard.lossKind !== "renewal_lost" ||
     !guard.rejectionObserved ||
     !guard.mirrorUnchanged ||
     guard.mirrorRevisionAfter !== guard.mirrorRevisionBefore
   )
-    throw new Error("native teardown observation or lease-loss guard is incomplete");
-  return qualifying >= requiredStops;
+    throw new Error("durable replay teardown observation or lease-loss guard is incomplete");
 }
