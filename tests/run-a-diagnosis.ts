@@ -140,6 +140,7 @@ async function main(): Promise<void> {
     const unnormalizedComparison = compareDurableSnapshots(after, {
       digest: unnormalizedReplacement.durableDigest,
       collectionCounts: unnormalizedReplacement.collectionCounts,
+      collectionIds: unnormalizedReplacement.collectionIds,
     });
 
     subject = await openProfile("android");
@@ -179,16 +180,18 @@ async function main(): Promise<void> {
     const replacementComparison = compareDurableSnapshots(normalized, {
       digest: replacement.durableDigest,
       collectionCounts: replacement.collectionCounts,
+      collectionIds: replacement.collectionIds,
     });
     const diagnostic = {
       liveDriftComponentMatches: liveDrift.componentMatches,
       liveDriftStableProofStateEqual: liveDrift.stableProofStateEqual,
-      liveDriftCollectionFloorsSatisfied: liveDrift.collectionFloorsSatisfied,
+      liveDriftCollectionsPreserved: liveDrift.collectionsPreserved,
       unnormalizedComponentMatches: unnormalizedComparison.componentMatches,
       unnormalizedStableProofStateEqual: unnormalizedComparison.stableProofStateEqual,
+      unnormalizedCollectionsPreserved: unnormalizedComparison.collectionsPreserved,
       normalizedComponentMatches: replacementComparison.componentMatches,
       normalizedStableProofStateEqual: replacementComparison.stableProofStateEqual,
-      normalizedCollectionFloorsSatisfied: replacementComparison.collectionFloorsSatisfied,
+      normalizedCollectionsPreserved: replacementComparison.collectionsPreserved,
       credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
       sessionAttached: replacement.sessionAttached,
       liveSocketResumed: replacement.liveSocketResumed,
@@ -196,9 +199,9 @@ async function main(): Promise<void> {
     };
     if (
       unnormalizedComparison.stableProofStateEqual ||
-      !unnormalizedComparison.collectionFloorsSatisfied ||
+      !unnormalizedComparison.collectionsPreserved ||
       !replacementComparison.stableProofStateEqual ||
-      !replacementComparison.collectionFloorsSatisfied ||
+      !replacementComparison.collectionsPreserved ||
       !replacement.credentialIdentityMatchesOriginal ||
       !replacement.sessionAttached ||
       replacement.liveSocketResumed ||
@@ -218,16 +221,18 @@ async function main(): Promise<void> {
         intervalMs: CONTROL_INTERVAL_MS,
         noSendInvocations: 0,
         componentMatches: liveDrift.componentMatches,
-        stableProofStateEqual: true,
-        collectionFloorsSatisfied: true,
+        stableProofStateEqual: liveDrift.stableProofStateEqual,
+        collectionsPreserved: liveDrift.collectionsPreserved,
+        collectionChanges: liveDrift.collectionChanges,
       },
       unnormalizedReplacement: {
         replacementPid: unnormalizedProcess.pid,
         distinctPid: true,
-        noSendInvocations: 0,
+        childSessionSendInvocations: unnormalizedReplacement.sessionSendInvocations,
         componentMatches: unnormalizedComparison.componentMatches,
-        stableProofStateEqual: false,
-        collectionFloorsSatisfied: true,
+        stableProofStateEqual: unnormalizedComparison.stableProofStateEqual,
+        collectionsPreserved: unnormalizedComparison.collectionsPreserved,
+        collectionChanges: unnormalizedComparison.collectionChanges,
         credentialIdentityMatchesOriginal:
           unnormalizedReplacement.credentialIdentityMatchesOriginal,
         sessionAttached: unnormalizedReplacement.sessionAttached,
@@ -237,10 +242,11 @@ async function main(): Promise<void> {
       replacement: {
         replacementPid: replacementProcess.pid,
         distinctPid: true,
-        noSendInvocations: 0,
+        childSessionSendInvocations: replacement.sessionSendInvocations,
         componentMatches: replacementComparison.componentMatches,
-        stableProofStateEqual: true,
-        collectionFloorsSatisfied: true,
+        stableProofStateEqual: replacementComparison.stableProofStateEqual,
+        collectionsPreserved: replacementComparison.collectionsPreserved,
+        collectionChanges: replacementComparison.collectionChanges,
         credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
         sessionAttached: replacement.sessionAttached,
         liveSocketResumed: replacement.liveSocketResumed,
@@ -261,7 +267,7 @@ async function main(): Promise<void> {
         noSendInvocations: 0,
         ...diagnostic,
         stableProofStateEqual: replacementComparison.stableProofStateEqual,
-        collectionFloorsSatisfied: replacementComparison.collectionFloorsSatisfied,
+        collectionsPreserved: replacementComparison.collectionsPreserved,
         credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
         sessionAttached: replacement.sessionAttached,
         liveSocketResumed: replacement.liveSocketResumed,

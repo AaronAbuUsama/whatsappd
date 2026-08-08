@@ -172,6 +172,11 @@ test("durable replacement accepts live collection drift only when proof-chat sta
       media: "5".repeat(64),
     },
     collectionCounts: { chats: 63, contacts: 80, groups: 21 },
+    collectionIds: {
+      chats: ["chat-a", "chat-b"],
+      contacts: ["contact-a", "contact-b"],
+      groups: ["group-a"],
+    },
   };
   const collectionDrift = {
     digest: {
@@ -180,6 +185,11 @@ test("durable replacement accepts live collection drift only when proof-chat sta
       contacts: "7".repeat(64),
     },
     collectionCounts: { chats: 64, contacts: 81, groups: 21 },
+    collectionIds: {
+      chats: ["chat-a", "chat-b", "chat-c"],
+      contacts: ["contact-a", "contact-b", "contact-c"],
+      groups: ["group-a"],
+    },
   };
 
   assert.deepEqual(compareDurableSnapshots(before, collectionDrift), {
@@ -192,7 +202,12 @@ test("durable replacement accepts live collection drift only when proof-chat sta
     },
     driftedComponents: ["chats", "contacts"],
     stableProofStateEqual: true,
-    collectionFloorsSatisfied: true,
+    collectionChanges: {
+      chats: { missingCount: 0, additionCount: 1 },
+      contacts: { missingCount: 0, additionCount: 1 },
+      groups: { missingCount: 0, additionCount: 0 },
+    },
+    collectionsPreserved: true,
     durableReconstructed: true,
   });
 
@@ -202,11 +217,24 @@ test("durable replacement accepts live collection drift only when proof-chat sta
   };
   assert.equal(compareDurableSnapshots(before, proofChatDrift).durableReconstructed, false);
 
-  const emptyCollections = {
+  const missingDurableIdentity = {
     ...collectionDrift,
-    collectionCounts: { chats: 0, contacts: 0, groups: 0 },
+    collectionCounts: { chats: 2, contacts: 81, groups: 21 },
+    collectionIds: {
+      ...collectionDrift.collectionIds,
+      chats: ["chat-a", "chat-c"],
+    },
   };
-  assert.equal(compareDurableSnapshots(before, emptyCollections).durableReconstructed, false);
+  const missingComparison = compareDurableSnapshots(before, missingDurableIdentity);
+  assert.equal(
+    missingComparison.durableReconstructed,
+    false,
+    "losing one pre-close id must make the subset assertion RED",
+  );
+  assert.deepEqual(missingComparison.collectionChanges.chats, {
+    missingCount: 1,
+    additionCount: 1,
+  });
 });
 
 test("peer child is killed when the wall-clock timeout expires", async () => {

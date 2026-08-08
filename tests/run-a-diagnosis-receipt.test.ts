@@ -47,12 +47,17 @@ function completeStore(): RunADiagnosisObservationStore {
         media: true,
       },
       stableProofStateEqual: true,
-      collectionFloorsSatisfied: true,
+      collectionsPreserved: true,
+      collectionChanges: {
+        chats: { missingCount: 0, additionCount: 0 },
+        contacts: { missingCount: 0, additionCount: 0 },
+        groups: { missingCount: 0, additionCount: 0 },
+      },
     },
     unnormalizedReplacement: {
       replacementPid: 20,
       distinctPid: true,
-      noSendInvocations: 0,
+      childSessionSendInvocations: 0,
       componentMatches: {
         chats: true,
         contacts: true,
@@ -61,7 +66,12 @@ function completeStore(): RunADiagnosisObservationStore {
         media: false,
       },
       stableProofStateEqual: false,
-      collectionFloorsSatisfied: true,
+      collectionsPreserved: true,
+      collectionChanges: {
+        chats: { missingCount: 0, additionCount: 0 },
+        contacts: { missingCount: 0, additionCount: 0 },
+        groups: { missingCount: 0, additionCount: 0 },
+      },
       credentialIdentityMatchesOriginal: true,
       sessionAttached: true,
       liveSocketResumed: false,
@@ -70,7 +80,7 @@ function completeStore(): RunADiagnosisObservationStore {
     replacement: {
       replacementPid: 30,
       distinctPid: true,
-      noSendInvocations: 0,
+      childSessionSendInvocations: 0,
       componentMatches: {
         chats: true,
         contacts: true,
@@ -79,7 +89,12 @@ function completeStore(): RunADiagnosisObservationStore {
         media: true,
       },
       stableProofStateEqual: true,
-      collectionFloorsSatisfied: true,
+      collectionsPreserved: true,
+      collectionChanges: {
+        chats: { missingCount: 0, additionCount: 0 },
+        contacts: { missingCount: 0, additionCount: 0 },
+        groups: { missingCount: 0, additionCount: 0 },
+      },
       credentialIdentityMatchesOriginal: true,
       sessionAttached: true,
       liveSocketResumed: false,
@@ -130,20 +145,53 @@ test("Run A diagnosis receipt refuses a fresh-send claim or unstable proof-chat 
           ...store,
           replacement: {
             ...store.replacement,
-            // @ts-expect-error Deliberately incomplete replacement fixture.
             stableProofStateEqual: false,
           },
         },
         current,
       ),
-    /stable proof-chat/,
+    /stable proof state is not measured/,
+  );
+});
+
+test("Run A diagnosis receipt refuses comparison booleans that disagree with measurements", () => {
+  const store = completeStore();
+  const current = { gitHead: store.runStart.gitHead, treeClean: true };
+  assert.throws(
+    () =>
+      buildRunADiagnosisReceipt(
+        {
+          ...store,
+          replacement: {
+            ...store.replacement,
+            collectionChanges: {
+              ...store.replacement.collectionChanges,
+              chats: { missingCount: 1, additionCount: 0 },
+            },
+          },
+        },
+        current,
+      ),
+    /collection preservation is not measured/,
   );
 });
 
 test("Run A diagnosis runner has no sending lane and the scan sees a planted lane", () => {
   const source = readFileSync(path.join(here, "run-a-diagnosis.ts"), "utf8");
+  const childSource = readFileSync(path.join(here, "client-proof.ts"), "utf8");
+  const replacementChild = childSource.match(
+    /async function coldReplacement[\s\S]+?(?=\nasync function pagingReplacementRun)/u,
+  )?.[0];
   const sendingLane =
     /guarded(?:Client)?Sender|mode:\s*["'](?:send-text|send-document|seed-pages)["']|\.messages\.send|\.session\.send/u;
   assert.equal(sendingLane.test(source), false);
+  assert.ok(replacementChild, "the reachable replacement child was not found");
+  assert.equal(sendingLane.test(replacementChild), false);
+  assert.match(
+    replacementChild,
+    /sessionSendInvocations:\s*driver\.commands\.sent\.length/u,
+    "the replacement child must return its measured Session send count",
+  );
   assert.equal(sendingLane.test(`${source}\nrunPeerProcess({ mode: "send-text" });`), true);
+  assert.equal(sendingLane.test(`${replacementChild}\ndriver.session.send("x", "y");`), true);
 });

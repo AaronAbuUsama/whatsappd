@@ -18,6 +18,12 @@ interface ComponentMatches {
   readonly media: boolean;
 }
 
+interface CollectionChanges {
+  readonly chats: { readonly missingCount: number; readonly additionCount: number };
+  readonly contacts: { readonly missingCount: number; readonly additionCount: number };
+  readonly groups: { readonly missingCount: number; readonly additionCount: number };
+}
+
 export interface RunADiagnosisObservationStore {
   readonly runStart: RunAProofRunStart;
   readonly finalizedAt?: string;
@@ -38,16 +44,18 @@ export interface RunADiagnosisObservationStore {
     readonly intervalMs: number;
     readonly noSendInvocations: 0;
     readonly componentMatches: ComponentMatches;
-    readonly stableProofStateEqual: true;
-    readonly collectionFloorsSatisfied: true;
+    readonly stableProofStateEqual: boolean;
+    readonly collectionsPreserved: boolean;
+    readonly collectionChanges: CollectionChanges;
   };
   readonly unnormalizedReplacement: {
     readonly replacementPid: number;
     readonly distinctPid: true;
-    readonly noSendInvocations: 0;
+    readonly childSessionSendInvocations: number;
     readonly componentMatches: ComponentMatches;
-    readonly stableProofStateEqual: false;
-    readonly collectionFloorsSatisfied: true;
+    readonly stableProofStateEqual: boolean;
+    readonly collectionsPreserved: boolean;
+    readonly collectionChanges: CollectionChanges;
     readonly credentialIdentityMatchesOriginal: true;
     readonly sessionAttached: true;
     readonly liveSocketResumed: false;
@@ -56,10 +64,11 @@ export interface RunADiagnosisObservationStore {
   readonly replacement: {
     readonly replacementPid: number;
     readonly distinctPid: true;
-    readonly noSendInvocations: 0;
+    readonly childSessionSendInvocations: number;
     readonly componentMatches: ComponentMatches;
-    readonly stableProofStateEqual: true;
-    readonly collectionFloorsSatisfied: true;
+    readonly stableProofStateEqual: boolean;
+    readonly collectionsPreserved: boolean;
+    readonly collectionChanges: CollectionChanges;
     readonly credentialIdentityMatchesOriginal: true;
     readonly sessionAttached: true;
     readonly liveSocketResumed: false;
@@ -101,18 +110,30 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/liveDriftControl/componentMatches/orderedIds", field("boolean")],
   ["/liveDriftControl/componentMatches/media", field("boolean")],
   ["/liveDriftControl/stableProofStateEqual", field("boolean")],
-  ["/liveDriftControl/collectionFloorsSatisfied", field("boolean")],
+  ["/liveDriftControl/collectionsPreserved", field("boolean")],
+  ["/liveDriftControl/collectionChanges/chats/missingCount", field("count")],
+  ["/liveDriftControl/collectionChanges/chats/additionCount", field("count")],
+  ["/liveDriftControl/collectionChanges/contacts/missingCount", field("count")],
+  ["/liveDriftControl/collectionChanges/contacts/additionCount", field("count")],
+  ["/liveDriftControl/collectionChanges/groups/missingCount", field("count")],
+  ["/liveDriftControl/collectionChanges/groups/additionCount", field("count")],
   ["/unnormalizedReplacement/captureSite", field("enum", ["replacement-child-result"])],
   ["/unnormalizedReplacement/replacementPid", field("count")],
   ["/unnormalizedReplacement/distinctPid", field("boolean")],
-  ["/unnormalizedReplacement/noSendInvocations", field("count")],
+  ["/unnormalizedReplacement/childSessionSendInvocations", field("count")],
   ["/unnormalizedReplacement/componentMatches/chats", field("boolean")],
   ["/unnormalizedReplacement/componentMatches/contacts", field("boolean")],
   ["/unnormalizedReplacement/componentMatches/groups", field("boolean")],
   ["/unnormalizedReplacement/componentMatches/orderedIds", field("boolean")],
   ["/unnormalizedReplacement/componentMatches/media", field("boolean")],
   ["/unnormalizedReplacement/stableProofStateEqual", field("boolean")],
-  ["/unnormalizedReplacement/collectionFloorsSatisfied", field("boolean")],
+  ["/unnormalizedReplacement/collectionsPreserved", field("boolean")],
+  ["/unnormalizedReplacement/collectionChanges/chats/missingCount", field("count")],
+  ["/unnormalizedReplacement/collectionChanges/chats/additionCount", field("count")],
+  ["/unnormalizedReplacement/collectionChanges/contacts/missingCount", field("count")],
+  ["/unnormalizedReplacement/collectionChanges/contacts/additionCount", field("count")],
+  ["/unnormalizedReplacement/collectionChanges/groups/missingCount", field("count")],
+  ["/unnormalizedReplacement/collectionChanges/groups/additionCount", field("count")],
   ["/unnormalizedReplacement/credentialIdentityMatchesOriginal", field("boolean")],
   ["/unnormalizedReplacement/sessionAttached", field("boolean")],
   ["/unnormalizedReplacement/liveSocketResumed", field("boolean")],
@@ -120,14 +141,20 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/replacement/captureSite", field("enum", ["replacement-child-result"])],
   ["/replacement/replacementPid", field("count")],
   ["/replacement/distinctPid", field("boolean")],
-  ["/replacement/noSendInvocations", field("count")],
+  ["/replacement/childSessionSendInvocations", field("count")],
   ["/replacement/componentMatches/chats", field("boolean")],
   ["/replacement/componentMatches/contacts", field("boolean")],
   ["/replacement/componentMatches/groups", field("boolean")],
   ["/replacement/componentMatches/orderedIds", field("boolean")],
   ["/replacement/componentMatches/media", field("boolean")],
   ["/replacement/stableProofStateEqual", field("boolean")],
-  ["/replacement/collectionFloorsSatisfied", field("boolean")],
+  ["/replacement/collectionsPreserved", field("boolean")],
+  ["/replacement/collectionChanges/chats/missingCount", field("count")],
+  ["/replacement/collectionChanges/chats/additionCount", field("count")],
+  ["/replacement/collectionChanges/contacts/missingCount", field("count")],
+  ["/replacement/collectionChanges/contacts/additionCount", field("count")],
+  ["/replacement/collectionChanges/groups/missingCount", field("count")],
+  ["/replacement/collectionChanges/groups/additionCount", field("count")],
   ["/replacement/credentialIdentityMatchesOriginal", field("boolean")],
   ["/replacement/sessionAttached", field("boolean")],
   ["/replacement/liveSocketResumed", field("boolean")],
@@ -135,7 +162,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/conclusion", field("enum", ["proof-chat-window-asymmetry"])],
   [
     "/assertionChange",
-    field("enum", ["normalize-proof-chat-window-stable-exact-collections-relative-floor"]),
+    field("enum", ["normalize-proof-chat-window-and-preserve-every-durable-identity"]),
   ],
   ["/sanitization/captureSite", field("enum", ["receipt-writer-in-memory"])],
   ["/sanitization/schemaUnknownFields", field("count")],
@@ -169,6 +196,26 @@ export function scanRunADiagnosisReceipt(
   return scanSchemaDrivenReceipt(receipt, knownValues, RECEIPT_SCHEMA);
 }
 
+function validateMeasuredComparison(
+  label: string,
+  observation: {
+    readonly componentMatches: ComponentMatches;
+    readonly stableProofStateEqual: boolean;
+    readonly collectionsPreserved: boolean;
+    readonly collectionChanges: CollectionChanges;
+  },
+): void {
+  const measuredStable =
+    observation.componentMatches.orderedIds && observation.componentMatches.media;
+  const measuredPreserved = Object.values(observation.collectionChanges).every(
+    ({ missingCount }) => missingCount === 0,
+  );
+  if (observation.stableProofStateEqual !== measuredStable)
+    throw new Error(`refusing diagnosis receipt: ${label} stable proof state is not measured`);
+  if (observation.collectionsPreserved !== measuredPreserved)
+    throw new Error(`refusing diagnosis receipt: ${label} collection preservation is not measured`);
+}
+
 export function buildRunADiagnosisReceipt(
   store: RunADiagnosisObservationStore,
   current: CurrentRepoState,
@@ -187,10 +234,13 @@ export function buildRunADiagnosisReceipt(
     throw new Error("refusing diagnosis receipt: outbound evidence must be carried from run2");
   if (
     store.liveDriftControl.noSendInvocations !== 0 ||
-    store.unnormalizedReplacement.noSendInvocations !== 0 ||
-    store.replacement.noSendInvocations !== 0
+    store.unnormalizedReplacement.childSessionSendInvocations !== 0 ||
+    store.replacement.childSessionSendInvocations !== 0
   )
     throw new Error("refusing diagnosis receipt: the read-only run invoked a send");
+  validateMeasuredComparison("live drift", store.liveDriftControl);
+  validateMeasuredComparison("unnormalized replacement", store.unnormalizedReplacement);
+  validateMeasuredComparison("normalized replacement", store.replacement);
   if (
     store.liveDriftControl.subjectPid === store.unnormalizedReplacement.replacementPid ||
     store.liveDriftControl.subjectPid === store.replacement.replacementPid ||
@@ -237,7 +287,7 @@ export function buildRunADiagnosisReceipt(
       ...store.replacement,
     },
     conclusion: store.conclusion,
-    assertionChange: "normalize-proof-chat-window-stable-exact-collections-relative-floor",
+    assertionChange: "normalize-proof-chat-window-and-preserve-every-durable-identity",
   };
   const preEmbedding = scanRunADiagnosisReceipt(withoutSanitization, store.knownValues);
   const receipt = {

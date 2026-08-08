@@ -25,6 +25,7 @@ import {
 } from "./client-proof.ts";
 import {
   captureRunAProofRunStart,
+  finalizeRunAFailure,
   outboundSendLanded,
   writeRunAProofReceipt,
   type RunAMatrixId,
@@ -82,42 +83,6 @@ function matchingText(
     );
 }
 
-function stageRows(
-  rows: readonly RunAMatrixRow[],
-  failedId: RunAMatrixId,
-  stage: RunAMatrixRow["evidence"]["stage"],
-): RunAMatrixRow[] {
-  const ordered: readonly RunAMatrixId[] = [
-    "resume-unattended",
-    "inbound-text",
-    "inbound-document",
-    "attachment-bytes",
-    "outbound-durable-send",
-    "saved-state",
-    "process-replacement",
-  ];
-  const failedIndex = ordered.indexOf(failedId);
-  const completed = new Set(rows.map(({ id }) => id));
-  return [
-    ...rows,
-    ...ordered
-      .filter((id) => !completed.has(id))
-      .map(
-        (id): RunAMatrixRow => ({
-          id,
-          verdict:
-            id === failedId
-              ? "failed"
-              : ordered.indexOf(id) > failedIndex
-                ? "not_observed"
-                : "failed",
-          captureSite: "run-stage-verdict",
-          evidence: { stage },
-        }),
-      ),
-  ];
-}
-
 async function main(): Promise<void> {
   if (process.stdin.isTTY)
     throw new Error("Run A refuses an interactive TTY; run it with stdin closed");
@@ -131,6 +96,9 @@ async function main(): Promise<void> {
   let failedId: RunAMatrixId = "resume-unattended";
   let stage: RunAMatrixRow["evidence"]["stage"] = "subject-open";
   let finalizedRows: readonly RunAMatrixRow[] | undefined;
+  let outboundSendsBefore: number | undefined;
+  let outboundOperationId: string | undefined;
+  let outboundOperationStatus: WhatsAppOperation["state"]["status"] | undefined;
 
   try {
     const chatId = proofGroupId();
@@ -238,6 +206,7 @@ async function main(): Promise<void> {
     const target = resolveAllowlistedTarget(chatId);
     const statuses: StatusName[] = [];
     const sendsBefore = subject.sessionSendInvocations();
+    outboundSendsBefore = sendsBefore;
     try {
       assert.equal(
         chatId.endsWith(GROUP_ID_SUFFIX),
@@ -247,6 +216,8 @@ async function main(): Promise<void> {
       const operation = await guardedClientSender(subject.client).text(target, body, {
         idempotencyKey,
       });
+      outboundOperationId = operation.id;
+      outboundOperationStatus = operation.state.status;
       knownValues.push(operation.id);
       if (
         operation.state.status !== "failed" &&
@@ -257,11 +228,13 @@ async function main(): Promise<void> {
       let unexpected: "failed" | "outcome_unknown" | undefined;
       const offOperation = subject.client.operations.subscribe(operation.id, (current) => {
         const status = current.state.status;
+        outboundOperationStatus = status;
         if (status === "failed" || status === "outcome_unknown") unexpected = status;
         else if (statuses.at(-1) !== status) statuses.push(status);
       });
       const terminal = await waitFor(async () => {
         const current = await subject?.client.operations.get(operation.id);
+        if (current) outboundOperationStatus = current.state.status;
         return current?.state.status === "succeeded" ? current : undefined;
       });
       offOperation();
@@ -352,11 +325,12 @@ async function main(): Promise<void> {
     const durableComparison = compareDurableSnapshots(durableBeforeReplacement, {
       digest: replacement.durableDigest,
       collectionCounts: replacement.collectionCounts,
+      collectionIds: replacement.collectionIds,
     });
     assert.equal(
       durableComparison.durableReconstructed,
       true,
-      "replacement lost stable proof-chat state or fell below durable collection floors",
+      "replacement lost stable proof-chat state or a pre-close durable identity",
     );
     rows.push({
       id: "process-replacement",
@@ -368,7 +342,8 @@ async function main(): Promise<void> {
         durableDigestEqual: durableComparison.driftedComponents.length === 0,
         componentMatches: durableComparison.componentMatches,
         stableProofStateEqual: durableComparison.stableProofStateEqual,
-        collectionFloorsSatisfied: durableComparison.collectionFloorsSatisfied,
+        collectionsPreserved: durableComparison.collectionsPreserved,
+        collectionChanges: durableComparison.collectionChanges,
         credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
         sessionAttached: replacement.sessionAttached,
         liveSocketResumed: replacement.liveSocketResumed,
@@ -382,7 +357,17 @@ async function main(): Promise<void> {
     });
     finalizedRows = rows;
   } catch {
-    finalizedRows = stageRows(rows, failedId, stage);
+    if (outboundOperationId && subject) {
+      const operation = await subject.client.operations
+        .get(outboundOperationId)
+        .catch(() => undefined);
+      if (operation) outboundOperationStatus = operation.state.status;
+    }
+    finalizedRows = finalizeRunAFailure(rows, failedId, stage, {
+      sessionSendInvocationsBefore: outboundSendsBefore,
+      sessionSendInvocationsAfter: subject?.sessionSendInvocations(),
+      operationStatus: outboundOperationStatus,
+    });
   } finally {
     await subject?.close().catch(() => {});
   }

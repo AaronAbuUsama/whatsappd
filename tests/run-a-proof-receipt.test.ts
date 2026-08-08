@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   assertRunAReceiptSanitizationDescribesFinalObject,
   buildRunAProofReceipt,
+  finalizeRunAFailure,
   outboundSendLanded,
   scanRunAProofReceipt,
   type RunAProofObservationStore,
@@ -126,7 +127,12 @@ function completeStore(): RunAProofObservationStore {
             media: true,
           },
           stableProofStateEqual: true,
-          collectionFloorsSatisfied: true,
+          collectionsPreserved: true,
+          collectionChanges: {
+            chats: { missingCount: 0, additionCount: 0 },
+            contacts: { missingCount: 0, additionCount: 0 },
+            groups: { missingCount: 0, additionCount: 0 },
+          },
           credentialIdentityMatchesOriginal: true,
           sessionAttached: true,
           liveSocketResumed: false,
@@ -186,7 +192,18 @@ test("Run A receipt refuses dishonest provenance, incomplete rows, and reused pi
   );
   assert.throws(
     () => buildRunAProofReceipt({ ...store, rows: store.rows.slice(0, -1) }, current),
-    /matrix row/,
+    /exactly seven source rows/,
+  );
+  assert.throws(
+    () =>
+      buildRunAProofReceipt(
+        {
+          ...store,
+          rows: [...store.rows, store.rows.find(({ id }) => id === "attachment-bytes")!],
+        },
+        current,
+      ),
+    /exactly seven source rows/,
   );
   assert.throws(
     () =>
@@ -206,6 +223,33 @@ test("Run A receipt refuses dishonest provenance, incomplete rows, and reused pi
       ),
     /distinct/,
   );
+});
+
+test("a throw after Session invocation finalizes as post-boundary uncertainty", () => {
+  const rows = completeStore().rows.slice(0, 4);
+  const finalized = finalizeRunAFailure(rows, "outbound-durable-send", "outbound-durable-send", {
+    sessionSendInvocationsBefore: 0,
+    sessionSendInvocationsAfter: 1,
+    operationStatus: "executing",
+  });
+  const outbound = finalized.find(({ id }) => id === "outbound-durable-send");
+
+  assert.deepEqual(outbound, {
+    id: "outbound-durable-send",
+    verdict: "outcome_unknown",
+    captureSite: "run-stage-verdict",
+    evidence: {
+      stage: "outbound-durable-send",
+      boundary: "post-session",
+      deliveryOutcome: "unknown",
+      retrySafety: "unsafe",
+      invocationEvidence: "measured",
+      operationStateEvidence: "measured",
+      sessionSendInvocationsBefore: 0,
+      sessionSendInvocationsAfter: 1,
+      operationStatus: "executing",
+    },
+  });
 });
 
 test("Run A can honestly finalize downstream absence after the one send landed", () => {

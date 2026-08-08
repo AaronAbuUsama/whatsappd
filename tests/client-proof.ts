@@ -371,19 +371,28 @@ export interface DurableSnapshot {
     readonly contacts: number;
     readonly groups: number;
   };
+  readonly collectionIds: {
+    readonly chats: readonly string[];
+    readonly contacts: readonly string[];
+    readonly groups: readonly string[];
+  };
 }
 
 export interface DurableComparison {
   readonly componentMatches: Readonly<Record<keyof DurableDigest, boolean>>;
   readonly driftedComponents: readonly (keyof DurableDigest)[];
   readonly stableProofStateEqual: boolean;
-  readonly collectionFloorsSatisfied: boolean;
+  readonly collectionChanges: Readonly<
+    Record<"chats" | "contacts" | "groups", { missingCount: number; additionCount: number }>
+  >;
+  readonly collectionsPreserved: boolean;
   readonly durableReconstructed: boolean;
 }
 
 export interface ReplacementObservation {
   readonly durableDigest: DurableDigest;
   readonly collectionCounts: DurableSnapshot["collectionCounts"];
+  readonly collectionIds: DurableSnapshot["collectionIds"];
   readonly credentialIdentityDigest: string;
   readonly credentialIdentityMatchesOriginal: true;
   readonly sessionAttached: true;
@@ -395,6 +404,7 @@ export interface ReplacementObservation {
   readonly presenceObservationsRestored: 0;
   readonly lastConnectedAtPresent: true;
   readonly lastDisconnectedAtPresent: true;
+  readonly sessionSendInvocations: number;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -689,14 +699,29 @@ export async function durableDigest(input: {
 export async function durableSnapshot(
   input: Parameters<typeof durableDigest>[0],
 ): Promise<DurableSnapshot> {
+  const collectionIds = {
+    chats: input.client.chats
+      .list()
+      .map(({ chatId }) => chatId)
+      .sort(),
+    contacts: input.client.contacts
+      .list()
+      .map(({ contactId }) => contactId)
+      .sort(),
+    groups: input.client.groups
+      .list()
+      .map(({ groupId }) => groupId)
+      .sort(),
+  };
   const collectionCounts = {
-    chats: input.client.chats.list().length,
-    contacts: input.client.contacts.list().length,
-    groups: input.client.groups.list().length,
+    chats: collectionIds.chats.length,
+    contacts: collectionIds.contacts.length,
+    groups: collectionIds.groups.length,
   };
   return {
     digest: await durableDigest(input),
     collectionCounts,
+    collectionIds,
   };
 }
 
@@ -715,18 +740,29 @@ export function compareDurableSnapshots(
     Object.entries(componentMatches) as Array<[keyof DurableDigest, boolean]>
   ).flatMap(([component, matches]) => (matches ? [] : [component]));
   const stableProofStateEqual = componentMatches.orderedIds && componentMatches.media;
-  const collectionFloorsSatisfied = (["chats", "contacts", "groups"] as const).every(
-    (component) => {
-      const baseline = before.collectionCounts[component];
-      return baseline > 0 && after.collectionCounts[component] >= Math.floor(baseline * 0.9);
-    },
+  const collectionChanges = Object.fromEntries(
+    (["chats", "contacts", "groups"] as const).map((component) => {
+      const beforeIds = new Set(before.collectionIds[component]);
+      const afterIds = new Set(after.collectionIds[component]);
+      return [
+        component,
+        {
+          missingCount: [...beforeIds].filter((id) => !afterIds.has(id)).length,
+          additionCount: [...afterIds].filter((id) => !beforeIds.has(id)).length,
+        },
+      ];
+    }),
+  ) as DurableComparison["collectionChanges"];
+  const collectionsPreserved = Object.values(collectionChanges).every(
+    ({ missingCount }) => missingCount === 0,
   );
   return {
     componentMatches,
     driftedComponents,
     stableProofStateEqual,
-    collectionFloorsSatisfied,
-    durableReconstructed: stableProofStateEqual && collectionFloorsSatisfied,
+    collectionChanges,
+    collectionsPreserved,
+    durableReconstructed: stableProofStateEqual && collectionsPreserved,
   };
 }
 
@@ -997,9 +1033,12 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
       client.account.get().identity !== undefined
     )
       throw new Error("the deterministic replacement Session manufactured live socket state");
+    if (driver.commands.sent.length !== 0)
+      throw new Error("the deterministic replacement Session invoked send");
     return {
       durableDigest: reconstructedSnapshot.digest,
       collectionCounts: reconstructedSnapshot.collectionCounts,
+      collectionIds: reconstructedSnapshot.collectionIds,
       credentialIdentityDigest: replacementCredentialIdentityDigest,
       credentialIdentityMatchesOriginal: true,
       sessionAttached: true,
@@ -1011,6 +1050,7 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
       presenceObservationsRestored: 0,
       lastConnectedAtPresent: true,
       lastDisconnectedAtPresent: true,
+      sessionSendInvocations: driver.commands.sent.length,
     };
   } finally {
     await client?.close().catch(() => {});

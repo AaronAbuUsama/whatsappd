@@ -20,7 +20,7 @@ const MATRIX_IDS = [
 ] as const;
 
 export type RunAMatrixId = (typeof MATRIX_IDS)[number];
-export type RunAVerdict = "observed" | "not_observed" | "failed";
+export type RunAVerdict = "observed" | "not_observed" | "failed" | "outcome_unknown";
 
 export interface RunAProofRunStart {
   readonly captureSite: "run-a-proof-run-start";
@@ -53,6 +53,18 @@ export interface RunAProofObservationStore {
   readonly rows: readonly RunAMatrixRow[];
 }
 
+export interface RunAOutboundFailureMeasurement {
+  readonly sessionSendInvocationsBefore?: number;
+  readonly sessionSendInvocationsAfter?: number;
+  readonly operationStatus?:
+    | "queued"
+    | "claimed"
+    | "executing"
+    | "succeeded"
+    | "failed"
+    | "outcome_unknown";
+}
+
 export interface CurrentRepoState {
   readonly gitHead: string;
   readonly treeClean: boolean;
@@ -72,6 +84,75 @@ export function outboundSendLanded(rows: readonly RunAMatrixRow[]): boolean {
   );
 }
 
+export function finalizeRunAFailure(
+  rows: readonly RunAMatrixRow[],
+  failedId: RunAMatrixId,
+  stage: RunAMatrixRow["evidence"]["stage"],
+  outbound: RunAOutboundFailureMeasurement = {},
+): RunAMatrixRow[] {
+  const failedIndex = MATRIX_IDS.indexOf(failedId);
+  const completed = new Set(rows.map(({ id }) => id));
+  return [
+    ...rows,
+    ...MATRIX_IDS.filter((id) => !completed.has(id)).map((id): RunAMatrixRow => {
+      if (id !== failedId)
+        return {
+          id,
+          verdict: MATRIX_IDS.indexOf(id) > failedIndex ? "not_observed" : "failed",
+          captureSite: "run-stage-verdict",
+          evidence: { stage },
+        };
+      if (id !== "outbound-durable-send")
+        return {
+          id,
+          verdict: "failed",
+          captureSite: "run-stage-verdict",
+          evidence: { stage },
+        };
+
+      const before = outbound.sessionSendInvocationsBefore;
+      const after = outbound.sessionSendInvocationsAfter;
+      const invocationMeasured = typeof before === "number" && typeof after === "number";
+      const sessionInvoked = invocationMeasured && after > before;
+      if (invocationMeasured && !sessionInvoked)
+        return {
+          id,
+          verdict: "failed",
+          captureSite: "run-stage-verdict",
+          evidence: {
+            stage,
+            boundary: "pre-session",
+            deliveryOutcome: "not_sent",
+            retrySafety: "safe",
+            invocationEvidence: "measured",
+            operationStateEvidence: outbound.operationStatus ? "measured" : "unavailable",
+            sessionSendInvocationsBefore: before,
+            sessionSendInvocationsAfter: after,
+            ...(outbound.operationStatus && { operationStatus: outbound.operationStatus }),
+          },
+        };
+      return {
+        id,
+        verdict: "outcome_unknown",
+        captureSite: "run-stage-verdict",
+        evidence: {
+          stage,
+          boundary: sessionInvoked ? "post-session" : "unknown",
+          deliveryOutcome: "unknown",
+          retrySafety: "unsafe",
+          invocationEvidence: invocationMeasured ? "measured" : "unavailable",
+          operationStateEvidence: outbound.operationStatus ? "measured" : "unavailable",
+          ...(invocationMeasured && {
+            sessionSendInvocationsBefore: before,
+            sessionSendInvocationsAfter: after,
+          }),
+          ...(outbound.operationStatus && { operationStatus: outbound.operationStatus }),
+        },
+      };
+    }),
+  ];
+}
+
 const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/schemaVersion", field("count")],
   ["/issue", field("count")],
@@ -86,7 +167,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/provenance/command", field("enum", ["pnpm proof:run-a < /dev/null"])],
   ["/provenance/observationStoreSha256", field("digest")],
   ["/matrix/*/id", field("enum", MATRIX_IDS)],
-  ["/matrix/*/verdict", field("enum", ["observed", "not_observed", "failed"])],
+  ["/matrix/*/verdict", field("enum", ["observed", "not_observed", "failed", "outcome_unknown"])],
   [
     "/matrix/*/captureSite",
     field("enum", [
@@ -152,6 +233,15 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/authoritativeEchoCount", field("count")],
   ["/matrix/*/evidence/sessionSendInvocationsBefore", field("count")],
   ["/matrix/*/evidence/sessionSendInvocationsAfter", field("count")],
+  ["/matrix/*/evidence/boundary", field("enum", ["pre-session", "post-session", "unknown"])],
+  ["/matrix/*/evidence/deliveryOutcome", field("enum", ["not_sent", "unknown"])],
+  ["/matrix/*/evidence/retrySafety", field("enum", ["safe", "unsafe"])],
+  ["/matrix/*/evidence/invocationEvidence", field("enum", ["measured", "unavailable"])],
+  ["/matrix/*/evidence/operationStateEvidence", field("enum", ["measured", "unavailable"])],
+  [
+    "/matrix/*/evidence/operationStatus",
+    field("enum", ["queued", "claimed", "executing", "succeeded", "failed", "outcome_unknown"]),
+  ],
   ["/matrix/*/evidence/closeOrder/*", field("enum", ["client", "runtime", "backend"])],
   ["/matrix/*/evidence/durableDigest/chats", field("digest")],
   ["/matrix/*/evidence/durableDigest/contacts", field("digest")],
@@ -166,7 +256,13 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/componentMatches/orderedIds", field("boolean")],
   ["/matrix/*/evidence/componentMatches/media", field("boolean")],
   ["/matrix/*/evidence/stableProofStateEqual", field("boolean")],
-  ["/matrix/*/evidence/collectionFloorsSatisfied", field("boolean")],
+  ["/matrix/*/evidence/collectionsPreserved", field("boolean")],
+  ["/matrix/*/evidence/collectionChanges/chats/missingCount", field("count")],
+  ["/matrix/*/evidence/collectionChanges/chats/additionCount", field("count")],
+  ["/matrix/*/evidence/collectionChanges/contacts/missingCount", field("count")],
+  ["/matrix/*/evidence/collectionChanges/contacts/additionCount", field("count")],
+  ["/matrix/*/evidence/collectionChanges/groups/missingCount", field("count")],
+  ["/matrix/*/evidence/collectionChanges/groups/additionCount", field("count")],
   ["/matrix/*/evidence/credentialIdentityMatchesOriginal", field("boolean")],
   ["/matrix/*/evidence/sessionAttached", field("boolean")],
   ["/matrix/*/evidence/liveSocketResumed", field("boolean")],
@@ -222,6 +318,8 @@ function validateStore(store: RunAProofObservationStore, current: CurrentRepoSta
   )
     throw new Error("refusing receipt: known-value negative control is incomplete");
 
+  if (store.rows.length !== MATRIX_IDS.length)
+    throw new Error("refusing receipt: exactly seven source rows are required");
   const rows = new Map(store.rows.map((row) => [row.id, row]));
   if (rows.size !== MATRIX_IDS.length || MATRIX_IDS.some((id) => !rows.has(id)))
     throw new Error("refusing receipt: every required matrix row must be present exactly once");
@@ -247,18 +345,66 @@ function validateStore(store: RunAProofObservationStore, current: CurrentRepoSta
     throw new Error("refusing receipt: the outbound send observation is incomplete");
 
   const replacement = rows.get("process-replacement")!;
+  const componentMatches = replacement.evidence.componentMatches as
+    | { readonly orderedIds?: unknown; readonly media?: unknown }
+    | undefined;
+  const collectionChanges = replacement.evidence.collectionChanges as
+    | {
+        readonly chats?: { readonly missingCount?: unknown };
+        readonly contacts?: { readonly missingCount?: unknown };
+        readonly groups?: { readonly missingCount?: unknown };
+      }
+    | undefined;
+  const measuredStableProofState =
+    componentMatches?.orderedIds === true && componentMatches.media === true;
+  const measuredCollectionsPreserved =
+    collectionChanges !== undefined &&
+    [collectionChanges.chats, collectionChanges.contacts, collectionChanges.groups].every(
+      (change) => change?.missingCount === 0,
+    );
   if (
     replacement.verdict === "observed" &&
     (typeof replacement.evidence.replacementPid !== "number" ||
       replacement.evidence.distinctPid !== true ||
-      replacement.evidence.stableProofStateEqual !== true ||
-      replacement.evidence.collectionFloorsSatisfied !== true ||
+      replacement.evidence.stableProofStateEqual !== measuredStableProofState ||
+      !measuredStableProofState ||
+      replacement.evidence.collectionsPreserved !== measuredCollectionsPreserved ||
+      !measuredCollectionsPreserved ||
       replacement.evidence.credentialIdentityMatchesOriginal !== true ||
       replacement.evidence.sessionAttached !== true ||
       replacement.evidence.liveSocketResumed !== false ||
       replacement.evidence.durableReconstructedWhileNoLive !== true)
   )
     throw new Error("refusing receipt: the replacement observation is incomplete");
+
+  if (outbound.verdict === "failed") {
+    if (
+      outbound.evidence.boundary !== "pre-session" ||
+      outbound.evidence.deliveryOutcome !== "not_sent" ||
+      outbound.evidence.retrySafety !== "safe" ||
+      outbound.evidence.invocationEvidence !== "measured" ||
+      (outbound.evidence.operationStateEvidence === "measured") !==
+        (typeof outbound.evidence.operationStatus === "string") ||
+      outbound.evidence.sessionSendInvocationsAfter !==
+        outbound.evidence.sessionSendInvocationsBefore
+    )
+      throw new Error("refusing receipt: pre-boundary failure evidence is incomplete");
+  } else if (outbound.verdict === "outcome_unknown") {
+    const measuredPostBoundary =
+      outbound.evidence.invocationEvidence === "measured" &&
+      typeof outbound.evidence.sessionSendInvocationsBefore === "number" &&
+      typeof outbound.evidence.sessionSendInvocationsAfter === "number" &&
+      outbound.evidence.sessionSendInvocationsAfter >
+        outbound.evidence.sessionSendInvocationsBefore;
+    if (
+      outbound.evidence.deliveryOutcome !== "unknown" ||
+      outbound.evidence.retrySafety !== "unsafe" ||
+      (outbound.evidence.operationStateEvidence === "measured") !==
+        (typeof outbound.evidence.operationStatus === "string") ||
+      (outbound.evidence.invocationEvidence !== "unavailable" && !measuredPostBoundary)
+    )
+      throw new Error("refusing receipt: post-boundary uncertainty evidence is incomplete");
+  }
 }
 
 function scanMetricsWithoutByteLength(scan: ReceiptScanReport): Record<string, unknown> {
