@@ -88,12 +88,16 @@ when the correct path costs more to type than the incorrect one, and a firmer
 sentence in a document never changes that. A `chatId` typed from a mirror read
 is the cheap wrong path here, so the guard belongs where the send happens.
 
-## Redaction
+## Logging and receipt sanitization
 
-The profiles hold real account material. Nothing derived from them —
-no phone number, JID, group id, message body, media byte, credential, QR or
-pairing code — enters a command, a log, a commit, a GitHub comment or a receipt.
-Committed receipts carry hashes, counts and lengths only.
+The profiles hold real account material. The library's default logger is not
+redacted. A real-account harness must supply a logger configured for its policy,
+disable operational logging, or write raw logs only under `.proof-private/`.
+Raw logs must never be copied into a commit, GitHub comment, or receipt.
+
+Committed receipts remain schema-sanitized and carry hashes, counts, lengths,
+booleans, and verdicts only. No phone number, JID, group id, message body, media
+byte, credential, QR, or pairing code belongs in a committed artifact.
 
 `.proof-private/` is gitignored (`.gitignore:10`). Keep it that way; it is the
 only thing standing between a real account's credentials and a public

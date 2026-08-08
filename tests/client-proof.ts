@@ -52,6 +52,10 @@ const MAX_CHILD_OUTPUT_BYTES = 64 * 1024;
 const PAGE_SEED_COUNT = 30;
 let proofStage = "startup";
 
+// Raw protocol logs are not receipt-safe. The proof emits its own sanitized
+// observations, so every Session opened by this process stays silent.
+process.env.WA_LOG_LEVEL = "silent";
+
 type LinkMode = "resumed" | "paired";
 
 export interface LinkSummary {

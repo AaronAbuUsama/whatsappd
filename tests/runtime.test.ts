@@ -2009,12 +2009,17 @@ test("a stop right after start cancels it instead of missing it", async () => {
 test("a deliberate stop drains conversation sync already inside the Session pipeline", async () => {
   const base = memoryBackend();
   let renewals = 0;
+  let renewed!: () => void;
+  const renewalObserved = new Promise<void>((resolve) => {
+    renewed = resolve;
+  });
   const backend = {
     ...base,
     leases: {
       ...base.leases,
       async renew(lease: AccountLease, ttlMs: number) {
         renewals += 1;
+        renewed();
         return base.leases.renew(lease, ttlMs);
       },
     },
@@ -2032,7 +2037,7 @@ test("a deliberate stop drains conversation sync already inside the Session pipe
   const runtime = createWhatsAppRuntime({
     accountId: "personal",
     backend,
-    leaseTtlMs: 20,
+    leaseTtlMs: 1_000,
     openSession: () => ({
       ...driver.session,
       async stop() {
@@ -2061,7 +2066,7 @@ test("a deliberate stop drains conversation sync already inside the Session pipe
   await inFlight;
 
   const stopping = runtime.stop();
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await renewalObserved;
   expect(renewals > 0).toBe(true);
   release();
 

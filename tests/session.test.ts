@@ -1,8 +1,9 @@
 import type { BaileysEventMap } from "baileys";
 import assert from "node:assert/strict";
+import pino, { type Logger } from "pino";
 import { expect, test } from "./_expect.ts";
 import { toMessagesUpsertEvents } from "../src/baileys/socket.ts";
-import { createSession } from "../src/session.ts";
+import { createDefaultLogger, createSession } from "../src/session.ts";
 import { pairingAuth, qrAuth } from "../src/ports.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import { baseMessage, SELF } from "./fixtures.ts";
@@ -12,6 +13,44 @@ import { textMessage } from "../src/testing.ts";
 // subscription wiring and command guards can be exercised without a phone.
 const make = (): ReturnType<typeof createSession> =>
   createSession({ store: memoryStore(), auth: qrAuth() });
+
+test("default logger level follows WA_LOG_LEVEL and otherwise warns", () => {
+  const previous = process.env.WA_LOG_LEVEL;
+  try {
+    process.env.WA_LOG_LEVEL = "trace";
+    assert.equal(createDefaultLogger({ write() {} }).level, "trace");
+    delete process.env.WA_LOG_LEVEL;
+    assert.equal(createDefaultLogger({ write() {} }).level, "warn");
+  } finally {
+    if (previous === undefined) delete process.env.WA_LOG_LEVEL;
+    else process.env.WA_LOG_LEVEL = previous;
+  }
+});
+
+test("createSession passes a supplied logger to the socket", async () => {
+  const supplied = pino({ level: "silent" });
+  let observed: Logger | undefined;
+  const session = createSession({
+    store: memoryStore(),
+    auth: qrAuth(),
+    logger: supplied,
+    openSocket: async (options: { logger: Logger }) => {
+      observed = options.logger;
+      return {
+        events: (async function* () {
+          yield {
+            t: "close",
+            fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+          } as const;
+        })(),
+        end() {},
+      };
+    },
+  } as unknown as Parameters<typeof createSession>[0]);
+
+  await session.start();
+  assert.equal(observed, supplied);
+});
 
 test("subscribe accepts a handler subset and returns one cleanup function", () => {
   const s = make();

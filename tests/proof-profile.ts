@@ -39,6 +39,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const profile = process.argv.slice(2).find((arg) => arg !== "--") ?? "client-read";
 const directory = path.join(here, "..", ".proof-private", profile);
 
+// The default logger is intentionally unredacted. This real-profile harness
+// prints its own count-only summary, so disable protocol logging entirely.
+process.env.WA_LOG_LEVEL = "silent";
+
 /** How long to wait for a link before giving up, with and without a human. */
 const RESUME_TIMEOUT_MS = 90_000;
 const SCAN_TIMEOUT_MS = 300_000;

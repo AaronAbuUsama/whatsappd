@@ -28,151 +28,14 @@ const QR_FIRST_MS = 60_000;
 const QR_REFRESH_MS = 20_000;
 
 /**
- * Fields the default logger censors.
- *
- * @remarks
- * Every deliberate log call in this codebase already passes a hand-built
- * object of counts and flags — `qrChars` rather than the QR, chat totals
- * rather than chats. Those were never the risk.
- *
- * The risk is the two sites that log `{ err }`, where the error comes from
- * Baileys or a socket and its shape is not ours to choose. A send failure can
- * carry the outbound payload, and an HTTP-ish failure can carry request
- * headers, so the message body, the recipient, and an auth token all reach the
- * log through an object nobody here constructed. That was verified rather than
- * assumed: an error carrying all three serialized every one of them in full.
- *
- * Most paths stay explicit because a recursive sweep costs on every log call.
- * Message envelopes are the exception: Baileys nests a property literally
- * named `message` at varying depths. A value-aware formatter censors those
- * envelopes while leaving an Error's diagnostic `message` intact.
- */
-export const REDACTED_PATHS = [
-  // Message content, wherever it surfaces.
-  "*.text",
-  "*.body",
-  "*.caption",
-  "err.data.text",
-  "err.data.body",
-  "err.data.caption",
-  "err.data.message",
-  // Addresses — a phone number is identifying on its own.
-  "*.jid",
-  "*.to",
-  "*.from",
-  "*.sender",
-  "*.remoteJid",
-  "*.participant",
-  "*.participantAlt",
-  "from",
-  "node.username",
-  "pnUser",
-  "lidUser",
-  "fromJid",
-  "myPN",
-  "myLID",
-  "xml",
-  "helloMsg.clientHello.ephemeral",
-  "handshake.serverHello.ephemeral",
-  "handshake.serverHello.static",
-  "handshake.serverHello.payload",
-  "attrs.id",
-  "recv.attrs.from",
-  "recv.attrs.id",
-  "recv.attrs.t",
-  "sent.id",
-  "messageIds",
-  "err.data.to",
-  "err.data.from",
-  "err.data.jid",
-  "err.data.remoteJid",
-  "err.data.participant",
-  "err.data.participantAlt",
-  "err.stack",
-  // Anything that would let someone else become this session. Listed at the
-  // top level as well as under a wildcard, because `*.token` matches a token
-  // one level down and not a `token` on the logged object itself — a
-  // distinction a test caught after the wildcard-only list looked complete.
-  "*.authorization",
-  "*.token",
-  "*.authToken",
-  "*.creds",
-  "*.keys",
-  "*.password",
-  "authorization",
-  "token",
-  "authToken",
-  "creds",
-  "keys",
-  "password",
-  "err.config.headers.authorization",
-  "err.config.headers.cookie",
-];
-
-const REDACTED = "[Redacted]";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object") return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function carriesSensitiveLogValue(value: string): boolean {
-  return (
-    /\d{7,}/u.test(value.replace(/[\s\-().+]/gu, "")) ||
-    /@(s\.whatsapp\.net|g\.us|lid|broadcast|newsletter)/u.test(value) ||
-    /[A-Za-z0-9+/_-]{32,}={0,2}/u.test(value) ||
-    /(?:[A-Za-z0-9+/_-]+={0,2},){2,}[A-Za-z0-9+/_-]+={0,2}/u.test(value) ||
-    value.includes(".proof-private")
-  );
-}
-
-function censorMessageFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(censorMessageFields);
-  if (value instanceof Error) {
-    const options =
-      value.cause === undefined ? undefined : { cause: censorMessageFields(value.cause) };
-    const cloned = new Error(value.message, options);
-    cloned.name = value.name;
-    cloned.stack = value.stack;
-    return Object.assign(cloned, censorMessageFields(Object.fromEntries(Object.entries(value))));
-  }
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, nested]) => {
-      if (key === "message") return [key, REDACTED];
-      return [key, censorMessageFields(nested)];
-    }),
-  );
-}
-
-/**
  * Build the logger owned by {@link createSession}.
  *
  * @internal Exported from this module so tests can assert on the exact logger
  * factory rather than duplicating its pino configuration.
  */
 export function createDefaultLogger(destination?: DestinationStream): Logger {
-  const options = {
-    level: process.env.WA_LOG_LEVEL ?? "warn",
-    redact: { paths: REDACTED_PATHS },
-    hooks: {
-      logMethod(args: unknown[], method: (...input: unknown[]) => void): void {
-        method.apply(
-          this,
-          args.map((arg) =>
-            typeof arg === "string" && carriesSensitiveLogValue(arg) ? REDACTED : arg,
-          ),
-        );
-      },
-    },
-    formatters: {
-      log(object: Record<string, unknown>): Record<string, unknown> {
-        return censorMessageFields(object) as Record<string, unknown>;
-      },
-    },
-  };
-  return destination ? pino(options, destination) : pino(options);
+  const options = { level: process.env.WA_LOG_LEVEL ?? "warn" };
+  return pino(options, destination ?? pino.destination({ dest: 2, sync: true }));
 }
 
 /** Configuration for {@link createSession}. */
@@ -183,6 +46,11 @@ export interface SessionConfig {
   auth: AuthStrategy;
   /**
    * Logger to use.
+   *
+   * @remarks
+   * The default logger writes to stderr and is not redacted. Supply a logger
+   * configured for your policy before routing logs to a shared or third-party
+   * sink.
    *
    * @defaultValue a `pino` logger at the level in `WA_LOG_LEVEL`, or `warn`.
    */

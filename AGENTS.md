@@ -59,24 +59,9 @@ of native observation. If the native floor turns out to be unreachable, report
 the achieved count against the attempt budget and get the floor re-adjudicated.
 Do not quietly substitute the synthetic count, and do not retry until green.
 
-### A reviewer's suggested fix is a claim too
+### The default logger is not a privacy boundary
 
-Scrutiny correctly found that dropping `*.message` from the default redaction
-paths leaks nested message content, and suggested restoring it. Probing pino
-directly showed the restore also redacts every `err.message`, blinding operators
-to error diagnostics — which is why it had been removed. Both the finding and
-the removal were right; the suggested fix was not. Verify the remedy against the
-same evidence you used to verify the defect, or you trade one fault for another.
-
-### A redaction probe can pass for the wrong reason
-
-Round 2 reported that nested media captions leaked from the default logger.
-Probing `message.imageMessage.caption` showed it redacted, which looked like a
-false finding. It was redacted by the `*.caption` wildcard in `REDACTED_PATHS`,
-not by the envelope censor the finding was about. Subtypes whose content key is
-not separately wildcarded — `documentMessage.fileName`, `contactMessage.vcard`,
-`locationMessage.name`, `pollCreationMessage.name` — leaked verbatim.
-
-Two mechanisms guarding the same value means a probe can confirm the wrong one.
-Before concluding a redaction works, establish which mechanism caught it, and
-test a case the other mechanism cannot reach.
+The default logger is an ordinary, unredacted `pino` logger writing to stderr.
+Real-account harnesses must either supply a logger configured for their artifact
+policy or keep raw output under `.proof-private/`. Committed receipts remain
+schema-sanitized and carry counts, booleans and verdicts rather than log output.

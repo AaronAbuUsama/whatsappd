@@ -41,6 +41,10 @@ const observationMs = 10_250;
 const onlineTimeoutMs = 90_000;
 type Phase = "fresh" | "control" | "linked";
 
+// The proof receipt records only typed observations. Keep the ordinary,
+// unredacted default logger from writing protocol objects to captured output.
+process.env.WA_LOG_LEVEL = "silent";
+
 const counts = {
   fresh: { net: 0 },
   control: { net: 0 },

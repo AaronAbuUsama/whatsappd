@@ -36,6 +36,14 @@ The backend-independent service that owns one account’s pairing, live session,
 durable projection, command execution, reconciliation, and lease lifecycle.
 _Avoid_: Sidecar, agent, channel
 
+**Session Logger**:
+Application-owned operational logging policy. The fallback is an ordinary,
+unredacted `pino` logger at `WA_LOG_LEVEL` (default `warn`) writing to stderr.
+Applications routing logs to a shared or third-party sink supply `logger`
+configured with their own redaction and retention policy, for example
+`pino({ redact: ["*.text", "*.jid", "*.token"] })`.
+_Avoid_: Library privacy boundary, safe-to-export default log
+
 **Account Worker**:
 An application-owned long-running Node process that runs a WhatsApp Runtime for
 one account; an application may run several workers as separate processes.

@@ -179,12 +179,19 @@ A hook that throws is caught and logged rather than allowed to break the
 connection, so an unreachable metrics backend degrades the telemetry and
 nothing else.
 
-Logging is separate. The library logs at `warn` by default — set `WA_LOG_LEVEL`
-to change it — and the logger it builds censors message bodies, addresses, and
-credentials, because the errors it reports come from the protocol layer and can
-arrive carrying the payload that failed to send. Passing your own `logger` opts
-out of that entirely and gives you exactly what you configured; see
-[ADR-0031](docs/adr/0031-the-default-logger-censors-what-it-cannot-vouch-for.md).
+Logging is separate. The default logger writes to stderr at `warn`; set
+`WA_LOG_LEVEL` to change its level. **The default logger is not redacted.**
+Protocol errors may contain private or identifying values.
+
+If logs will leave the local terminal for a shared or third-party sink, pass a
+`logger` configured for your policy:
+
+```ts
+logger: pino({ redact: ["*.text", "*.jid", "*.token"] }),
+```
+
+The library uses a supplied logger exactly as configured. See
+[ADR-0031](docs/adr/0031-redaction-is-the-consumers-concern.md).
 
 ## Deterministic application tests
 
