@@ -95,7 +95,7 @@ export function createLinkObservation(): {
 
 export interface OpenProfile {
   readonly client: WhatsAppClient;
-  readonly backend: WhatsAppBackend;
+  readonly backend: ReturnType<typeof libsqlBackend>;
   readonly media: MediaStore;
   readonly runtime: WhatsAppRuntime;
   readonly session: WhatsAppSession;
@@ -294,7 +294,7 @@ function sha256(bytes: string | Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function credentialIdentityDigest(
+export async function credentialIdentityDigest(
   credentials: CredentialStore,
   salt: string,
 ): Promise<string> {
@@ -629,7 +629,7 @@ function contactAddresses(contacts: readonly ContactRecord[]): readonly string[]
   ].sort();
 }
 
-async function durableDigest(input: {
+export async function durableDigest(input: {
   readonly client: WhatsAppClient;
   readonly media: Pick<MediaStore, "read">;
   readonly accountId: string;
@@ -832,7 +832,7 @@ async function peerChild(): Promise<void> {
   }
 }
 
-async function allStoredMessages(
+export async function allStoredMessages(
   backend: WhatsAppBackend,
   accountId: string,
   chatId: string,

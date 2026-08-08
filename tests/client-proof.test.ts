@@ -554,6 +554,7 @@ test("every real-profile harness uses the production allowlist authority and gua
       "live-send-proof.ts",
       "pairing-proof.ts",
       "proof-profile.ts",
+      "run-a-proof.ts",
       "teardown-proof.ts",
     ],
     "the mechanical real-profile harness enumeration changed",
