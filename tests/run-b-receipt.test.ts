@@ -321,6 +321,29 @@ test("a failure finalizes every measured row rather than losing the run", () => 
   );
 });
 
+test("a row already measured as observed is downgraded when its own assertion fails", () => {
+  const store = completeStore();
+  // Every row measured, including the one whose assertion is about to fail —
+  // the real shape, because measurements are recorded before the assertions
+  // that judge them.
+  const finalized = finalizeRunBFailure(
+    store.rows,
+    "unlink-preserves-durable-chats-and-media",
+    "cold-open",
+  );
+  const failing = finalized.find(({ id }) => id === "unlink-preserves-durable-chats-and-media")!;
+
+  assert.equal(failing.verdict, "failed", "the failing row was reported as a success");
+  assert.equal(failing.evidence.stage, "cold-open");
+  // Its measurements survive the downgrade rather than being thrown away.
+  assert.equal(failing.evidence.mediaFileCount, 25);
+  assert.equal(
+    finalized.filter(({ verdict }) => verdict === "failed").length,
+    1,
+    "only the failing row is downgraded",
+  );
+});
+
 test("a finalized failure still produces a writable, sanitized receipt", () => {
   const store = completeStore();
   const partial = {

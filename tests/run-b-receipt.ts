@@ -114,7 +114,15 @@ export function finalizeRunBFailure(
   const failedIndex = MATRIX_IDS.indexOf(failedId);
   const completed = new Set(rows.map(({ id }) => id));
   return [
-    ...rows,
+    // A row is pushed with its measurements *before* the assertions that judge
+    // them, so the failing row may already be present reading `observed`.
+    // Downgrading it here is the difference between a receipt that reports a
+    // failure and one that reports the failing row as a success.
+    ...rows.map((row) =>
+      row.id === failedId && row.id !== BONUS_ID
+        ? { ...row, verdict: "failed" as const, evidence: { ...row.evidence, stage } }
+        : row,
+    ),
     ...MATRIX_IDS.filter((id) => !completed.has(id)).map((id): RunBMatrixRow => {
       // The bonus row gates nothing, so a phase-2 failure never marks it
       // `failed` — it was either carried forward already or never reached. It
