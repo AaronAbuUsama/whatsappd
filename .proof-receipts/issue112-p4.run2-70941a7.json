@@ -6,13 +6,13 @@
   "mode": "verify",
   "provenance": {
     "captureSite": "run-b-receipt-run-start",
-    "gitHead": "a4e5f585b00478abc662f8e54fd24dac156ee3fa",
+    "gitHead": "70941a704f1795bf40a5bb4018786bf235153566",
     "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
     "treeClean": true,
-    "startedAt": "2026-08-08T15:52:09.768Z",
-    "finalizedAt": "2026-08-08T15:52:12.171Z",
+    "startedAt": "2026-08-08T15:56:56.705Z",
+    "finalizedAt": "2026-08-08T15:56:59.555Z",
     "command": "pnpm proof:run-b:verify < /dev/null",
-    "observationStoreSha256": "eb31fef6506ae1ed8705c01d63f7a7d800363e3c5b61e4f75943acc020d698ee"
+    "observationStoreSha256": "afac591a5f358262755099488143afac4ed05d8f7aa5c4fbb2d366ede77a9f81"
   },
   "matrix": [
     {
@@ -119,7 +119,7 @@
           "chats": 68,
           "contacts": 83,
           "groups": 22,
-          "messages": 0
+          "messages": 1323
         },
         "countShortfall": {
           "chats": 0,
@@ -160,7 +160,7 @@
         "coldBackendReadable": true,
         "coldLinkStatus": "needs_pairing",
         "coldSessionFactoryOpenCalls": 0,
-        "coldPid": 38500,
+        "coldPid": 48550,
         "distinctFromPhaseOnePid": true,
         "outstandingLifecycleOperations": 0
       }
