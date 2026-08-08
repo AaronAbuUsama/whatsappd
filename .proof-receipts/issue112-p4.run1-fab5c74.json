@@ -164,8 +164,52 @@
         "distinctFromPhaseOnePid": true,
         "outstandingLifecycleOperations": 0
       }
+    },
+    {
+      "id": "pair-restart-recorded-as-a-labelled-reconnect",
+      "verdict": "not_observed",
+      "notObservedReason": "no-reconnect-was-labelled-as-the-515-restart-in-the-spent-pairing",
+      "captureSite": "phase-one-handoff",
+      "evidence": {
+        "derivedFrom": "pair-links-through-one-session",
+        "reconnectCount": 2,
+        "restartLabelRetained": false
+      }
+    },
+    {
+      "id": "unlink-logout-preceded-the-clear",
+      "verdict": "not_observed",
+      "notObservedReason": "logout-ordering-was-asserted-only-in-the-spent-unlinking-process",
+      "captureSite": "throwaway-credentials-oracle",
+      "evidence": {
+        "derivedFrom": "unlink-clears-only-target-credentials",
+        "logoutOrderingRetained": false
+      }
+    },
+    {
+      "id": "unlink-preserves-durable-messages",
+      "verdict": "not_observed",
+      "notObservedReason": "no-message-count-was-captured-before-the-spent-unlink",
+      "captureSite": "cold-process-client",
+      "evidence": {
+        "derivedFrom": "unlink-preserves-durable-chats-and-media",
+        "afterMessageCount": 1323,
+        "beforeMessageCountRetained": false
+      }
     }
   ],
+  "correction": {
+    "captureSite": "run-b-receipt-correction",
+    "reason": "rows-claimed-sub-clauses-the-run-did-not-observe",
+    "supersededSha256": "28aca5584e670c041da8853502b62660cb4ddf32c8b86cf83c9ac4df9bee461d",
+    "supersededGitHead": "fab5c74737e7f45f9b327e0aad13f67bf668709e",
+    "correctedAtGitHead": "d11bda591697c3e486d7e4b2e201cc8439a25e92",
+    "correctedAtTreeClean": true,
+    "correctedAt": "2026-08-08T20:12:07.176Z",
+    "loweredRowCount": 0,
+    "raisedRowCount": 0,
+    "addedRowCount": 3
+  },
   "sanitization": {
     "captureSite": "receipt-writer-in-memory",
     "schemaUnknownFields": 0,
@@ -173,7 +217,7 @@
     "patternHits": 0,
     "knownValueHits": 0,
     "freeFormFields": 1,
-    "digestFields": 10,
+    "digestFields": 11,
     "nonEmpty": true,
     "floorPassed": true,
     "knownValueControlCount": 3
