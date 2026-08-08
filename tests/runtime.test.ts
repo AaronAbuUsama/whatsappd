@@ -6,7 +6,9 @@
 import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
 import {
+  AccountNotHeldError,
   StaleAccountClaimError,
+  type AccountLease,
   type AccountLeaseStore,
   type StoredMessageCursor,
   type StoredMessagePage,
@@ -1193,6 +1195,7 @@ test("two accounts remain isolated in one backend", async () => {
     credentials: memoryStore(),
     data,
     leases,
+    pairingChallenges: memoryBackend().pairingChallenges,
     media: memoryMediaStore(),
     operations: memoryOperationStore(),
   });
@@ -1719,6 +1722,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
   const oldBackend: WhatsAppBackend = {
     credentials: memoryStore(),
     leases: fixedLeaseStore(1),
+    pairingChallenges: memoryBackend().pairingChallenges,
     media,
     operations: memoryOperationStore(),
     data: {
@@ -1735,6 +1739,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
   const replacementBackend: WhatsAppBackend = {
     credentials: memoryStore(),
     leases: fixedLeaseStore(2),
+    pairingChallenges: memoryBackend().pairingChallenges,
     media,
     operations: memoryOperationStore(),
     data,
@@ -2002,6 +2007,178 @@ test("a stop right after start cancels it instead of missing it", async () => {
   await assert.rejects(starting, /stopped while starting/);
   expect(opened()).toBe(0);
   expect((await backend.leases.acquire("personal", "other", 1_000)).acquired).toBe(true);
+});
+
+test("a deliberate stop drains conversation sync already inside the Session pipeline", async () => {
+  const base = memoryBackend();
+  let renewals = 0;
+  const backend = {
+    ...base,
+    leases: {
+      ...base.leases,
+      async renew(lease: AccountLease, ttlMs: number) {
+        renewals += 1;
+        return base.leases.renew(lease, ttlMs);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  let entered!: () => void;
+  const inFlight = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let emission: Promise<void> | undefined;
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    leaseTtlMs: 20,
+    openSession: () => ({
+      ...driver.session,
+      async stop() {
+        await emission;
+        await driver.session.stop?.();
+      },
+    }),
+  });
+  await runtime.start();
+
+  emission = driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "recent", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [
+        image(async () => {
+          entered();
+          await held;
+          return Buffer.from("sync-still-in-flight");
+        }),
+      ],
+    },
+  });
+  await inFlight;
+
+  const stopping = runtime.stop();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(renewals > 0).toBe(true);
+  release();
+
+  await stopping;
+  await emission;
+  expect((await runtime.snapshot()).revision > 0).toBe(true);
+  expect((await backend.leases.acquire("personal", "replacement", 1_000)).acquired).toBe(true);
+});
+
+test("a renewal loss during stop cannot stamp with or release the stale claim", async () => {
+  const base = memoryBackend();
+  let renewalEntered!: () => void;
+  const renewing = new Promise<void>((resolve) => {
+    renewalEntered = resolve;
+  });
+  let finishRenewal!: () => void;
+  const heldRenewal = new Promise<void>((resolve) => {
+    finishRenewal = resolve;
+  });
+  const backend: WhatsAppBackend = {
+    ...base,
+    leases: {
+      ...base.leases,
+      async renew() {
+        renewalEntered();
+        await heldRenewal;
+        return { renewed: false, reason: "lost" };
+      },
+    },
+  };
+  const { runtime } = lane("personal", { backend, leaseTtlMs: 20 });
+  await runtime.start();
+  await renewing;
+
+  const stopping = runtime.stop();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const replacement = await base.leases.acquire("personal", "replacement", 1_000);
+  if (!replacement.acquired) assert.fail("replacement did not acquire the expired claim");
+  await base.data.claim("personal", replacement.lease.fencingToken);
+  finishRenewal();
+
+  await stopping;
+  expect((await base.leases.acquire("personal", "third", 1_000)).acquired).toBe(false);
+  await base.leases.release(replacement.lease);
+});
+
+test("a conversation sync crossing lease loss is rejected and never reaches the mirror", async () => {
+  const inner = memoryLeaseStore();
+  let renewalLost!: () => void;
+  const lost = new Promise<void>((resolve) => {
+    renewalLost = resolve;
+  });
+  const leases: AccountLeaseStore = {
+    ...inner,
+    async renew() {
+      renewalLost();
+      return { renewed: false, reason: "lost" };
+    },
+  };
+  const backend = { ...memoryBackend(), leases };
+  const driver = createTestWhatsAppSession();
+  let entered!: () => void;
+  const inFlight = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let emission: Promise<void> | undefined;
+  const runtime = createWhatsAppRuntime({
+    accountId: "personal",
+    backend,
+    leaseTtlMs: 2,
+    openSession: () => ({
+      ...driver.session,
+      async stop() {
+        await emission;
+        await driver.session.stop?.();
+      },
+    }),
+  });
+  await runtime.start();
+
+  emission = driver.emit({
+    type: "conversation_sync",
+    batch: {
+      context: { source: "recent", projection: { mode: "upsert" } },
+      chats: [],
+      contacts: [],
+      messages: [
+        image(async () => {
+          entered();
+          await held;
+          return Buffer.from("must-not-cross-lease-loss");
+        }),
+      ],
+    },
+  });
+  await inFlight;
+  await withDeadline(lost);
+  release();
+
+  await assert.rejects(
+    emission,
+    (error: unknown) =>
+      error instanceof SubscriptionHandlerError && error.cause instanceof AccountNotHeldError,
+  );
+  await assert.rejects(
+    runtime.stop(),
+    (error: unknown) =>
+      error instanceof SubscriptionHandlerError && error.cause instanceof AccountNotHeldError,
+  );
+  expect((await runtime.snapshot()).revision).toBe(0);
 });
 
 test("a write is refused once its claim has expired", async () => {

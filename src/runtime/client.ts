@@ -19,7 +19,6 @@
  *
  * @packageDocumentation
  */
-import type { MessageRef } from "../model/outbound.ts";
 import type { PresenceKind } from "../model/presence.ts";
 import type { Status, WaIdentity } from "../model/status.ts";
 import type { Unsubscribe } from "../subscription.ts";
@@ -36,24 +35,26 @@ import type {
   CurrentMirrorPatch,
   CurrentMirrorSnapshot,
 } from "./contracts.ts";
-import {
-  clientSourceFor,
-  fanout,
-  surface,
-  type ClientClaim,
-  type WhatsAppRuntime,
-} from "./runtime.ts";
-import { createClientPair, type ClientPairInput, type WhatsAppLinkState } from "./lifecycle.ts";
-import { type MediaOutbound, type WhatsAppOperation } from "./operations.ts";
+import { fanout, surface } from "./runtime-delivery.ts";
+import { clientSourceFor, type ClientClaim, type WhatsAppRuntime } from "./runtime-source.ts";
+import { createClientPair, createClientUnlink } from "./lifecycle.ts";
 import {
   createClientMessageActions,
   createClientOperationGet,
   createClientSend,
-  type ClientOperationOptions,
-  type ClientPhoneHistoryRequest,
-  type ClientSendOptions,
 } from "./client-operations.ts";
+import type {
+  ClientChatMessages,
+  ClientSubscribeOptions,
+  WhatsAppClient,
+} from "./client-contract.ts";
 export type { ClientOperationOptions, ClientSendOptions } from "./client-operations.ts";
+export type {
+  ClientAccountState,
+  ClientChatMessages,
+  ClientNamespace,
+  WhatsAppClient,
+} from "./client-contract.ts";
 
 /**
  * Order two WhatsApp identifiers by code unit.
@@ -169,38 +170,6 @@ function current<T>(observation: Observation<T> | undefined, from: Derivation): 
 const NAMESPACES = ["account", "chats", "contacts", "groups", "messages"] as const;
 
 type Namespace = (typeof NAMESPACES)[number];
-
-/**
- * One chat's retained messages, as the Client holds them.
- *
- * @remarks
- * Declared here beside {@link ClientAccountState} because these are the
- * friendly Client's own public vocabulary, not Backend adapter contracts.
- */
-export interface ClientChatMessages {
-  readonly chatId: string;
-  /**
-   * Newest first, ties broken by *descending* identifier.
-   *
-   * @remarks
-   * The tie-break matches both stores' page order — `ORDER BY timestamp DESC,
-   * message_id DESC` at `libsql.ts:1308`, `newestFirst` at `memory.ts:57`. The
-   * ascending tie-break `chats.list()` uses is wrong here: it would disagree
-   * with the page boundary at every timestamp collision, so `nextBefore` — the
-   * last row in store order — would not be the last row in this order.
-   */
-  readonly messages: readonly MessageRecord[];
-  /**
-   * Whether the local mirror can still go further back.
-   *
-   * @remarks
-   * `"exhausted"` means only that no older row is *stored*. It never means the
-   * phone has no older history, which is a separate request (ADR-0010).
-   */
-  readonly older: "stored" | "loading" | "exhausted";
-  /** The last read that failed. Cleared by the next success. */
-  readonly error?: unknown;
-}
 
 /**
  * One chat's retained messages as this Client actually stores them.
@@ -327,214 +296,6 @@ interface Tx {
   stopped(): void;
   /** Record that the Runtime has stopped consuming this account. */
   close(frame: Extract<RuntimeDurableFrame, { type: "closed" }>): void;
-}
-
-/** One account's own state: what is durable, what is live, and what it links. */
-export interface ClientAccountState {
-  readonly accountId: string;
-  /** Whether this account can resume from credentials or needs an explicit pair operation. */
-  readonly link?: WhatsAppLinkState;
-  /** When this account was last observed online, as an epoch ms. */
-  readonly lastConnectedAt?: number;
-  /** When it was last observed disconnected or terminal, as an epoch ms. */
-  readonly lastDisconnectedAt?: number;
-  /**
-   * The live connection status, while it is still current.
-   *
-   * @remarks
-   * Absent once the observation or the Account Lease it was made under has
-   * expired, or once the account has moved to another claim. Never restored
-   * from storage: `lastConnectedAt` says when this account was last online,
-   * which is a different claim from being online now (ADR-0020, ADR-0028).
-   */
-  readonly connection?: Status;
-  /** The linked account's own identity, while a session is attached. */
-  readonly identity?: WaIdentity;
-  /**
-   * This Client will never report a change again. Nothing follows it.
-   *
-   * @remarks
-   * Set when the Runtime stopped consuming the account — deliberately or on the
-   * failure that ended it — and also when following itself failed in a way the
-   * Runtime's terminal frame could not describe, such as a mirror read that
-   * failed during gap recovery. Reporting only the first would leave the second
-   * indistinguishable from a quiet account, which is the condition Runtime
-   * Closure exists to make impossible.
-   *
-   * The two are **deliberately not distinguished**, and the response to both is
-   * the same: this Client is finished, so make another one. `await
-   * createWhatsAppClient(runtime)` recovers a follow failure outright, and on a
-   * closed Runtime it resolves against the mirror with `closed` set again — so
-   * an application that simply recreates is correct either way without having
-   * to branch. `error` says why, and is absent when the stop was deliberate.
-   *
-   * Calling {@link WhatsAppClient.close} does *not* set this: the
-   * application asked for that and does not need to be told.
-   */
-  readonly closed: boolean;
-  /**
-   * The failure behind it, absent when the Runtime stopped deliberately.
-   *
-   * @remarks
-   * Handed out by identity rather than copied, so a caller can compare it
-   * against the cause it already holds.
-   */
-  readonly error?: unknown;
-}
-
-/** Options every Client subscription accepts. */
-export interface ClientSubscribeOptions {
-  readonly signal?: AbortSignal;
-}
-
-/**
- * Observe one namespace.
- *
- * @remarks
- * The listener is called after every transition that changed this namespace,
- * with the transition fully committed. It takes no argument deliberately: it
- * reads whatever it needs from the Client, so it can never be handed a value
- * staler than the state a sibling listener would read.
- *
- * The contract is closed, and each clause is a primitive rather than an
- * ordering (ADR-0029):
- *
- * 1. listeners run after the transition is fully committed and may read any
- *    Client state, including re-entrantly;
- * 2. membership is snapshotted before delivery, so subscribing during one takes
- *    effect on the next transition;
- * 3. unsubscribing during a delivery takes effect immediately, including
- *    unsubscribing a *different* listener that has not been reached yet;
- * 4. a throwing listener is surfaced asynchronously, remains subscribed, and
- *    affects neither Client state nor its siblings;
- * 5. every listener in one delivery derives live state from one instant, so a
- *    deadline crossing mid-fanout cannot split one transition into two observed
- *    values.
- */
-export interface ClientNamespace {
-  subscribe(listener: () => void, options?: ClientSubscribeOptions): Unsubscribe;
-}
-
-/** One account's synchronized application state. */
-export interface WhatsAppClient {
-  readonly account: ClientNamespace & {
-    get(): ClientAccountState;
-    pair(input: ClientPairInput, options?: ClientOperationOptions): Promise<WhatsAppOperation>;
-  };
-  readonly chats: ClientNamespace & {
-    /** Newest activity first, then by identifier. */
-    list(): readonly ChatRecord[];
-  };
-  readonly contacts: ClientNamespace & {
-    /** By identifier. */
-    list(): readonly ContactRecord[];
-    /** The contact a native PN or LID address belongs to (ADR-0022). */
-    resolve(nativeId: string): ContactRecord | undefined;
-    /**
-     * What an address is doing right now, while the observation is current.
-     *
-     * @remarks
-     * Never `"unavailable"`: that is not an observation that decays but a
-     * statement that the address is gone, so its subject is removed at once.
-     */
-    presence(nativeId: string): PresenceKind | undefined;
-  };
-  readonly groups: ClientNamespace & {
-    /** By identifier. */
-    list(): readonly GroupRecord[];
-  };
-  readonly operations: {
-    get(operationId: string): Promise<WhatsAppOperation | undefined>;
-    get(operationIds: readonly string[]): Promise<readonly (WhatsAppOperation | undefined)[]>;
-    subscribe(
-      operationId: string,
-      listener: (operation: WhatsAppOperation) => void,
-      options?: ClientSubscribeOptions,
-    ): Unsubscribe;
-  };
-  /**
-   * One chat's saved messages, its live upserts, and how far back it can go.
-   *
-   * @remarks
-   * Nothing here is opened, owned or closed: a chat is read by id and extended
-   * backwards by id. The subscription is namespace-wide, like every other, so a
-   * listener watching one chat wakes when any chat changes — and re-reads an
-   * identical frozen view, which a React consumer bails out of without
-   * rendering.
-   */
-  readonly messages: ClientNamespace & {
-    readonly send: {
-      text(chatId: string, text: string, options?: ClientSendOptions): Promise<WhatsAppOperation>;
-      media(
-        chatId: string,
-        content: MediaOutbound,
-        options?: ClientSendOptions,
-      ): Promise<WhatsAppOperation>;
-    };
-    markRead(
-      refs: readonly MessageRef[],
-      options?: ClientOperationOptions,
-    ): Promise<WhatsAppOperation>;
-    setTyping(
-      chatId: string,
-      on: boolean,
-      options?: ClientOperationOptions,
-    ): Promise<WhatsAppOperation>;
-    requestPhoneHistory(
-      chatId: string,
-      request: ClientPhoneHistoryRequest,
-      options?: ClientOperationOptions,
-    ): Promise<WhatsAppOperation>;
-    /**
-     * What is held for one chat. Never touches storage.
-     *
-     * @remarks
-     * Creates an empty entry when none exists. That is a mutation on a read
-     * path, which is unusual here and permitted because it marks no namespace,
-     * notifies nobody and cannot split a delivery — and required, because a
-     * `useSyncExternalStore` binding on a chat nobody has paged must be handed
-     * a stable object or it re-renders for ever.
-     *
-     * From that moment the chat accumulates its live traffic, so what is
-     * retained grows with the chats an application has read rather than with
-     * the account's traffic. An eviction policy is #121.
-     */
-    get(chatId: string): ClientChatMessages;
-    /**
-     * Read one page further back than what is held.
-     *
-     * @remarks
-     * With nothing held that is the newest page, so this is also how a chat is
-     * first filled. Returns nothing: the result lands as an ordinary transition
-     * and the caller re-reads, exactly as {@link ClientNamespace.subscribe}
-     * already works. Single-flight per chat, and after a failure calling it
-     * again *is* the retry. The page size is the store default and is not a
-     * parameter — an application wanting a hundred calls this four times.
-     *
-     * Re-paging from inside a `messages` subscriber is a real hazard rather
-     * than a style preference: a failed read returns `older` to `"stored"` and
-     * wakes every listener, so "empty and `stored` implies page again" wired to
-     * the notification that a read just failed retries without bound. Page from
-     * a render or an effect, or track `error` and back off.
-     *
-     * A no-op once this Client has stopped following, which covers both
-     * {@link WhatsAppClient.close} and a durable-follow failure. That is
-     * **not** the same condition as `account.get().closed`: a deliberate
-     * Runtime `closed` frame leaves this Client following, so paging still
-     * works against storage after Runtime closure — correct under ADR-0010,
-     * because a stored page never contacts WhatsApp.
-     */
-    older(chatId: string): void;
-  };
-  /**
-   * Release this Client's subscriptions and stop following the Runtime.
-   *
-   * @remarks
-   * Idempotent, and joins. It does not stop an application-owned Runtime or
-   * close an application-owned Backend: each resource is closed by the layer
-   * that created it (ADR-0023).
-   */
-  close(): Promise<void>;
 }
 
 /**
@@ -1146,6 +907,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         });
       },
       pair: createClientPair(source),
+      unlink: createClientUnlink(source),
     },
 
     chats: {

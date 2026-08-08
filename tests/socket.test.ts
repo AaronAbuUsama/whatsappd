@@ -5,7 +5,6 @@ import {
   type BaileysEventMap,
   type WASocket,
 } from "baileys";
-import assert from "node:assert/strict";
 import pino from "pino";
 import { expect, test } from "./_expect.ts";
 import {
@@ -51,9 +50,10 @@ test("fresh companion registration defers full-history until registration comple
   ).toBe(true);
 });
 
-test("openSocket end drains late credential writes and keeps the first rejection", async () => {
+test("logout drains and supersedes credential failures before ordinary end", async () => {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   let socketEnds = 0;
+  let socketLogouts = 0;
   const socket = {
     ev: {
       on(event: string, listener: (...args: unknown[]) => void) {
@@ -62,6 +62,9 @@ test("openSocket end drains late credential writes and keeps the first rejection
     },
     end() {
       socketEnds++;
+    },
+    async logout() {
+      socketLogouts++;
     },
   } as unknown as WASocket;
   const emit = (event: string, ...args: unknown[]): void => {
@@ -96,13 +99,16 @@ test("openSocket end drains late credential writes and keeps the first rejection
 
   emit("creds.update", {});
   await didStartFirst;
-  const ending = conn.end();
-  emit("creds.update", {}); // arrived after end() began draining
+  const loggingOut = conn.logout();
+  emit("creds.update", {}); // arrived after logout() began draining
   releaseFirst();
 
-  await assert.rejects(Promise.resolve(ending), firstFailure);
-  await assert.rejects(Promise.resolve(conn.end()), firstFailure);
+  await loggingOut;
+  const ending = conn.end();
+  await ending;
+  await conn.end();
   expect(writes).toBe(2);
+  expect(socketLogouts).toBe(1);
   expect(socketEnds).toBe(1);
 });
 

@@ -558,6 +558,28 @@ export interface AccountLeaseStore {
   release(lease: AccountLease): Promise<boolean>;
 }
 
+/** One protected raw pairing challenge, never ordinary Runtime or Client state. */
+export interface PairingChallenge {
+  readonly id: string;
+  readonly accountId: string;
+  readonly method: "qr" | "pairing_code";
+  readonly value: string;
+  readonly expiresAt: number;
+}
+
+/**
+ * Short-lived, destructive-read storage for raw QR and pairing-code values.
+ *
+ * @remarks
+ * Publishing a refresh replaces the account's previous challenge. Consumption
+ * is atomic, account-scoped, once-only, and returns nothing at or after expiry.
+ */
+export interface PairingChallengeStore {
+  publish(challenge: PairingChallenge): Promise<void>;
+  consume(accountId: string, challengeId: string): Promise<PairingChallenge | null>;
+  clear(accountId: string, challengeId: string): Promise<void>;
+}
+
 /** Durable media bytes, keyed idempotently by account, message, kind, and content (ADR-0015). */
 export interface MediaStore {
   put(input: {
@@ -584,6 +606,7 @@ export interface WhatsAppBackend {
   readonly credentials: CredentialStore;
   readonly data: WhatsAppDataStore;
   readonly leases: AccountLeaseStore;
+  readonly pairingChallenges: PairingChallengeStore;
   readonly media: MediaStore;
   readonly operations: WhatsAppOperationStore;
 }

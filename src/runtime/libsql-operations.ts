@@ -2,6 +2,16 @@ import type { Row, Transaction } from "@libsql/client";
 import type { LazyLibsqlClient } from "../stores/libsql.ts";
 import { transact } from "./libsql-transaction.ts";
 import {
+  boolean,
+  exactKeys,
+  finiteNumber,
+  integer,
+  object,
+  optionalInteger,
+  parsed,
+  text,
+} from "./operation-row-decode.ts";
+import {
   fanoutOperationListeners,
   normalizeOperationInput,
   normalizeOperationJson,
@@ -20,55 +30,6 @@ import {
 } from "./operations.ts";
 
 const databaseNow = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
-
-function text(value: unknown, label: string): string {
-  if (typeof value !== "string") throw new Error(`invalid libSQL operation ${label}`);
-  return value;
-}
-
-function integer(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value))
-    throw new Error(`invalid libSQL operation ${label}`);
-  return value;
-}
-
-function finiteNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value))
-    throw new Error(`invalid libSQL operation ${label}`);
-  return value;
-}
-
-function optionalInteger(value: unknown, label: string): number | undefined {
-  return value === null || value === undefined ? undefined : integer(value, label);
-}
-
-function parsed(value: unknown, label: string): unknown {
-  try {
-    return JSON.parse(text(value, label));
-  } catch (error) {
-    throw new Error(`invalid libSQL operation ${label}`, { cause: error });
-  }
-}
-
-function object(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new Error(`invalid libSQL operation ${label}`);
-  return value as Record<string, unknown>;
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  label: string,
-): void {
-  if (Object.keys(value).some((key) => !allowed.includes(key)))
-    throw new Error(`invalid libSQL operation ${label}`);
-}
-
-function boolean(value: unknown, label: string): boolean {
-  if (typeof value !== "boolean") throw new Error(`invalid libSQL operation ${label}`);
-  return value;
-}
 
 function messageRef(value: unknown, label: string) {
   const ref = object(value, label);
@@ -250,6 +211,9 @@ function operationInput(value: unknown): WhatsAppOperationInput {
       }
       case "pair":
         return pairOperationInput(input);
+      case "unlink":
+        exactKeys(input, ["type"], "input_json");
+        return normalizeOperationInput({ type: "unlink" });
       default:
         throw new Error("invalid libSQL operation input type");
     }
@@ -467,6 +431,17 @@ export function libsqlOperationStore(
       return submitted.operation;
     },
     get,
+    byIdempotency(accountId, idempotencyKey) {
+      return transact(client, "read", async (transaction) => {
+        const result = await transaction.execute({
+          sql: `SELECT ${columns} FROM wa_operations
+            WHERE account_id = ? AND idempotency_key = ?`,
+          args: [accountId, idempotencyKey],
+        });
+        const row = result.rows[0];
+        return row && operation(row);
+      });
+    },
     list(accountId) {
       return transact(client, "read", async (transaction) => {
         const result = await transaction.execute({

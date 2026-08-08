@@ -12,7 +12,7 @@
  *
  * @packageDocumentation
  */
-import { isOnline, type Status, type WaIdentity } from "../model/status.ts";
+import { isOnline } from "../model/status.ts";
 import type { Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import { firstRejection, settle } from "../outcome.ts";
 import {
@@ -21,174 +21,43 @@ import {
   type AccountLease,
   type AccountLeaseStore,
   type DurableInboundMessage,
-  type RuntimeFrameClient,
-  type CurrentMirrorView,
-  type StoredMessagePage,
-  type StoredMessagePageOptions,
-  type WhatsAppBackend,
   type WhatsAppDurableEvent,
   type RuntimeDurableFrame,
   type RuntimeLiveFrame,
-  type CurrentMirrorSnapshot,
 } from "./contracts.ts";
+import { createOperationExecutor, type WhatsAppOperationInput } from "./operations.ts";
+import { createRuntimeOperationSession, type OperationExecutor } from "./operation-session.ts";
 import {
-  createOperationExecutor,
-  stageMediaOutbound,
-  type MediaOperationSubmission,
-  type OperationExecutor,
-  type WhatsAppOperation,
-  type WhatsAppOperationInput,
-} from "./operations.ts";
-import type { OperationSession } from "./operation-session.ts";
-import {
+  authForPair,
   linkStateOf,
+  publicConnectionStatus,
   productionSessionFactory,
   resumeAuth,
   submitPairOperation,
+  submitUnlinkOperation,
   type RuntimeRegistration,
   type RuntimeSessionFactory,
   type WhatsAppLinkState,
 } from "./lifecycle.ts";
 import { captureMessage, connectionInstant, durableUpdate } from "./runtime-ingest.ts";
-
-/**
- * The part of a live session the runtime uses.
- *
- * @remarks
- * `start` and `stop` are optional so the deterministic test session — which has
- * no socket to open — is usable through the same runtime as the real one.
- */
-export interface RuntimeSession extends OperationSession {
-  readonly status?: Status;
-  subscribe(
-    handlers: WhatsAppSessionHandlers,
-    options?: { readonly signal?: AbortSignal },
-  ): Unsubscribe;
-  start?(): Promise<void>;
-  stop?(): Promise<void>;
-  /**
-   * The linked account's own identity, once this session knows it.
-   *
-   * @remarks
-   * Sampled from whichever session is attached right now rather than retained,
-   * so a runtime that has stopped consuming the account reports no identity at
-   * all — the same distinction {@link WhatsAppClientConnectionState} draws
-   * between an observation and a stored status (ADR-0020). Optional because the
-   * runtime never requires it; a session that cannot answer simply has none.
-   */
-  identity?(): WaIdentity | undefined;
-}
-
-/** Configuration for {@link createWhatsAppRuntime}. */
-export interface WhatsAppRuntimeConfig {
-  /** The account this runtime owns. Every durable record is scoped to it. */
-  readonly accountId: string;
-  /** Where this account's credentials, data, lease, and media live. */
-  readonly backend: WhatsAppBackend;
-  /** Identifies this holder in the account lease. @defaultValue a random UUID */
-  readonly holderId?: string;
-  /** Account-lease TTL, renewed at half this interval. @defaultValue `30_000` */
-  readonly leaseTtlMs?: number;
-  /**
-   * How long a live connection or presence observation stays current.
-   *
-   * @defaultValue `15_000`
-   */
-  readonly freshnessMs?: number;
-  /** Durable operation-attempt TTL. @defaultValue `30_000` */
-  readonly operationAttemptTtlMs?: number;
-}
-
-/** One account's runtime. Create it with {@link createWhatsAppRuntime}. */
-export interface WhatsAppRuntime {
-  readonly accountId: string;
-  /**
-   * Claim the account lease, then open and subscribe to the live session.
-   *
-   * @throws {@link AccountAlreadyClaimedError} when another runtime holds the
-   * account — before WhatsApp is opened.
-   */
-  start(): Promise<void>;
-  /** Stop consuming, close the session, and release the account lease. */
-  stop(): Promise<void>;
-}
-
-/** The raw Runtime seam retained internally for projection and frame tests. */
-export interface InProcessWhatsAppRuntime extends WhatsAppRuntime {
-  /** The account's current Snapshot Window and revision. */
-  snapshot(): Promise<CurrentMirrorSnapshot>;
-  /** One chat's stored messages, newest first. Reads storage, never WhatsApp. */
-  messages(chatId: string, options?: StoredMessagePageOptions): Promise<StoredMessagePage>;
-  /**
-   * Observe the revision-ordered channel: snapshot, patch, and closed.
-   *
-   * @remarks
-   * The client seam; applications use a client. A listener registered after
-   * this runtime has closed is handed the terminal frame and nothing else.
-   */
-  onFrame(listener: (frame: RuntimeDurableFrame) => void): Unsubscribe;
-  /**
-   * Observe the expiring channel: presence and connection. A separate
-   * registration because these carry no revision and stop being true by wall
-   * clock, so nothing can order them against a patch (ADR-0030).
-   */
-  onLive(listener: (frame: RuntimeLiveFrame) => void): Unsubscribe;
-}
-
-/** An account claim as a client may hold it: a copy, never the live lease. */
-export interface ClientClaim {
-  readonly fencingToken: number;
-  readonly expiresAt: number;
-}
-
-/**
- * Everything the friendly client needs from the runtime that produced it.
- *
- * @remarks
- * An internal Module with exactly one production implementation, not an
- * Adapter and not a port: nothing here is replaceable, and every member exists
- * because the alternative would widen a public contract. `read()` is the Data
- * Store's joint transaction, which a client receiving only a
- * {@link WhatsAppRuntime} could otherwise reach only by being handed a
- * {@link WhatsAppBackend} — infrastructure ownership leaking into application
- * state. `frames()` is the same pull loop {@link RuntimeFrameClient.watch} follows,
- * not a second one. `identity()` and `currentClaim()` sample what is attached
- * and held right now, so neither can be retained past the session or lease that
- * made it true (ADR-0030).
- */
-export interface ClientRuntimeSource {
-  frames(signal?: AbortSignal): AsyncIterable<RuntimeDurableFrame>;
-  onLive(listener: (frame: RuntimeLiveFrame, claim: ClientClaim) => void): Unsubscribe;
-  read<T>(fn: (view: CurrentMirrorView) => Promise<T>): Promise<T>;
-  identity(): WaIdentity | undefined;
-  currentClaim(): ClientClaim | undefined;
-  linkState(): WhatsAppLinkState | undefined;
-  submitOperation(input: {
-    readonly id: string;
-    readonly idempotencyKey: string;
-    readonly operation: WhatsAppOperationInput;
-  }): Promise<WhatsAppOperation>;
-  submitPair(input: {
-    readonly id: string;
-    readonly idempotencyKey: string;
-    readonly operation: Extract<WhatsAppOperationInput, { readonly type: "pair" }>;
-  }): Promise<WhatsAppOperation>;
-  submitMediaOperation(input: MediaOperationSubmission): Promise<WhatsAppOperation>;
-  operations(operationIds: readonly string[]): Promise<readonly (WhatsAppOperation | undefined)[]>;
-  onOperation(operationId: string, listener: (operation: WhatsAppOperation) => void): Unsubscribe;
-}
-
-/**
- * The source each runtime this module created registered for its clients.
- *
- * @remarks
- * Weak, and keyed by the runtime itself, so the association costs a runtime
- * nothing once an application drops it — and so a value that merely has a
- * runtime's shape has no source at all, which is what keeps
- * `createWhatsAppClient()` a factory over *this* module's runtimes rather than
- * over a structural type anything can satisfy.
- */
-export const clientSourceFor = new WeakMap<WhatsAppRuntime, ClientRuntimeSource>();
+import { deliver, surface } from "./runtime-delivery.ts";
+import {
+  clientSourceFor,
+  createClientRuntimeSource,
+  type ClientClaim,
+  type InProcessWhatsAppRuntime,
+  type RuntimeSession,
+  type WhatsAppRuntime,
+  type WhatsAppRuntimeConfig,
+} from "./runtime-source.ts";
+export { createRuntimeFrameClient } from "./runtime-frames.ts";
+export type {
+  ClientRuntimeSource,
+  InProcessWhatsAppRuntime,
+  RuntimeSession,
+  WhatsAppRuntime,
+  WhatsAppRuntimeConfig,
+} from "./runtime-source.ts";
 
 /**
  * One registration on one channel — a record, never the callback itself.
@@ -201,83 +70,6 @@ export const clientSourceFor = new WeakMap<WhatsAppRuntime, ClientRuntimeSource>
  */
 interface Registration<Frame> {
   readonly notify: (frame: Frame) => void;
-}
-
-/**
- * Report an observer's failure where nothing downstream can swallow it.
- *
- * @remarks
- * An observer is application code, and a failing one must be able neither to
- * roll back a committed write, nor to disappear without evidence, nor to stop
- * the other observers. Rethrowing asynchronously satisfies the first two and
- * breaks the third: with no `uncaughtException` handler installed — the normal
- * worker — the throw ends the process, so nobody receives the next frame or
- * `closed`, which is the very isolation this is meant to provide. A warning is
- * asynchronous, always printed, observable on `process.on("warning")`, and
- * never fatal. `--no-warnings` silences it, as it silences every warning; that
- * is the operator asking not to be told.
- */
-export const surface = (error: unknown): void => {
-  try {
-    process.emitWarning(
-      error instanceof Error ? error : new Error(String(error), { cause: error }),
-    );
-  } catch {
-    // Describing a failure must not become a second one escaping the fanout:
-    // `String()` throws for a null-prototype object or a hostile
-    // `Symbol.toPrimitive`, and observers that have not run yet would lose a
-    // committed frame to it.
-    process.emitWarning(new Error("an observer failed with a value that cannot be described"));
-  }
-};
-
-/**
- * Call every current member of one listener set, once, in isolation.
- *
- * @remarks
- * The one delivery primitive both the runtime's channels and the client's
- * namespaces are built from, because ADR-0029's rules 2–4 are properties of a
- * *value* — a membership copy and a membership check — and an ordering
- * re-established by hand at each publication site is what stayed defective
- * across all eight review rounds of the retired client:
- *
- * - membership is copied before the first call, so a registration made during
- *   fanout is not visited. Iterating the live `Set` re-enters it — one
- *   publication was measured driving 200,000 deliveries;
- * - membership is rechecked before each call, so unsubscribing *another*
- *   listener during fanout takes effect on the delivery already in flight;
- * - each call is isolated, so one listener — or one value that cannot be
- *   prepared for it — costs one delivery rather than every listener, which
- *   would end a stream silently with no terminal frame. A failing listener
- *   stays subscribed: one dropped for a single bad value never receives
- *   `closed` and simply goes quiet for ever.
- */
-export function fanout<Listener>(
-  listeners: ReadonlySet<Listener>,
-  call: (listener: Listener) => void,
-): void {
-  const receiving = [...listeners];
-  for (const listener of receiving) {
-    if (!listeners.has(listener)) continue;
-    try {
-      call(listener);
-    } catch (error) {
-      surface(error);
-    }
-  }
-}
-
-/** Deliver one frame to a copy of one channel's listeners. */
-function deliver<Frame extends { readonly type: string }>(
-  listeners: ReadonlySet<Registration<Frame>>,
-  frame: Frame,
-): void {
-  fanout(listeners, (listener) => {
-    // Each observer owns its view of mutable JavaScript data, and the copy is
-    // taken per listener so an unclonable frame costs one delivery. Terminal
-    // errors deliberately retain identity so callers can compare causes.
-    listener.notify(frame.type === "closed" ? { ...frame } : structuredClone(frame));
-  });
 }
 
 /**
@@ -336,6 +128,16 @@ export function createWhatsAppRuntimeWithSessionFactory(
    */
   let stopped = false;
   let lease: AccountLease | undefined;
+  /**
+   * The claim a deliberate stop is draining Session work under.
+   *
+   * @remarks
+   * Cleared only after the Session and its supervised event pipeline settle.
+   * Automatic teardown never sets it: after lease loss, a late write must
+   * still fail rather than reaching the mirror under a claim this runtime no
+   * longer owns.
+   */
+  let drainingClaim: AccountLease | undefined;
   let session: RuntimeSession | undefined;
   let unsubscribe: Unsubscribe | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -346,6 +148,30 @@ export function createWhatsAppRuntimeWithSessionFactory(
   let stopping: Promise<void> | undefined;
   let registration: RuntimeRegistration | undefined;
   let checkingRegistration: Promise<RuntimeRegistration> | undefined;
+  let pairingLink: Extract<WhatsAppLinkState, { readonly status: "pairing" }> | undefined;
+  let unlinkingSession: RuntimeSession | undefined;
+  let pairingAttempt:
+    | {
+        readonly operationId: string;
+        readonly resolve: (result: unknown) => void;
+        readonly reject: (error: unknown) => void;
+      }
+    | undefined;
+  const challengeByOperation = new Map<
+    string,
+    {
+      readonly id: string;
+      readonly method: "qr" | "pairing_code";
+      readonly expiresAt: number;
+    }
+  >();
+  const clearPairingChallenges = async (): Promise<void> => {
+    const challenges = Array.from(challengeByOperation.values());
+    challengeByOperation.clear();
+    await Promise.all(
+      challenges.map((challenge) => backend.pairingChallenges.clear(accountId, challenge.id)),
+    );
+  };
   /** A terminal session failure, held until a `stop()` reports it. */
   let failure: { readonly error: unknown } | undefined;
   let terminal: Extract<RuntimeDurableFrame, { type: "closed" }> | undefined;
@@ -418,9 +244,11 @@ export function createWhatsAppRuntimeWithSessionFactory(
    * client update.
    */
   const accept = (event: WhatsAppDurableEvent): Promise<void> => {
-    const claim = lease;
+    const claim = lease ?? drainingClaim;
     // Writing without a claim is exactly what the lease exists to prevent, so
     // an event that outlives its claim fails rather than reaching the mirror.
+    // `drainingClaim` exists only while an explicit stop joins work that was
+    // already inside the Session pipeline before its subscription was removed.
     if (!claim) throw new AccountNotHeldError(accountId, "unclaimed");
     return acceptUnder(claim, event);
   };
@@ -459,16 +287,47 @@ export function createWhatsAppRuntimeWithSessionFactory(
       // Connection truth is only ever this claim's; without one there is
       // nothing a client could treat as current.
       if (!claim) return;
-      if (status.phase === "pairing" && status.pairing.step === "challenge_live")
+      if (status.phase === "pairing" && status.pairing.step === "challenge_live") {
         registration = "unregistered";
-      else if (isOnline(status)) registration = "registered";
+        const attempt = pairingAttempt;
+        const value = status.pairing.qr ?? status.pairing.code;
+        if (attempt && value) {
+          const challengeId = crypto.randomUUID();
+          await backend.pairingChallenges.publish({
+            id: challengeId,
+            accountId,
+            method: status.pairing.method,
+            value,
+            expiresAt: status.pairing.expiresAt,
+          });
+          challengeByOperation.set(attempt.operationId, {
+            id: challengeId,
+            method: status.pairing.method,
+            expiresAt: status.pairing.expiresAt,
+          });
+          pairingLink = {
+            status: "pairing",
+            operationId: attempt.operationId,
+            method: status.pairing.method,
+            challengeId,
+            expiresAt: status.pairing.expiresAt,
+          };
+        }
+      } else if (isOnline(status)) {
+        registration = "registered";
+        pairingLink = undefined;
+        await clearPairingChallenges();
+        const attempt = pairingAttempt;
+        pairingAttempt = undefined;
+        attempt?.resolve({});
+      }
       if (isOnline(status)) operationExecutor?.resume();
       else operationExecutor?.pause();
       const observedAt = Date.now();
       publishLive({
         type: "connection",
         state: {
-          status,
+          status: publicConnectionStatus(status),
           observedAt,
           expiresAt: observedAt + freshnessMs,
           fencingToken: claim.fencingToken,
@@ -525,19 +384,25 @@ export function createWhatsAppRuntimeWithSessionFactory(
     const open = session;
     const running = supervisor;
     const executor = operationExecutor;
+    const pairing = pairingAttempt;
+    const deliberateDrain = claim !== undefined && drainingClaim === claim;
     heartbeat = undefined;
     unsubscribe = undefined;
     lease = undefined;
     session = undefined;
     supervisor = undefined;
     operationExecutor = undefined;
+    pairingAttempt = undefined;
+    pairing?.reject(new AccountNotHeldError(accountId, "stopped", "pairing was stopped"));
 
-    if (timer) clearInterval(timer);
+    if (timer && !deliberateDrain) clearInterval(timer);
     off?.();
-    const [operationOutcome, closeOutcome] = await Promise.all([
-      settle(executor?.stop() ?? Promise.resolve()),
-      settle(Promise.resolve().then(() => open?.stop?.())),
-    ]);
+    const stopOperations = () => settle(executor?.stop() ?? Promise.resolve());
+    const stopSession = () => settle(Promise.resolve().then(() => open?.stop?.()));
+    const [operationOutcome, closeOutcome] =
+      executor?.activeOperationType() === "unlink"
+        ? [await stopOperations(), await stopSession()]
+        : await Promise.all([stopOperations(), stopSession()]);
     // The final disconnection is stamped here rather than from the connection
     // handler, and it has to be: teardown unsubscribes and gives the claim back
     // before the session reaches `disconnected` (`src/machine.ts`), so that
@@ -548,27 +413,43 @@ export function createWhatsAppRuntimeWithSessionFactory(
     // commonest way an account goes offline. `off` is the evidence there was a
     // session at all: a startup that failed before subscribing never connected,
     // so it has no disconnection to record.
+    // Nothing awaited the supervisor while the session ran, so its terminal
+    // failure — a rejected handler, a dead socket — arrives here. It is joined
+    // even when stop() failed.
+    const runOutcome = await settle(running ?? Promise.resolve());
+    if (timer) clearInterval(timer);
+    const renewalOutcome = deliberateDrain
+      ? await settle(renewing ?? Promise.resolve())
+      : undefined;
+    const finalClaim = deliberateDrain ? drainingClaim : (lease ?? claim);
     const stampOutcome =
-      off && claim
+      off && finalClaim
         ? await settle(
-            acceptUnder(claim, {
+            acceptUnder(finalClaim, {
               type: "account_connection",
               kind: "disconnected",
               at: Date.now(),
             }),
           )
         : undefined;
-    // Nothing awaited the supervisor while the session ran, so its terminal
-    // failure — a rejected handler, a dead socket — arrives here. It is joined
-    // even when stop() failed.
-    const runOutcome = await settle(running ?? Promise.resolve());
+    const challengeOutcome = await settle(clearPairingChallenges());
+    lease = undefined;
+    drainingClaim = undefined;
     // A claim outliving a failed close would lock the account out until its TTL
     // expired, so releasing it does not depend on either close outcome.
-    const releaseOutcome = claim ? await settle(backend.leases.release(claim)) : undefined;
+    const releaseOutcome = finalClaim
+      ? await settle(backend.leases.release(finalClaim))
+      : undefined;
     const rejected = firstRejection(
-      [runOutcome, operationOutcome, closeOutcome, stampOutcome, releaseOutcome].filter(
-        (result) => result !== undefined,
-      ),
+      [
+        runOutcome,
+        operationOutcome,
+        closeOutcome,
+        renewalOutcome,
+        stampOutcome,
+        challengeOutcome,
+        releaseOutcome,
+      ].filter((result) => result !== undefined),
     );
     if (rejected) failure ??= { error: rejected.reason };
   }
@@ -605,6 +486,11 @@ export function createWhatsAppRuntimeWithSessionFactory(
   }
 
   async function stop(): Promise<void> {
+    // Only the public, deliberate stop path may finish work that entered the
+    // Session pipeline under the current claim. If automatic teardown already
+    // began because the lease or Session was lost, leaving this unset preserves
+    // the fail-closed guard for every late write.
+    if (!stopping) drainingClaim = lease;
     await halt();
     // Reported once, to whoever stops the runtime — a session that died on its
     // own is not allowed to disappear quietly.
@@ -621,23 +507,27 @@ export function createWhatsAppRuntimeWithSessionFactory(
    * slow backend response from resurrecting a claim that teardown cleared.
    */
   async function renewOnce(): Promise<void> {
-    const held = lease;
-    if (!held || stopped) return;
+    const held = lease ?? drainingClaim;
+    if (!held || (stopped && !drainingClaim)) return;
     let result: Awaited<ReturnType<AccountLeaseStore["renew"]>>;
     try {
       result = await backend.leases.renew(held, leaseTtlMs);
     } catch (error) {
       failure ??= { error };
-      await halt();
+      if (!stopped) await halt();
       return;
     }
     // A stop or a later claim may have cleared/replaced this lease while the
     // backend call was in flight. Its stale result must not resurrect either.
-    if (stopped || lease !== held) return;
-    if (result.renewed) lease = result.lease;
-    else {
-      lease = undefined; // gone; releasing it would evict its new holder
-      await halt();
+    const draining = drainingClaim === held;
+    if ((stopped && !drainingClaim) || (!draining && lease !== held)) return;
+    if (result.renewed) {
+      if (draining) drainingClaim = result.lease;
+      else lease = result.lease;
+    } else {
+      if (draining) drainingClaim = undefined;
+      else lease = undefined; // gone; releasing it would evict its new holder
+      if (!stopped) await halt();
     }
   }
 
@@ -666,6 +556,124 @@ export function createWhatsAppRuntimeWithSessionFactory(
     } finally {
       if (checkingRegistration === check) checkingRegistration = undefined;
     }
+  }
+
+  const requireSession = (): RuntimeSession => {
+    const attached = session;
+    if (!attached) throw new TypeError("runtime has no linked Session");
+    return attached;
+  };
+
+  async function pair(
+    input: Extract<WhatsAppOperationInput, { readonly type: "pair" }>,
+    operationId: string,
+  ): Promise<unknown> {
+    if ((await inspectRegistration()) === "registered" || session)
+      throw new TypeError("runtime session is already linked");
+    if (pairingAttempt) throw new TypeError("runtime is already pairing");
+
+    pairingLink = { status: "pairing", operationId, method: input.method };
+    let resolve!: (result: unknown) => void;
+    let reject!: (error: unknown) => void;
+    const linked = new Promise<unknown>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    pairingAttempt = { operationId, resolve, reject };
+    let opened: RuntimeSession | undefined;
+    try {
+      opened = await sessionFactory.open(backend.credentials, authForPair(input));
+      attach(opened);
+      return linked;
+    } catch (error) {
+      if (pairingAttempt?.operationId === operationId) pairingAttempt = undefined;
+      pairingLink = undefined;
+      if (session === opened) {
+        unsubscribe?.();
+        unsubscribe = undefined;
+        session = undefined;
+        supervisor = undefined;
+      }
+      await opened?.stop?.().catch(() => {});
+      await clearPairingChallenges();
+      throw error;
+    }
+  }
+
+  async function unlink(): Promise<unknown> {
+    const open = requireSession();
+    if ((await inspectRegistration()) !== "registered" || !open.unlink)
+      throw new TypeError("runtime session does not support unlink");
+    unlinkingSession = open;
+    try {
+      await open.unlink();
+    } catch (error) {
+      unlinkingSession = undefined;
+      if (session === open) void halt().catch(() => {});
+      throw error;
+    }
+    const off = unsubscribe;
+    const running = supervisor;
+    unsubscribe = undefined;
+    session = undefined;
+    supervisor = undefined;
+    off?.();
+    const [stopOutcome, runOutcome] = await Promise.all([
+      settle(Promise.resolve().then(() => open.stop?.())),
+      settle(running ?? Promise.resolve()),
+    ]);
+    unlinkingSession = undefined;
+    registration = "unregistered";
+    pairingLink = undefined;
+    await clearPairingChallenges();
+    const observedAt = Date.now();
+    publishLive({
+      type: "connection",
+      state: {
+        status: { phase: "logged_out", reason: "intentional" },
+        observedAt,
+        expiresAt: observedAt + freshnessMs,
+        fencingToken: lease?.fencingToken ?? 0,
+      },
+    });
+    const rejected = firstRejection([stopOutcome, runOutcome]);
+    if (rejected) throw rejected.reason;
+    return {};
+  }
+
+  const operationSession = createRuntimeOperationSession({
+    current: requireSession,
+    async validatePair() {
+      if ((await inspectRegistration()) === "registered" || session)
+        throw new TypeError("runtime session is already linked");
+      if (pairingAttempt) throw new TypeError("runtime is already pairing");
+    },
+    pair,
+    async validateUnlink() {
+      const open = requireSession();
+      if ((await inspectRegistration()) !== "registered" || !open.unlink)
+        throw new TypeError("runtime session does not support unlink");
+    },
+    unlink,
+  });
+
+  function attach(opened: RuntimeSession): void {
+    session = opened;
+    unsubscribe = opened.subscribe(handlers);
+    supervisor = opened.start?.();
+    const ended = (error?: unknown): void => {
+      if (unlinkingSession === opened) return;
+      if (pairingAttempt && session === opened) {
+        const attempt = pairingAttempt;
+        pairingAttempt = undefined;
+        attempt.reject(error ?? new Error("pairing Session ended before linking"));
+      }
+      if (!stopped && session === opened) void halt().catch(() => {});
+    };
+    void supervisor?.then(
+      () => ended(),
+      (error) => ended(error),
+    );
   }
 
   async function open(): Promise<void> {
@@ -698,40 +706,29 @@ export function createWhatsAppRuntimeWithSessionFactory(
 
     registration = await inspectRegistration();
     if (stopped) throw stoppedWhileStarting();
-    if (registration === "unregistered") return;
-
-    const opened = await sessionFactory.open(backend.credentials, resumeAuth());
-    session = opened;
-    // A stop() that ran while the session was opening has already released the
-    // claim, so subscribing now would consume WhatsApp with no claim at all —
-    // possibly alongside the worker that took the account over.
-    if (stopped) throw stoppedWhileStarting();
-
     operationExecutor = createOperationExecutor({
       accountId,
       store: backend.operations,
       media: backend.media,
-      session: opened,
+      session: operationSession,
       attemptTtlMs: operationAttemptTtlMs,
       onError(error) {
         failure ??= { error };
         if (!stopped) void halt().catch(() => {});
       },
     });
+    if (registration === "unregistered") {
+      operationExecutor.resume();
+      return;
+    }
 
-    unsubscribe = opened.subscribe(handlers);
+    const opened = await sessionFactory.open(backend.credentials, resumeAuth());
+    // A stop() that ran while the session was opening has already released the
+    // claim, so subscribing now would consume WhatsApp with no claim at all —
+    // possibly alongside the worker that took the account over.
+    if (stopped) throw stoppedWhileStarting();
+    attach(opened);
     if (opened.status === undefined || isOnline(opened.status)) operationExecutor.resume();
-    // A live session's start() resolves only once the session has ended, so it
-    // is supervised rather than awaited: startup returns when the account is
-    // being consumed, and the session's terminal failure surfaces from stop().
-    // Awaiting it here would hang every caller for the whole session.
-    supervisor = opened.start?.();
-    // A session that ends on its own takes the runtime with it, so a dead
-    // session never keeps holding the account.
-    const ended = (): void => {
-      if (!stopped) void halt().catch(() => {});
-    };
-    void supervisor?.then(ended, ended);
   }
 
   function start(): Promise<void> {
@@ -793,228 +790,61 @@ export function createWhatsAppRuntimeWithSessionFactory(
     },
   };
 
-  clientSourceFor.set(runtime, {
-    // The same coordination `watch()` follows, reached through the same
-    // function: a second subscribe/snapshot/gap/cancellation loop is the
-    // duplication ADR-0030 exists to prevent.
-    frames: (signal) => durableFrames(runtime, signal ? { signal } : undefined),
-    onLive: (listener) =>
-      runtime.onLive((frame) => {
-        const claim = currentClaim();
-        // A live observation is only ever some claim's. Published without one —
-        // as an `unavailable` presence arriving after teardown is — there is
-        // nothing a client could treat as current, so it is not delivered at
-        // all rather than delivered for the client to remember to discard.
-        if (!claim) return;
-        listener(frame, claim);
-      }),
-    read: (fn) => backend.data.read(accountId, fn),
-    // Sampled, never retained: `release()` clears the session, so a runtime
-    // that has stopped consuming the account reports no identity.
-    //
-    // Guarded here rather than at each caller, because this is the seam that
-    // knows the session is application code. A client samples this *between*
-    // committing a transition and announcing it, so a throw would cost the
-    // whole delivery for a change already applied — and its recovery path
-    // samples again, which would lose that too. A session that cannot answer
-    // has no identity to report; that is not a reason to stop reporting.
-    identity: () => {
-      try {
-        return session?.identity?.();
-      } catch (error) {
-        // Reported once. A client samples this on every read that derives live
-        // state, not only per delivery, so a session that fails persistently
-        // would otherwise emit one warning per application read — and a warning
-        // handler that itself reads the account would never terminate.
-        if (!identityFaultReported) {
-          identityFaultReported = true;
-          surface(error);
+  clientSourceFor.set(
+    runtime,
+    createClientRuntimeSource({
+      runtime,
+      backend,
+      currentClaim,
+      identity: () => {
+        try {
+          return session?.identity?.();
+        } catch (error) {
+          if (!identityFaultReported) {
+            identityFaultReported = true;
+            surface(error);
+          }
+          return undefined;
         }
-        return undefined;
-      }
-    },
-    currentClaim,
-    linkState: () => linkStateOf(registration),
-    async submitOperation(input) {
-      const operation = await backend.operations.submit({
-        accountId,
-        id: input.id,
-        idempotencyKey: input.idempotencyKey,
-        operation: input.operation,
-      });
-      setImmediate(() => operationExecutor?.wake());
-      return operation;
-    },
-    async submitPair(input) {
-      return submitPairOperation({
-        accountId,
-        registration: await inspectRegistration(),
-        store: backend.operations,
-        submission: input,
-      });
-    },
-    async submitMediaOperation(input) {
-      const content = await stageMediaOutbound({
-        accountId,
-        operationId: input.idempotencyKey,
-        content: input.content,
-        store: backend.media,
-      });
-      const operation = await backend.operations.submit({
-        accountId,
-        id: input.id,
-        idempotencyKey: input.idempotencyKey,
-        operation: {
-          type: "send",
-          chatId: input.chatId,
-          content,
-          ...(input.options && { options: input.options }),
-        },
-      });
-      setImmediate(() => operationExecutor?.wake());
-      return operation;
-    },
-    operations: (operationIds) => backend.operations.get(accountId, operationIds),
-    onOperation: (operationId, listener) =>
-      backend.operations.subscribe(accountId, operationId, listener),
-  });
+      },
+      linkState: () => linkStateOf(registration, pairingLink),
+      wake: () => setImmediate(() => operationExecutor?.wake()),
+      async submitPair(input) {
+        const operation = await submitPairOperation({
+          accountId,
+          registration: await inspectRegistration(),
+          store: backend.operations,
+          submission: input,
+        });
+        setImmediate(() => operationExecutor?.wake());
+        return operation;
+      },
+      async submitUnlink(input) {
+        const operation = await submitUnlinkOperation({
+          accountId,
+          linked: (await inspectRegistration()) === "registered" && session !== undefined,
+          store: backend.operations,
+          submission: input,
+        });
+        setImmediate(() => operationExecutor?.wake());
+        return operation;
+      },
+      async consumePairingChallenge(operationId) {
+        const metadata = challengeByOperation.get(operationId);
+        if (!metadata) return null;
+        const challenge = await backend.pairingChallenges.consume(accountId, metadata.id);
+        if (challengeByOperation.get(operationId)?.id === metadata.id)
+          challengeByOperation.delete(operationId);
+        return challenge
+          ? {
+              method: challenge.method,
+              value: challenge.value,
+              expiresAt: challenge.expiresAt,
+            }
+          : null;
+      },
+    }),
+  );
 
   return runtime;
-}
-
-/** Distinguishes "the watch was cancelled" from any snapshot a read returns. */
-const CANCELLED = Symbol("cancelled");
-
-/**
- * The two reads {@link durableFrames} follows an account's mirror through.
- *
- * @remarks
- * Deliberately narrower than {@link WhatsAppRuntime}: the coordination below is
- * the whole of this project's frame-following correctness, so it is written
- * once against exactly what it uses and every consumer — the in-process client
- * and the friendly client's private source — is forced through that one
- * implementation rather than re-deriving it.
- */
-interface DurableFrameSource {
-  snapshot(): Promise<CurrentMirrorSnapshot>;
-  onFrame(listener: (frame: RuntimeDurableFrame) => void): Unsubscribe;
-}
-
-/**
- * Follow one account's revision-ordered channel: a current Snapshot Window
- * first, then every contiguous change after it.
- *
- * @remarks
- * Subscribes before the first read, applies only contiguous revisions,
- * replaces state from a fresh snapshot across a gap, makes cancellation
- * awaitable rather than merely observable, and ends on the terminal frame.
- */
-async function* durableFrames(
-  source: DurableFrameSource,
-  options?: { readonly signal?: AbortSignal },
-): AsyncGenerator<RuntimeDurableFrame> {
-  const signal = options?.signal;
-  const queued: RuntimeDurableFrame[] = [];
-  let wake: (() => void) | undefined;
-  let close!: (frame: Extract<RuntimeDurableFrame, { type: "closed" }>) => void;
-  const closed = new Promise<Extract<RuntimeDurableFrame, { type: "closed" }>>((resolve) => {
-    close = resolve;
-  });
-  const push = (frame: RuntimeDurableFrame): void => {
-    queued.push(frame);
-    if (frame.type === "closed") close(frame);
-    wake?.();
-  };
-  // Subscribed before the snapshot is read, so a change committed while it
-  // is being read is buffered rather than lost.
-  const off = source.onFrame(push);
-  let onAbort = (): void => {};
-  // Cancellation has to be awaitable, not just observable: a snapshot read
-  // that never settles would otherwise keep the generator suspended past
-  // the abort, holding its subscription with no way to reach cleanup.
-  const cancelled = new Promise<typeof CANCELLED>((resolve) => {
-    if (signal?.aborted) resolve(CANCELLED);
-    onAbort = (): void => {
-      wake?.();
-      resolve(CANCELLED);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-
-  // The revision the consumer has been brought up to. Patches are applied
-  // only from exactly here (ADR-0011), so it moves with what is yielded
-  // rather than staying at the first snapshot's revision.
-  let applied = -1;
-  const resnapshot = async (): Promise<
-    CurrentMirrorSnapshot | typeof CANCELLED | Extract<RuntimeDurableFrame, { type: "closed" }>
-  > => {
-    const alreadyClosed = queued.find(
-      (frame): frame is Extract<RuntimeDurableFrame, { type: "closed" }> => frame.type === "closed",
-    );
-    if (alreadyClosed) return alreadyClosed;
-    const snapshot = await Promise.race([source.snapshot(), cancelled, closed]);
-    if (snapshot === CANCELLED || "type" in snapshot) return snapshot;
-    applied = snapshot.revision;
-    return snapshot;
-  };
-
-  try {
-    const snapshot = await resnapshot();
-    if (snapshot === CANCELLED || signal?.aborted) return;
-    if ("type" in snapshot) {
-      yield snapshot;
-      return;
-    }
-    yield { type: "snapshot", snapshot };
-    while (!signal?.aborted) {
-      for (const frame of queued.splice(0)) {
-        if (frame.type === "patch") {
-          // Already applied — a repeat, or a change the snapshot carried.
-          if (frame.patch.revision <= applied) continue;
-          // A missing intermediate change cannot be applied over, and
-          // nothing may be silently skipped: replace state with a snapshot.
-          if (frame.patch.fromRevision !== applied) {
-            const fresh = await resnapshot();
-            if (fresh === CANCELLED || signal?.aborted) return;
-            if ("type" in fresh) {
-              yield fresh;
-              return;
-            }
-            yield { type: "snapshot", snapshot: fresh };
-            continue;
-          }
-          applied = frame.patch.revision;
-        }
-        yield frame;
-        // The runtime has stopped consuming the account, so nothing can
-        // follow: end the stream rather than suspending on a wake that will
-        // never come.
-        if (frame.type === "closed") return;
-        if (signal?.aborted) return;
-      }
-      if (queued.length === 0 && !signal?.aborted)
-        await new Promise<void>((resolve) => {
-          wake = resolve;
-        });
-      wake = undefined;
-    }
-  } finally {
-    off();
-    signal?.removeEventListener("abort", onAbort);
-  }
-}
-
-/**
- * Create the client for a runtime living in this process.
- *
- * @param runtime - The runtime to read and follow.
- * @returns An {@link RuntimeFrameClient} over that runtime's mirror.
- */
-export function createRuntimeFrameClient(runtime: InProcessWhatsAppRuntime): RuntimeFrameClient {
-  return {
-    // Straight to the mirror, deliberately independent of any watch: paging is
-    // a read, and nothing about it asks WhatsApp for anything (ADR-0010).
-    messages: (chatId, options) => runtime.messages(chatId, options),
-    watch: (options) => durableFrames(runtime, options),
-  };
 }

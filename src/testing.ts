@@ -66,6 +66,7 @@ export interface RecordedSessionCommands {
     readonly count: number;
     readonly result: { readonly requestId: string };
   }>;
+  readonly unlinks: number;
 }
 
 export interface TestWhatsAppSessionDriver {
@@ -76,6 +77,7 @@ export interface TestWhatsAppSessionDriver {
     | "markRead"
     | "setTyping"
     | "requestHistory"
+    | "unlink"
     | "start"
     | "stop"
     | "identity"
@@ -141,6 +143,7 @@ export function createTestWhatsAppSession(
     readonly count: number;
     readonly result: { readonly requestId: string };
   }> = [];
+  let unlinks = 0;
   const send = async (
     to: string,
     content: Outbound,
@@ -200,8 +203,13 @@ export function createTestWhatsAppSession(
         historyRequests.push({ anchor, count, result });
         return result;
       },
+      async unlink() {
+        unlinks += 1;
+      },
     },
-    commands: { sent, read, typing, historyRequests },
+    get commands() {
+      return { sent, read, typing, historyRequests, unlinks };
+    },
     emit(event) {
       const task = (pipeline = pipeline.then(() => dispatcher.dispatch(event)));
       // Reported to the session's life as well as to the caller: a handler that

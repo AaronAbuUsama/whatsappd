@@ -97,6 +97,8 @@ export interface BaileysConn {
   requestHistory(count: number, ref: MessageRef, timestampMs: number): Promise<string>;
   /** The connected account's own identity (jid/pushName/phone), once the socket is open. */
   identity(): WaIdentity | undefined;
+  /** Ask WhatsApp to remove this companion device and drain credential writes. */
+  logout(): Promise<void>;
   /** Intentional teardown — the resulting close is classified `intentional`. */
   end(): void | Promise<void>;
 }
@@ -388,16 +390,19 @@ export async function openSocketWith(
     });
   });
   let ending: Promise<void> | undefined;
+  const drainCredentialWrites = async (): Promise<void> => {
+    let pending: Promise<void>;
+    do {
+      pending = credentialWrites;
+      await pending;
+    } while (pending !== credentialWrites);
+    if (credentialWriteOutcome.status === "rejected") throw credentialWriteOutcome.reason;
+  };
   const end = (): Promise<void> =>
     (ending ??= (async () => {
       intentional = true;
       void sock.end(undefined);
-      let pending: Promise<void>;
-      do {
-        pending = credentialWrites;
-        await pending;
-      } while (pending !== credentialWrites);
-      if (credentialWriteOutcome.status === "rejected") throw credentialWriteOutcome.reason;
+      await drainCredentialWrites();
     })());
 
   // Media bytes are pulled on demand via this factory — never buffered here.
@@ -523,6 +528,11 @@ export async function openSocketWith(
       const digits = u.id.split(/[:@]/)[0] ?? "";
       const phoneE164 = /^\d+$/.test(digits) ? `+${digits}` : undefined;
       return { jid: u.id, pushName: u.name ?? undefined, phoneE164 };
+    },
+    async logout() {
+      await sock.logout();
+      await drainCredentialWrites().catch(() => {});
+      credentialWriteOutcome = { status: "fulfilled", value: undefined };
     },
     end,
   };

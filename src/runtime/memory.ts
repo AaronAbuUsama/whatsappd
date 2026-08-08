@@ -37,6 +37,8 @@ import {
   type GroupRecord,
   type MediaStore,
   type MessageRecord,
+  type PairingChallenge,
+  type PairingChallengeStore,
   type CurrentMirrorView,
   type StoredMessageCursor,
   type WhatsAppBackend,
@@ -365,6 +367,49 @@ export function memoryMediaStore(): MediaStore {
   };
 }
 
+export interface MemoryPairingChallengeStoreOptions {
+  readonly now?: () => number;
+}
+
+/** A process-local protected challenge Adapter; replacement intentionally loses secrets. */
+export function memoryPairingChallengeStore(
+  options: MemoryPairingChallengeStoreOptions = {},
+): PairingChallengeStore {
+  const now = options.now ?? Date.now;
+  const active = new Map<string, PairingChallenge>();
+  let writes: Promise<void> = Promise.resolve();
+  const serialize = <T>(work: () => T | Promise<T>): Promise<T> => {
+    const result = writes.then(work);
+    writes = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  };
+
+  return {
+    publish(challenge) {
+      return serialize(() => {
+        active.set(challenge.accountId, structuredClone(challenge));
+      });
+    },
+    consume(accountId, challengeId) {
+      return serialize(() => {
+        const challenge = active.get(accountId);
+        if (!challenge || challenge.id !== challengeId) return null;
+        active.delete(accountId);
+        if (challenge.expiresAt <= now()) return null;
+        return structuredClone(challenge);
+      });
+    },
+    clear(accountId, challengeId) {
+      return serialize(() => {
+        if (active.get(accountId)?.id === challengeId) active.delete(accountId);
+      });
+    },
+  };
+}
+
 export interface MemoryOperationStoreOptions {
   readonly clock?: OperationClock;
 }
@@ -472,6 +517,12 @@ export function memoryOperationStore(
       });
     },
     get,
+    async byIdempotency(accountId, idempotencyKey) {
+      await writes;
+      const id = idempotency.get(keyForIdempotency(accountId, idempotencyKey));
+      const operation = id ? records.get(key(accountId, id)) : undefined;
+      return operation && copy(operation);
+    },
     async list(accountId) {
       await writes;
       return [...records.values()]
@@ -640,6 +691,7 @@ export function memoryBackend(options: MemoryOperationStoreOptions = {}): WhatsA
     credentials: memoryStore(),
     data: memoryDataStore(),
     leases: memoryLeaseStore(),
+    pairingChallenges: memoryPairingChallengeStore(),
     media: memoryMediaStore(),
     operations: memoryOperationStore(options),
   };

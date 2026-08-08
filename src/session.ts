@@ -186,6 +186,8 @@ export interface WhatsAppSession {
    * @returns The URL, or `undefined` when none is available.
    */
   profilePictureUrl(jid: string, type?: "image" | "preview"): Promise<string | undefined>;
+  /** Remove this linked companion from WhatsApp and clear this Session's credentials. */
+  unlink(): Promise<void>;
   /**
    * Ask the linked phone for older messages in one chat, going back from the
    * given anchor message. **Fire-and-hope: the phone may never answer.**
@@ -651,6 +653,12 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       if (status.phase !== "online" || !conn)
         throw new Error(`not online (phase: ${status.phase})`);
       return conn.profilePictureUrl(jid, type);
+    },
+    async unlink() {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      await conn.logout();
+      await store.clear();
     },
     async requestHistory(anchor, opts) {
       if (status.phase !== "online" || !conn)

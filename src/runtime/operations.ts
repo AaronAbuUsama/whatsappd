@@ -4,7 +4,8 @@ import type { BinaryInput, MessageRef, Outbound, SendOptions } from "../model/ou
 import type { Unsubscribe } from "../subscription.ts";
 import { bytesOfBinaryInput } from "./binary-input.ts";
 import type { MediaStore } from "./contracts.ts";
-import type { OperationSession } from "./operation-session.ts";
+import type { OperationExecutor, OperationSession } from "./operation-session.ts";
+export { fanoutOperationListeners, notifyOperationListener } from "./operation-listeners.ts";
 
 export interface OperationClock {
   now(): number | Promise<number>;
@@ -68,7 +69,8 @@ export type WhatsAppOperationInput =
       readonly type: "pair";
       readonly method: "pairing_code";
       readonly phoneE164: string;
-    };
+    }
+  | { readonly type: "unlink" };
 
 export type WhatsAppOperationState<Result = unknown> =
   | { readonly status: "queued" }
@@ -109,6 +111,7 @@ export interface WhatsAppOperationStore {
     accountId: string,
     operationIds: readonly string[],
   ): Promise<readonly (WhatsAppOperation | undefined)[]>;
+  byIdempotency(accountId: string, idempotencyKey: string): Promise<WhatsAppOperation | undefined>;
   list(accountId: string): Promise<readonly WhatsAppOperation[]>;
   subscribe(
     accountId: string,
@@ -165,28 +168,6 @@ const FORBIDDEN_OPERATION_KEYS = new Set([
   "stream",
   "buffer",
 ]);
-
-export function notifyOperationListener(
-  listener: (operation: WhatsAppOperation) => void,
-  operation: WhatsAppOperation,
-): void {
-  try {
-    listener(owned(operation));
-  } catch (error) {
-    process.emitWarning(
-      error instanceof Error ? error : new Error("a WhatsApp operation observer failed"),
-    );
-  }
-}
-
-export function fanoutOperationListeners(
-  listeners: ReadonlySet<(operation: WhatsAppOperation) => void>,
-  operation: WhatsAppOperation,
-): void {
-  const receiving = Array.from(listeners);
-  for (const listener of receiving)
-    if (listeners.has(listener)) notifyOperationListener(listener, operation);
-}
 
 function normalizedJson(
   value: unknown,
@@ -296,13 +277,6 @@ export async function awaitOperationSubmission(
   });
 }
 
-export interface OperationExecutor {
-  wake(): void;
-  resume(): void;
-  pause(): void;
-  stop(): Promise<void>;
-}
-
 function mediaOutbound(media: DurableMediaInput, bytes: Uint8Array): Outbound {
   const binary = Buffer.from(bytes);
   switch (media.kind) {
@@ -351,6 +325,7 @@ async function prepareSessionCall(
   media: MediaStore,
   session: OperationSession,
   input: WhatsAppOperationInput,
+  operationIdValue: string,
 ): Promise<() => Promise<unknown>> {
   switch (input.type) {
     case "send": {
@@ -383,7 +358,13 @@ async function prepareSessionCall(
         throw new TypeError("runtime session does not support requestHistory");
       return () => session.requestHistory!(input.anchor, { count: input.count });
     case "pair":
-      throw new TypeError("runtime session does not support pair operations yet");
+      if (!session.pair) throw new TypeError("runtime session does not support pair");
+      await session.validatePair?.();
+      return () => session.pair!(input, operationIdValue);
+    case "unlink":
+      if (!session.unlink) throw new TypeError("runtime session does not support unlink");
+      await session.validateUnlink?.();
+      return () => session.unlink!();
   }
 }
 
@@ -396,10 +377,17 @@ async function executeClaimed(
 ): Promise<void> {
   if (operation.state.status !== "claimed") return;
   const { attemptId } = operation.state;
+  const executionTtlMs = operation.input.type === "pair" ? Math.max(ttlMs, 300_000) : ttlMs;
   let call: () => Promise<unknown>;
   try {
-    call = await prepareSessionCall(operation.accountId, media, session, operation.input);
-    if (!(await store.start(operation.accountId, operation.id, attemptId, ttlMs))) {
+    call = await prepareSessionCall(
+      operation.accountId,
+      media,
+      session,
+      operation.input,
+      operation.id,
+    );
+    if (!(await store.start(operation.accountId, operation.id, attemptId, executionTtlMs))) {
       await store.recoverExpired(operation.accountId);
       return;
     }
@@ -461,6 +449,7 @@ export function createOperationExecutor(input: {
   let active = false;
   let requested = false;
   let recover = false;
+  let executingType: WhatsAppOperationInput["type"] | undefined;
   let release: (() => void) | undefined;
 
   const wait = (): Promise<void> =>
@@ -498,13 +487,19 @@ export function createOperationExecutor(input: {
             await input.store.recoverExpired(input.accountId);
           break;
         }
-        await executeClaimed(input.store, input.media, input.session, operation, ttlMs);
+        executingType = operation.input.type;
+        try {
+          await executeClaimed(input.store, input.media, input.session, operation, ttlMs);
+        } finally {
+          executingType = undefined;
+        }
       }
     }
   })();
   void running.catch((error) => input.onError?.(error));
 
   return {
+    activeOperationType: () => executingType,
     wake() {
       requested = true;
       wakeLoop();

@@ -21,8 +21,38 @@ import {
   runPeerProcess,
   type PeerProcessResult,
 } from "./client-proof.ts";
+import { assertTeardownProofSummary, type TeardownProofSummary } from "./teardown-proof-summary.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+test("the teardown proof summary rejects every incomplete observation clause", () => {
+  const complete: TeardownProofSummary = {
+    stopAttempts: 10,
+    totalStops: 11,
+    unqualifiedStops: 1,
+    stopFailures: 0,
+    inFlightAtStop: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+    stopPendingWhileHeld: 10,
+    syncAcceptances: 10,
+    leaseHeldWhileDraining: 10,
+    leaseFreeAfterStop: 10,
+    challengeProduced: false,
+  };
+  assert.doesNotThrow(() => assertTeardownProofSummary(complete));
+  for (const incomplete of [
+    { ...complete, stopAttempts: 9 },
+    { ...complete, totalStops: 10 },
+    { ...complete, unqualifiedStops: 0 },
+    { ...complete, inFlightAtStop: complete.inFlightAtStop.map(() => 0) },
+    { ...complete, stopFailures: 1 },
+    { ...complete, stopPendingWhileHeld: 9 },
+    { ...complete, syncAcceptances: 9 },
+    { ...complete, leaseHeldWhileDraining: 9 },
+    { ...complete, leaseFreeAfterStop: 9 },
+    { ...complete, challengeProduced: true },
+  ])
+    assert.throws(() => assertTeardownProofSummary(incomplete));
+});
 
 test("resume is derived from observed challenge_live events", () => {
   const resumed = createLinkObservation();
@@ -458,6 +488,7 @@ test("every real-profile harness uses the production allowlist authority and gua
       "live-send-proof.ts",
       "pairing-proof.ts",
       "proof-profile.ts",
+      "teardown-proof.ts",
     ],
     "the mechanical real-profile harness enumeration changed",
   );
