@@ -12,13 +12,21 @@ import {
   libsqlBackend,
   memoryBackend,
   memoryMediaStore,
-  memoryPairingChallengeStore,
   type WhatsAppOperationInput,
 } from "../src/index.ts";
+import { memoryPairingChallengeStore } from "../src/runtime/pairing-challenges.ts";
+import { createWhatsAppRuntimeWithSessionFactory } from "../src/runtime/runtime.ts";
 import { createTestWhatsAppSession, createWhatsAppRuntimeForTesting } from "../src/testing.ts";
 import { memoryStore } from "../src/stores/memory.ts";
+import { runSyntheticPairingChallengeObserverControl } from "./pairing-proof-observer.ts";
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+test("the pairing proof observer counts an isolated synthetic challenge control", () => {
+  const control = runSyntheticPairingChallengeObserverControl();
+  expect(control.kind).toBe("synthetic");
+  expect(control.challengeEventCount >= 1).toBe(true);
+});
 
 async function until(done: () => boolean | Promise<boolean>, turns = 50): Promise<void> {
   for (let turn = 0; turn < turns; turn += 1) {
@@ -304,20 +312,18 @@ test("a null consume cannot erase a challenge refreshed while storage is in flig
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const backend = {
-    ...base,
-    pairingChallenges: {
-      ...base.pairingChallenges,
-      async consume(accountId: string, challengeId: string) {
-        entered();
-        await held;
-        return base.pairingChallenges.consume(accountId, challengeId);
-      },
+  const challengeStore = memoryPairingChallengeStore();
+  const heldChallengeStore = {
+    ...challengeStore,
+    async consume(accountId: string, challengeId: string) {
+      entered();
+      await held;
+      return challengeStore.consume(accountId, challengeId);
     },
   };
   const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntimeForTesting(
-    { accountId: "refresh-during-consume", backend },
+  const runtime = createWhatsAppRuntimeWithSessionFactory(
+    { accountId: "refresh-during-consume", backend: base },
     {
       async registration() {
         return "unregistered";
@@ -326,6 +332,7 @@ test("a null consume cannot erase a challenge refreshed while storage is in flig
         return driver.session;
       },
     },
+    heldChallengeStore,
   );
   await runtime.start();
   const client = await createWhatsAppClient(runtime);

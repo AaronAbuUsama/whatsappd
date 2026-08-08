@@ -43,7 +43,6 @@ import {
 } from "./projection.ts";
 import { libsqlOperationStore } from "./libsql-operations.ts";
 import { transact } from "./libsql-transaction.ts";
-import { memoryPairingChallengeStore } from "./memory.ts";
 import type { OperationClock } from "./operations.ts";
 
 export interface LibsqlBackendOptions {
@@ -1543,7 +1542,6 @@ export function libsqlBackend(options: LibsqlBackendOptions): LibsqlBackend {
     credentials: libsqlCredentialStore(client, options.accountId),
     data: libsqlDataStore(client),
     leases: libsqlLeaseStore(client),
-    pairingChallenges: memoryPairingChallengeStore(),
     media: options.media,
     operations: libsqlOperationStore(client, options.operationClock),
     close,

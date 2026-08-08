@@ -23,10 +23,15 @@ import {
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
-  type Status,
+  memoryBackend,
   type WhatsAppClient,
 } from "../src/index.ts";
+import { createWhatsAppRuntimeForTesting } from "../src/testing.ts";
 import { capturePairingProofRunStart, writePairingProofReceipt } from "./client-proof-receipt.ts";
+import {
+  createPairingChallengeObserver,
+  runSyntheticPairingChallengeObserverControl,
+} from "./pairing-proof-observer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, "..");
@@ -37,18 +42,18 @@ const onlineTimeoutMs = 90_000;
 type Phase = "fresh" | "control" | "linked";
 
 const counts = {
-  fresh: { net: 0, tls: 0 },
-  control: { net: 0, tls: 0 },
-  linked: { net: 0, tls: 0 },
+  fresh: { net: 0 },
+  control: { net: 0 },
+  linked: { net: 0 },
 };
 let phase: Phase = "fresh";
 
-function countSocket(kind: "net" | "tls", socket: Socket | undefined, observed: Phase): void {
+function countSocket(socket: Socket | undefined, observed: Phase): void {
   // Count at creation rather than at connect. A refused non-loopback attempt
   // has no remoteAddress but is still an outbound socket, so waiting for
   // `connect` would make the zero assertion false-green. Counting loopback too
   // is a conservative strengthening of the required non-loopback count.
-  if (socket) counts[observed][kind] += 1;
+  if (socket) counts[observed].net += 1;
 }
 
 async function exerciseNativeNetDiagnostics(): Promise<void> {
@@ -76,19 +81,12 @@ async function exerciseNativeNetDiagnostics(): Promise<void> {
 }
 
 const netChannel = diagnosticsChannel.channel("net.client.socket");
-const tlsChannel = diagnosticsChannel.channel("tls.client.handshake");
 const onNet = (message: unknown): void => {
   const event = message as { readonly socket?: Socket };
-  countSocket("net", event.socket, phase);
-};
-const onTls = (message: unknown): void => {
-  const event = message as { readonly socket?: Socket; readonly tlsSocket?: Socket };
-  countSocket("tls", event.socket ?? event.tlsSocket, phase);
+  countSocket(event.socket, phase);
 };
 netChannel.subscribe(onNet);
-tlsChannel.subscribe(onTls);
 assert.equal(netChannel.hasSubscribers, true);
-assert.equal(tlsChannel.hasSubscribers, true);
 if (process.stdin.isTTY) throw new Error("pairing proof requires closed stdin");
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -139,10 +137,6 @@ async function waitForOnline(client: WhatsAppClient): Promise<void> {
   });
 }
 
-function isChallenge(status: Status | undefined): boolean {
-  return status?.phase === "pairing" && status.pairing.step === "challenge_live";
-}
-
 const freshDirectory = mkdtempSync(path.join(proofRoot, "m4-needs-pairing-"));
 let freshClient: WhatsAppClient | undefined;
 let freshRuntime: ReturnType<typeof createWhatsAppRuntime> | undefined;
@@ -152,6 +146,34 @@ let linkedRuntime: ReturnType<typeof createWhatsAppRuntime> | undefined;
 let linkedBackend: ReturnType<typeof libsqlBackend> | undefined;
 
 try {
+  const syntheticChallengeObserverControl = runSyntheticPairingChallengeObserverControl();
+  assert.equal(syntheticChallengeObserverControl.kind, "synthetic");
+  assert.ok(syntheticChallengeObserverControl.challengeEventCount >= 1);
+
+  const deterministicBackend = memoryBackend();
+  let deterministicOpenCalls = 0;
+  const deterministicRuntime = createWhatsAppRuntimeForTesting(
+    { accountId: "fresh-pairing-proof-control", backend: deterministicBackend },
+    {
+      async registration() {
+        return "unregistered";
+      },
+      async open() {
+        deterministicOpenCalls += 1;
+        throw new Error("the deterministic needs-pairing control must not open a Session");
+      },
+    },
+  );
+  await deterministicRuntime.start();
+  const deterministicClient = await createWhatsAppClient(deterministicRuntime);
+  try {
+    assert.deepEqual(deterministicClient.account.get().link, { status: "needs_pairing" });
+    assert.equal(deterministicOpenCalls, 0);
+  } finally {
+    await deterministicClient.close();
+    await deterministicRuntime.stop();
+  }
+
   const freshMedia = fileMediaStore({ directory: freshDirectory });
   freshBackend = libsqlBackend({
     url: `file:${path.join(freshDirectory, "whatsapp.db")}`,
@@ -168,21 +190,13 @@ try {
   if (process.env.PAIRING_PROOF_CONTROL === "socket") {
     const canary = { remoteAddress: "192.0.2.1" } as Socket;
     netChannel.publish({ socket: canary });
-    tlsChannel.publish({ tlsSocket: canary });
   }
   await delay(observationMs);
   assert.equal(counts.fresh.net, 0);
-  assert.equal(counts.fresh.tls, 0);
 
   phase = "control";
   await exerciseNativeNetDiagnostics();
   assert.ok(counts.control.net > 0);
-  // Node currently exposes no native TLS handshake diagnostic on this build;
-  // publishing the required channel proves its subscription and counter are
-  // live rather than an unobserved or misspelled name.
-  const canary = { remoteAddress: "192.0.2.1" } as Socket;
-  tlsChannel.publish({ tlsSocket: canary });
-  assert.equal(counts.control.tls, 1);
 
   await freshClient.close();
   freshClient = undefined;
@@ -205,21 +219,18 @@ try {
   });
   linkedClient = await createWhatsAppClient(linkedRuntime);
 
-  let challengeEventCount = 0;
-  let challengeWasLive = false;
-  const observeLink = (): void => {
-    const live = isChallenge(linkedClient?.account.get().connection);
-    if (live && !challengeWasLive) challengeEventCount += 1;
-    challengeWasLive = live;
-  };
-  const offLink = linkedClient.account.subscribe(observeLink);
-  observeLink();
+  const challengeObserver = createPairingChallengeObserver(
+    () => linkedClient?.account.get().connection,
+  );
+  const offLink = linkedClient.account.subscribe(() => challengeObserver.observe());
+  challengeObserver.observe();
   const linkedStartedAt = Date.now();
   await linkedRuntime.start();
   await waitForOnline(linkedClient);
   offLink();
 
   const resumeMs = Date.now() - linkedStartedAt;
+  const challengeEventCount = challengeObserver.count();
   const linkMode: "resumed" | "paired" = challengeEventCount === 0 ? "resumed" : "paired";
   assert.equal(challengeEventCount, 0);
   assert.equal(linkMode, "resumed");
@@ -227,7 +238,7 @@ try {
   const pairOperationsBefore = (await linkedBackend.operations.list("android")).filter(
     (operation) => operation.input.type === "pair",
   ).length;
-  const socketsBeforePair = counts.linked.net + counts.linked.tls;
+  const socketsBeforePair = counts.linked.net;
   await assert.rejects(
     linkedClient.account.pair({ method: "qr" }),
     (error: unknown) => error instanceof AccountAlreadyLinkedError,
@@ -237,28 +248,24 @@ try {
     (operation) => operation.input.type === "pair",
   ).length;
   assert.equal(pairOperationsAfter, pairOperationsBefore);
-  assert.equal(counts.linked.net + counts.linked.tls, socketsBeforePair);
+  assert.equal(counts.linked.net, socketsBeforePair);
   assert.equal(linkedClient.account.get().connection?.phase, "online");
 
   const summary = {
     interactive: false,
     freshLinkState: "needs_pairing" as const,
     observationMs,
-    socketsOpenedBeforePair: {
-      net: counts.fresh.net,
-      tls: counts.fresh.tls,
-    },
-    socketCounterControls: {
-      net: counts.control.net,
-      tls: counts.control.tls,
-    },
+    netSocketCountBeforePair: counts.fresh.net,
+    netSocketCounterControlCount: counts.control.net,
+    deterministicOpenCalls,
+    syntheticChallengeObserverControl,
     linked: {
       linkMode,
       resumeMs,
       challengeEventCount,
       challengeProduced: challengeEventCount > 0,
       pairOperationCount: pairOperationsAfter - pairOperationsBefore,
-      secondSocketCount: counts.linked.net + counts.linked.tls - socketsBeforePair,
+      secondSocketCount: counts.linked.net - socketsBeforePair,
       sessionStillOnline: linkedClient.account.get().connection?.phase === "online",
     },
   };
@@ -272,10 +279,13 @@ try {
         interactive: observedFalse(summary.interactive),
         freshLinkState: summary.freshLinkState,
         observationMs: summary.observationMs,
-        netSocketCount: observedZero(summary.socketsOpenedBeforePair.net),
-        tlsSocketCount: observedZero(summary.socketsOpenedBeforePair.tls),
-        netControlCount: summary.socketCounterControls.net,
-        tlsControlCount: summary.socketCounterControls.tls,
+        netSocketCount: observedZero(summary.netSocketCountBeforePair),
+        netControlCount: summary.netSocketCounterControlCount,
+        deterministicOpenCalls: observedZero(summary.deterministicOpenCalls),
+        syntheticChallengeObserverControl: {
+          kind: summary.syntheticChallengeObserverControl.kind,
+          challengeEventCount: summary.syntheticChallengeObserverControl.challengeEventCount,
+        },
         linkMode: observedResumed(summary.linked.linkMode),
         resumeMs: summary.linked.resumeMs,
         challengeEventCount: observedZero(summary.linked.challengeEventCount),
@@ -300,6 +310,5 @@ try {
   await freshRuntime?.stop().catch(() => {});
   await freshBackend?.close().catch(() => {});
   netChannel.unsubscribe(onNet);
-  tlsChannel.unsubscribe(onTls);
   rmSync(freshDirectory, { recursive: true, force: true });
 }

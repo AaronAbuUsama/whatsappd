@@ -1195,7 +1195,6 @@ test("two accounts remain isolated in one backend", async () => {
     credentials: memoryStore(),
     data,
     leases,
-    pairingChallenges: memoryBackend().pairingChallenges,
     media: memoryMediaStore(),
     operations: memoryOperationStore(),
   });
@@ -1722,7 +1721,6 @@ test("a stale holder cannot remove media already accepted by its replacement", a
   const oldBackend: WhatsAppBackend = {
     credentials: memoryStore(),
     leases: fixedLeaseStore(1),
-    pairingChallenges: memoryBackend().pairingChallenges,
     media,
     operations: memoryOperationStore(),
     data: {
@@ -1739,7 +1737,6 @@ test("a stale holder cannot remove media already accepted by its replacement", a
   const replacementBackend: WhatsAppBackend = {
     credentials: memoryStore(),
     leases: fixedLeaseStore(2),
-    pairingChallenges: memoryBackend().pairingChallenges,
     media,
     operations: memoryOperationStore(),
     data,

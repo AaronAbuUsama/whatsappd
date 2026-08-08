@@ -51,6 +51,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "cold-no-live-state",
       "allowlist-unlisted-target-refused",
       "fresh-needs-pairing-no-socket",
+      "linked-challenge-observer-synthetic-control",
       "linked-resume-no-challenge",
       "linked-pair-rejected",
     ]),
@@ -73,6 +74,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
       "recorded-session-command-log",
       "runtime-client-and-diagnostics",
       "client-account-observer",
+      "client-account-observer-synthetic-control",
       "operation-store-and-diagnostics",
     ]),
   ],
@@ -149,6 +151,8 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/tlsSocketCount", field("count")],
   ["/matrix/*/evidence/netControlCount", field("count")],
   ["/matrix/*/evidence/tlsControlCount", field("count")],
+  ["/matrix/*/evidence/deterministicOpenCalls", field("count")],
+  ["/matrix/*/evidence/synthetic", field("boolean")],
   ["/matrix/*/evidence/resumeMs", field("count")],
   ["/matrix/*/evidence/challengeProduced", field("boolean")],
   ["/matrix/*/evidence/pairOperationCount", field("count")],
@@ -297,9 +301,12 @@ export interface PairingProofObservationStore {
     readonly freshLinkState: "needs_pairing";
     readonly observationMs: number;
     readonly netSocketCount: 0;
-    readonly tlsSocketCount: 0;
     readonly netControlCount: number;
-    readonly tlsControlCount: number;
+    readonly deterministicOpenCalls: 0;
+    readonly syntheticChallengeObserverControl: {
+      readonly kind: "synthetic";
+      readonly challengeEventCount: number;
+    };
     readonly linkMode: "resumed";
     readonly resumeMs: number;
     readonly challengeEventCount: 0;
@@ -656,9 +663,10 @@ export function buildPairingProofReceipt(
     summary.freshLinkState !== "needs_pairing" ||
     summary.observationMs < 10_000 ||
     summary.netSocketCount !== 0 ||
-    summary.tlsSocketCount !== 0 ||
     summary.netControlCount < 1 ||
-    summary.tlsControlCount < 1 ||
+    summary.deterministicOpenCalls !== 0 ||
+    summary.syntheticChallengeObserverControl.kind !== "synthetic" ||
+    summary.syntheticChallengeObserverControl.challengeEventCount < 1 ||
     summary.linkMode !== "resumed" ||
     summary.challengeEventCount !== 0 ||
     summary.challengeProduced ||
@@ -688,9 +696,17 @@ export function buildPairingProofReceipt(
             freshLinkState: summary.freshLinkState,
             observationMs: summary.observationMs,
             netSocketCount: summary.netSocketCount,
-            tlsSocketCount: summary.tlsSocketCount,
             netControlCount: summary.netControlCount,
-            tlsControlCount: summary.tlsControlCount,
+            deterministicOpenCalls: summary.deterministicOpenCalls,
+          },
+        },
+        {
+          id: "linked-challenge-observer-synthetic-control",
+          verdict: "observed",
+          captureSite: "client-account-observer-synthetic-control",
+          evidence: {
+            synthetic: true,
+            challengeEventCount: summary.syntheticChallengeObserverControl.challengeEventCount,
           },
         },
         {

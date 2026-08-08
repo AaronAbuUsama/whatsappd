@@ -27,6 +27,7 @@ import {
 } from "./contracts.ts";
 import { createOperationExecutor, type WhatsAppOperationInput } from "./operations.ts";
 import { createRuntimeOperationSession, type OperationExecutor } from "./operation-session.ts";
+import { memoryPairingChallengeStore, type PairingChallengeStore } from "./pairing-challenges.ts";
 import {
   authForPair,
   linkStateOf,
@@ -59,15 +60,6 @@ export type {
   WhatsAppRuntimeConfig,
 } from "./runtime-source.ts";
 
-/**
- * One registration on one channel — a record, never the callback itself.
- *
- * @remarks
- * Unsubscribing and resubscribing the same function during a fanout owes both
- * effects: the old registration ends now, the new one starts next frame. A
- * `Set` keyed by the callback cannot tell them apart, and could not give one
- * subscription per registration to a function registered twice (ADR-0013).
- */
 interface Registration<Frame> {
   readonly notify: (frame: Frame) => void;
 }
@@ -97,13 +89,10 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   return createWhatsAppRuntimeWithSessionFactory(config, productionSessionFactory);
 }
 
-/**
- * Internal construction seam used by the production factory above and the
- * deterministic adapter exported from `whatsappd/testing`.
- */
 export function createWhatsAppRuntimeWithSessionFactory(
   config: WhatsAppRuntimeConfig,
   sessionFactory: RuntimeSessionFactory,
+  pairingChallenges: PairingChallengeStore = memoryPairingChallengeStore(),
 ): WhatsAppRuntime {
   const { accountId, backend } = config;
   const holderId = config.holderId ?? crypto.randomUUID();
@@ -169,7 +158,7 @@ export function createWhatsAppRuntimeWithSessionFactory(
     const challenges = Array.from(challengeByOperation.values());
     challengeByOperation.clear();
     await Promise.all(
-      challenges.map((challenge) => backend.pairingChallenges.clear(accountId, challenge.id)),
+      challenges.map((challenge) => pairingChallenges.clear(accountId, challenge.id)),
     );
   };
   /** A terminal session failure, held until a `stop()` reports it. */
@@ -293,7 +282,7 @@ export function createWhatsAppRuntimeWithSessionFactory(
         const value = status.pairing.qr ?? status.pairing.code;
         if (attempt && value) {
           const challengeId = crypto.randomUUID();
-          await backend.pairingChallenges.publish({
+          await pairingChallenges.publish({
             id: challengeId,
             accountId,
             method: status.pairing.method,
@@ -832,7 +821,7 @@ export function createWhatsAppRuntimeWithSessionFactory(
       async consumePairingChallenge(operationId) {
         const metadata = challengeByOperation.get(operationId);
         if (!metadata) return null;
-        const challenge = await backend.pairingChallenges.consume(accountId, metadata.id);
+        const challenge = await pairingChallenges.consume(accountId, metadata.id);
         if (challengeByOperation.get(operationId)?.id === metadata.id)
           challengeByOperation.delete(operationId);
         return challenge

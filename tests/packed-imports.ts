@@ -33,7 +33,6 @@ const EXPECTED_ROOT_EXPORTS = [
   "ClientOperationOptions",
   "ClientPairInput",
   "ClientSendOptions",
-  "ConsumedPairingChallenge",
   "ContactRecord",
   "ContactUpdate",
   "ConversationSyncBatch",
@@ -77,8 +76,6 @@ const EXPECTED_ROOT_EXPORTS = [
   "OperationClock",
   "OperationIdempotencyConflictError",
   "Outbound",
-  "PairingChallenge",
-  "PairingChallengeStore",
   "PairingError",
   "PairingOperation",
   "PairingState",
@@ -133,7 +130,6 @@ const EXPECTED_ROOT_EXPORTS = [
   "memoryLeaseStore",
   "memoryMediaStore",
   "memoryOperationStore",
-  "memoryPairingChallengeStore",
   "memoryStore",
   "pairingAuth",
   "qrAuth",
@@ -443,6 +439,38 @@ try {
   });
   assert.equal(typecheck.stdout, "", "the README consumer typecheck wrote diagnostics");
   assert.equal(typecheck.stderr, "", "the README consumer typecheck wrote diagnostics");
+  await writeFile(
+    path.join(consumer, "challenge-access.ts"),
+    `import { memoryBackend } from "whatsappd";
+memoryBackend().pairingChallenges.consume("account", "challenge");
+`,
+  );
+  await writeFile(
+    path.join(consumer, "challenge-access-tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "es2023",
+        module: "nodenext",
+        moduleResolution: "nodenext",
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        verbatimModuleSyntax: true,
+      },
+      files: ["challenge-access.ts"],
+    }),
+  );
+  await assert.rejects(
+    execFile(compiler, ["--noEmit", "--project", "challenge-access-tsconfig.json"], {
+      cwd: consumer,
+    }),
+    (error: unknown) => {
+      const diagnostics =
+        error && typeof error === "object" && "stdout" in error ? String(error.stdout) : "";
+      return /TS2339/u.test(diagnostics) && /pairingChallenges/u.test(diagnostics);
+    },
+    "the packed Backend still exposes its raw pairing challenge store",
+  );
 
   const packageJson = JSON.parse(
     await readFile(path.join(consumer, "node_modules/whatsappd/package.json"), "utf8"),
@@ -524,6 +552,17 @@ try {
     "the generated root export clause drifted from the reviewed public surface",
   );
   const rootExportNameSet = new Set(rootExportNames);
+  for (const privatePairingExport of [
+    "ConsumedPairingChallenge",
+    "PairingChallenge",
+    "PairingChallengeStore",
+    "memoryPairingChallengeStore",
+  ])
+    assert.equal(
+      rootExportNameSet.has(privatePairingExport),
+      false,
+      `${privatePairingExport} must not be exported from the package root`,
+    );
   for (const requiredPublicClientExport of [
     "createWhatsAppClient",
     "ClientAccountState",
@@ -714,7 +753,12 @@ try {
       });
       assert.equal(typeof backend.close, "function");
       await backend.close();
-      for (const removed of ["createChannelAdapter", "bindTools", "createInProcessWhatsAppClient"]) {
+      for (const removed of [
+        "createChannelAdapter",
+        "bindTools",
+        "createInProcessWhatsAppClient",
+        "memoryPairingChallengeStore",
+      ]) {
         assert.equal(removed in root, false);
       }
       for (const subpath of ["adapters/eve", "channel", "sidecar", "stores/libsql", "stores/memory", "tools"]) {

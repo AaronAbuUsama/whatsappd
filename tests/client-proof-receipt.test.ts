@@ -197,9 +197,12 @@ function completePairingStore(): PairingProofObservationStore {
       freshLinkState: "needs_pairing",
       observationMs: 10_250,
       netSocketCount: 0,
-      tlsSocketCount: 0,
       netControlCount: 1,
-      tlsControlCount: 1,
+      deterministicOpenCalls: 0,
+      syntheticChallengeObserverControl: {
+        kind: "synthetic",
+        challengeEventCount: 1,
+      },
       linkMode: "resumed",
       resumeMs: 2_500,
       challengeEventCount: 0,
@@ -238,6 +241,23 @@ test("the pairing receipt is head-bound, complete, and schema-sanitized", () => 
     () =>
       buildPairingProofReceipt(
         { ...store, summary: { ...store.summary!, pairOperationCount: 1 as 0 } },
+        current,
+      ),
+    /incomplete/,
+  );
+  assert.throws(
+    () =>
+      buildPairingProofReceipt(
+        {
+          ...store,
+          summary: {
+            ...store.summary!,
+            syntheticChallengeObserverControl: {
+              kind: "synthetic",
+              challengeEventCount: 0,
+            },
+          },
+        },
         current,
       ),
     /incomplete/,

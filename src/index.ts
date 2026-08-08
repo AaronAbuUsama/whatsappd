@@ -55,12 +55,7 @@ export { isTerminal, isOnline, refOf } from "./model/index.ts";
 export { createWhatsAppRuntime } from "./runtime/runtime.ts";
 export type { RuntimeSession, WhatsAppRuntime, WhatsAppRuntimeConfig } from "./runtime/runtime.ts";
 export { AccountAlreadyLinkedError, AccountNotLinkedError } from "./runtime/lifecycle.ts";
-export type {
-  ClientPairInput,
-  ConsumedPairingChallenge,
-  PairingOperation,
-  WhatsAppLinkState,
-} from "./runtime/lifecycle.ts";
+export type { ClientPairInput, PairingOperation, WhatsAppLinkState } from "./runtime/lifecycle.ts";
 export { createWhatsAppClient } from "./runtime/client.ts";
 export type {
   ClientAccountState,
@@ -76,7 +71,6 @@ export {
   memoryLeaseStore,
   memoryMediaStore,
   memoryOperationStore,
-  memoryPairingChallengeStore,
 } from "./runtime/memory.ts";
 export { OperationIdempotencyConflictError } from "./runtime/operations.ts";
 export type {
@@ -118,8 +112,6 @@ export type {
   MirrorAlias,
   MirrorRecord,
   ObservedInstant,
-  PairingChallenge,
-  PairingChallengeStore,
   StoredMessageCursor,
   StoredMessagePage,
   StoredMessagePageOptions,
