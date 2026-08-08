@@ -181,7 +181,12 @@ nothing else.
 
 Logging is separate. The default logger writes to stderr at `warn`; set
 `WA_LOG_LEVEL` to change its level. **The default logger is not redacted.**
-Protocol errors may contain private or identifying values.
+
+Deliberate log calls in this library pass hand-built counts and flags — `qrChars`
+rather than the QR itself. The risk is the two sites that log `{ err }`, where
+the error comes from the socket layer and its shape is not ours to choose. One
+such error was observed carrying the message body, the recipient, and an auth
+token, and serializing all three in full.
 
 If logs will leave the local terminal for a shared or third-party sink, pass a
 `logger` configured for your policy:
