@@ -894,8 +894,8 @@ test("the comparator separates pre-existing coverage loss from uncovered new sou
     headSources,
   });
 
-  assert.deepEqual(comparison.newlyUncoveredPreExisting, ["src/a.ts:1:covered"]);
-  assert.deepEqual(comparison.uncoveredNewSource, ["src/a.ts:1:new feature miss"]);
+  assert.deepEqual(comparison.newlyUncoveredPreExisting, ["src/a.ts:1"]);
+  assert.deepEqual(comparison.uncoveredNewSource, ["src/a.ts:head:4"]);
   assert.equal(comparison.preExistingSourceIdentityCount, 4);
   assert.equal(comparison.headUncoveredSourceIdentityCount, 3);
 

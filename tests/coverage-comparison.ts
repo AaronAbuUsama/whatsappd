@@ -101,25 +101,42 @@ export function parseLcov(text: string): ReadonlyMap<string, FileCoverage> {
   return files;
 }
 
-const sourceLineIdentities = (source: string): readonly string[] => {
-  const occurrences = new Map<string, number>();
-  return source.split("\n").map((line) => {
-    const occurrence = (occurrences.get(line) ?? 0) + 1;
-    occurrences.set(line, occurrence);
-    return `${occurrence}:${line}`;
-  });
-};
-
-const uncoveredSourceIdentities = (
-  file: FileCoverage,
-  source: string | undefined,
-): readonly string[] => {
-  if (source === undefined) return [];
-  const lines = sourceLineIdentities(source);
-  return file.uncoveredLines.flatMap((line) => {
-    const identity = lines[line - 1];
-    return identity === undefined ? [] : [`${file.path}:${identity}`];
-  });
+/**
+ * Map unchanged head lines back to their base line numbers with an exact LCS.
+ *
+ * Text-plus-occurrence identities are not stable: inserting one more `}` or
+ * blank line renumbers every later duplicate and falsely reports old source as
+ * new. The LCS preserves order and gives each unchanged head line the identity
+ * it had at base, while an inserted line has no base identity.
+ */
+const headToBaseLines = (baseSource: string, headSource: string): ReadonlyMap<number, number> => {
+  const base = baseSource.split("\n");
+  const head = headSource.split("\n");
+  const width = head.length + 1;
+  const cells = new Uint32Array((base.length + 1) * width);
+  for (let baseIndex = 1; baseIndex <= base.length; baseIndex++)
+    for (let headIndex = 1; headIndex <= head.length; headIndex++) {
+      const at = baseIndex * width + headIndex;
+      cells[at] =
+        base[baseIndex - 1] === head[headIndex - 1]
+          ? cells[(baseIndex - 1) * width + headIndex - 1]! + 1
+          : Math.max(cells[(baseIndex - 1) * width + headIndex]!, cells[at - 1]!);
+    }
+  const mapped = new Map<number, number>();
+  let baseIndex = base.length;
+  let headIndex = head.length;
+  while (baseIndex > 0 && headIndex > 0) {
+    if (base[baseIndex - 1] === head[headIndex - 1]) {
+      mapped.set(headIndex, baseIndex);
+      baseIndex--;
+      headIndex--;
+    } else if (
+      cells[(baseIndex - 1) * width + headIndex]! >= cells[baseIndex * width + headIndex - 1]!
+    )
+      baseIndex--;
+    else headIndex--;
+  }
+  return mapped;
 };
 
 const metricsOf = (file: FileCoverage): Record<CoverageMetric, number> => ({
@@ -195,16 +212,26 @@ export function compareCoverage(
   if (options.baseSources && options.headSources) {
     for (const [filePath, source] of options.baseSources) {
       if (!keep(filePath)) continue;
-      for (const identity of sourceLineIdentities(source))
-        preExistingSourceIdentities.add(`${filePath}:${identity}`);
+      const baseLines = source.split("\n");
+      for (let line = 1; line <= baseLines.length; line++)
+        preExistingSourceIdentities.add(`${filePath}:${line}`);
       const baseFile = baseByPath.get(filePath);
       if (baseFile)
-        for (const identity of uncoveredSourceIdentities(baseFile, source))
-          baseUncoveredSourceIdentities.add(identity);
+        for (const line of baseFile.uncoveredLines)
+          if (line <= baseLines.length) baseUncoveredSourceIdentities.add(`${filePath}:${line}`);
     }
     for (const headFile of head) {
-      const source = options.headSources.get(headFile.path);
-      for (const identity of uncoveredSourceIdentities(headFile, source)) {
+      const baseSource = options.baseSources.get(headFile.path);
+      const headSource = options.headSources.get(headFile.path);
+      if (headSource === undefined) continue;
+      const mapping =
+        baseSource === undefined
+          ? new Map<number, number>()
+          : headToBaseLines(baseSource, headSource);
+      for (const line of headFile.uncoveredLines) {
+        const baseLine = mapping.get(line);
+        const identity =
+          baseLine === undefined ? `${headFile.path}:head:${line}` : `${headFile.path}:${baseLine}`;
         headUncoveredSourceIdentities.add(identity);
         if (!preExistingSourceIdentities.has(identity)) uncoveredNewSource.push(identity);
       }
