@@ -58,6 +58,20 @@ export interface CurrentRepoState {
   readonly treeClean: boolean;
 }
 
+export function outboundSendLanded(rows: readonly RunAMatrixRow[]): boolean {
+  const outbound = rows.find(({ id }) => id === "outbound-durable-send");
+  if (outbound?.verdict !== "observed") return false;
+  const before = outbound.evidence.sessionSendInvocationsBefore;
+  const after = outbound.evidence.sessionSendInvocationsAfter;
+  return (
+    outbound.evidence.terminalStatus === "succeeded" &&
+    outbound.evidence.authoritativeEchoCount === 1 &&
+    typeof before === "number" &&
+    typeof after === "number" &&
+    after === before + 1
+  );
+}
+
 const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/schemaVersion", field("count")],
   ["/issue", field("count")],
@@ -146,6 +160,13 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/durableDigest/media", field("digest")],
   ["/matrix/*/evidence/distinctPid", field("boolean")],
   ["/matrix/*/evidence/durableDigestEqual", field("boolean")],
+  ["/matrix/*/evidence/componentMatches/chats", field("boolean")],
+  ["/matrix/*/evidence/componentMatches/contacts", field("boolean")],
+  ["/matrix/*/evidence/componentMatches/groups", field("boolean")],
+  ["/matrix/*/evidence/componentMatches/orderedIds", field("boolean")],
+  ["/matrix/*/evidence/componentMatches/media", field("boolean")],
+  ["/matrix/*/evidence/stableProofStateEqual", field("boolean")],
+  ["/matrix/*/evidence/collectionFloorsSatisfied", field("boolean")],
   ["/matrix/*/evidence/credentialIdentityMatchesOriginal", field("boolean")],
   ["/matrix/*/evidence/sessionAttached", field("boolean")],
   ["/matrix/*/evidence/liveSocketResumed", field("boolean")],
@@ -230,7 +251,12 @@ function validateStore(store: RunAProofObservationStore, current: CurrentRepoSta
     replacement.verdict === "observed" &&
     (typeof replacement.evidence.replacementPid !== "number" ||
       replacement.evidence.distinctPid !== true ||
-      replacement.evidence.durableDigestEqual !== true)
+      replacement.evidence.stableProofStateEqual !== true ||
+      replacement.evidence.collectionFloorsSatisfied !== true ||
+      replacement.evidence.credentialIdentityMatchesOriginal !== true ||
+      replacement.evidence.sessionAttached !== true ||
+      replacement.evidence.liveSocketResumed !== false ||
+      replacement.evidence.durableReconstructedWhileNoLive !== true)
   )
     throw new Error("refusing receipt: the replacement observation is incomplete");
 }

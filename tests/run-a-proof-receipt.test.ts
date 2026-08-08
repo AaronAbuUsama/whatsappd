@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   assertRunAReceiptSanitizationDescribesFinalObject,
   buildRunAProofReceipt,
+  outboundSendLanded,
   scanRunAProofReceipt,
   type RunAProofObservationStore,
 } from "./run-a-proof-receipt.ts";
@@ -117,6 +118,15 @@ function completeStore(): RunAProofObservationStore {
           replacementPid: 13,
           distinctPid: true,
           durableDigestEqual: true,
+          componentMatches: {
+            chats: true,
+            contacts: true,
+            groups: true,
+            orderedIds: true,
+            media: true,
+          },
+          stableProofStateEqual: true,
+          collectionFloorsSatisfied: true,
           credentialIdentityMatchesOriginal: true,
           sessionAttached: true,
           liveSocketResumed: false,
@@ -221,6 +231,24 @@ test("Run A can honestly finalize downstream absence after the one send landed",
   assert.deepEqual(
     (receipt.matrix as Array<{ readonly verdict: string }>).map(({ verdict }) => verdict),
     ["observed", "observed", "observed", "observed", "observed", "not_observed", "not_observed"],
+  );
+});
+
+test("CLI send summary is derived from the finalized outbound observation", () => {
+  const store = completeStore();
+  assert.equal(outboundSendLanded(store.rows), true);
+  assert.equal(
+    outboundSendLanded(
+      store.rows.map((row) =>
+        row.id === "outbound-durable-send"
+          ? {
+              ...row,
+              evidence: { ...row.evidence, sessionSendInvocationsAfter: 0 },
+            }
+          : row,
+      ),
+    ),
+    false,
   );
 });
 

@@ -356,7 +356,7 @@ export interface PagingObservation {
   readonly oracleOrderedIdDigest: string;
 }
 
-interface DurableDigest {
+export interface DurableDigest {
   readonly chats: string;
   readonly contacts: string;
   readonly groups: string;
@@ -364,8 +364,26 @@ interface DurableDigest {
   readonly media: string;
 }
 
+export interface DurableSnapshot {
+  readonly digest: DurableDigest;
+  readonly collectionCounts: {
+    readonly chats: number;
+    readonly contacts: number;
+    readonly groups: number;
+  };
+}
+
+export interface DurableComparison {
+  readonly componentMatches: Readonly<Record<keyof DurableDigest, boolean>>;
+  readonly driftedComponents: readonly (keyof DurableDigest)[];
+  readonly stableProofStateEqual: boolean;
+  readonly collectionFloorsSatisfied: boolean;
+  readonly durableReconstructed: boolean;
+}
+
 export interface ReplacementObservation {
   readonly durableDigest: DurableDigest;
+  readonly collectionCounts: DurableSnapshot["collectionCounts"];
   readonly credentialIdentityDigest: string;
   readonly credentialIdentityMatchesOriginal: true;
   readonly sessionAttached: true;
@@ -668,6 +686,50 @@ export async function durableDigest(input: {
   };
 }
 
+export async function durableSnapshot(
+  input: Parameters<typeof durableDigest>[0],
+): Promise<DurableSnapshot> {
+  const collectionCounts = {
+    chats: input.client.chats.list().length,
+    contacts: input.client.contacts.list().length,
+    groups: input.client.groups.list().length,
+  };
+  return {
+    digest: await durableDigest(input),
+    collectionCounts,
+  };
+}
+
+export function compareDurableSnapshots(
+  before: DurableSnapshot,
+  after: DurableSnapshot,
+): DurableComparison {
+  const componentMatches = {
+    chats: before.digest.chats === after.digest.chats,
+    contacts: before.digest.contacts === after.digest.contacts,
+    groups: before.digest.groups === after.digest.groups,
+    orderedIds: before.digest.orderedIds === after.digest.orderedIds,
+    media: before.digest.media === after.digest.media,
+  };
+  const driftedComponents = (
+    Object.entries(componentMatches) as Array<[keyof DurableDigest, boolean]>
+  ).flatMap(([component, matches]) => (matches ? [] : [component]));
+  const stableProofStateEqual = componentMatches.orderedIds && componentMatches.media;
+  const collectionFloorsSatisfied = (["chats", "contacts", "groups"] as const).every(
+    (component) => {
+      const baseline = before.collectionCounts[component];
+      return baseline > 0 && after.collectionCounts[component] >= Math.floor(baseline * 0.9);
+    },
+  );
+  return {
+    componentMatches,
+    driftedComponents,
+    stableProofStateEqual,
+    collectionFloorsSatisfied,
+    durableReconstructed: stableProofStateEqual && collectionFloorsSatisfied,
+  };
+}
+
 /**
  * Run the peer as a separate OS process with a deliberately tiny environment.
  *
@@ -907,7 +969,7 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
       oracle: () => allStoredMessages(backend, "android", chatId),
     });
     proofStage = "cold-durable-digest";
-    const reconstructedDigest = await durableDigest({
+    const reconstructedSnapshot = await durableSnapshot({
       client,
       media,
       accountId: "android",
@@ -921,14 +983,14 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
       replacementCredentialIdentityDigest !== originalCredentialIdentityDigest
     )
       throw new Error("the replacement Session did not resume the original credential identity");
-    const attachedDigest = await durableDigest({
+    const attachedSnapshot = await durableSnapshot({
       client,
       media,
       accountId: "android",
       chatId,
       salt,
     });
-    if (JSON.stringify(attachedDigest) !== JSON.stringify(reconstructedDigest))
+    if (JSON.stringify(attachedSnapshot) !== JSON.stringify(reconstructedSnapshot))
       throw new Error("attaching the replacement Session changed reconstructed durable state");
     if (
       client.account.get().connection !== undefined ||
@@ -936,7 +998,8 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
     )
       throw new Error("the deterministic replacement Session manufactured live socket state");
     return {
-      durableDigest: reconstructedDigest,
+      durableDigest: reconstructedSnapshot.digest,
+      collectionCounts: reconstructedSnapshot.collectionCounts,
       credentialIdentityDigest: replacementCredentialIdentityDigest,
       credentialIdentityMatchesOriginal: true,
       sessionAttached: true,

@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import type { MediaStore, MessageRecord, WhatsAppClient } from "../src/index.ts";
 import { test } from "./_expect.ts";
 import {
+  compareDurableSnapshots,
   createLinkObservation,
   observeInboundDocument,
   observeInboundText,
@@ -159,6 +160,53 @@ test("peer child receives an explicit environment allowlist", async () => {
   assert.equal(result.envProbe?.proofEnvCanaryPresent, false);
   assert.equal(result.envProbe?.nodeTestContextPresent, false);
   assert.deepEqual(result.envProbe?.unexpectedKeys, []);
+});
+
+test("durable replacement accepts live collection drift only when proof-chat state stays exact", () => {
+  const before = {
+    digest: {
+      chats: "1".repeat(64),
+      contacts: "2".repeat(64),
+      groups: "3".repeat(64),
+      orderedIds: "4".repeat(64),
+      media: "5".repeat(64),
+    },
+    collectionCounts: { chats: 63, contacts: 80, groups: 21 },
+  };
+  const collectionDrift = {
+    digest: {
+      ...before.digest,
+      chats: "6".repeat(64),
+      contacts: "7".repeat(64),
+    },
+    collectionCounts: { chats: 64, contacts: 81, groups: 21 },
+  };
+
+  assert.deepEqual(compareDurableSnapshots(before, collectionDrift), {
+    componentMatches: {
+      chats: false,
+      contacts: false,
+      groups: true,
+      orderedIds: true,
+      media: true,
+    },
+    driftedComponents: ["chats", "contacts"],
+    stableProofStateEqual: true,
+    collectionFloorsSatisfied: true,
+    durableReconstructed: true,
+  });
+
+  const proofChatDrift = {
+    ...collectionDrift,
+    digest: { ...collectionDrift.digest, orderedIds: "8".repeat(64) },
+  };
+  assert.equal(compareDurableSnapshots(before, proofChatDrift).durableReconstructed, false);
+
+  const emptyCollections = {
+    ...collectionDrift,
+    collectionCounts: { chats: 0, contacts: 0, groups: 0 },
+  };
+  assert.equal(compareDurableSnapshots(before, emptyCollections).durableReconstructed, false);
 });
 
 test("peer child is killed when the wall-clock timeout expires", async () => {
@@ -554,6 +602,7 @@ test("every real-profile harness uses the production allowlist authority and gua
       "live-send-proof.ts",
       "pairing-proof.ts",
       "proof-profile.ts",
+      "run-a-diagnosis.ts",
       "run-a-proof.ts",
       "teardown-proof.ts",
     ],

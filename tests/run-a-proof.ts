@@ -11,8 +11,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MessageRecord, MessageRef, WhatsAppOperation } from "../src/index.ts";
 import {
+  compareDurableSnapshots,
   credentialIdentityDigest,
-  durableDigest,
+  durableSnapshot,
   observeInboundDocument,
   observeInboundText,
   openProfile,
@@ -22,6 +23,7 @@ import {
 } from "./client-proof.ts";
 import {
   captureRunAProofRunStart,
+  outboundSendLanded,
   writeRunAProofReceipt,
   type RunAMatrixId,
   type RunAMatrixRow,
@@ -126,7 +128,6 @@ async function main(): Promise<void> {
   let subject: OpenProfile | undefined;
   let failedId: RunAMatrixId = "resume-unattended";
   let stage: RunAMatrixRow["evidence"]["stage"] = "subject-open";
-  let sendLanded = false;
   let finalizedRows: readonly RunAMatrixRow[] | undefined;
 
   try {
@@ -244,7 +245,6 @@ async function main(): Promise<void> {
       const operation = await guardedClientSender(subject.client).text(target, body, {
         idempotencyKey,
       });
-      sendLanded = subject.sessionSendInvocations() === sendsBefore + 1;
       knownValues.push(operation.id);
       if (
         operation.state.status !== "failed" &&
@@ -303,7 +303,7 @@ async function main(): Promise<void> {
     failedId = "saved-state";
     stage = "subject-close";
     const salt = randomBytes(16).toString("hex");
-    const durableBeforeReplacement = await durableDigest({
+    const durableBeforeReplacement = await durableSnapshot({
       client: subject.client,
       media: subject.media,
       accountId: "android",
@@ -326,7 +326,7 @@ async function main(): Promise<void> {
       id: "saved-state",
       verdict: "observed",
       captureSite: "subject-client-runtime-backend-close",
-      evidence: { closeOrder, durableDigest: durableBeforeReplacement },
+      evidence: { closeOrder, durableDigest: durableBeforeReplacement.digest },
     });
 
     failedId = "process-replacement";
@@ -340,10 +340,14 @@ async function main(): Promise<void> {
     const replacement = replacementProcess.replacement;
     if (!replacement) throw new Error("replacement child returned no observation");
     stage = "durable-comparison";
-    assert.deepEqual(
-      replacement.durableDigest,
-      durableBeforeReplacement,
-      "replacement reconstructed a different durable digest",
+    const durableComparison = compareDurableSnapshots(durableBeforeReplacement, {
+      digest: replacement.durableDigest,
+      collectionCounts: replacement.collectionCounts,
+    });
+    assert.equal(
+      durableComparison.durableReconstructed,
+      true,
+      "replacement lost stable proof-chat state or fell below durable collection floors",
     );
     rows.push({
       id: "process-replacement",
@@ -352,7 +356,10 @@ async function main(): Promise<void> {
       evidence: {
         replacementPid: replacementProcess.pid,
         distinctPid: replacementProcess.pid !== process.pid,
-        durableDigestEqual: true,
+        durableDigestEqual: durableComparison.driftedComponents.length === 0,
+        componentMatches: durableComparison.componentMatches,
+        stableProofStateEqual: durableComparison.stableProofStateEqual,
+        collectionFloorsSatisfied: durableComparison.collectionFloorsSatisfied,
         credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
         sessionAttached: replacement.sessionAttached,
         liveSocketResumed: replacement.liveSocketResumed,
@@ -389,7 +396,7 @@ async function main(): Promise<void> {
   process.stdout.write(
     `${JSON.stringify({
       receipt: path.relative(root, receipt.file),
-      sendLanded,
+      sendLanded: outboundSendLanded(finalizedRows),
       verdicts: finalizedRows.map(({ id, verdict }) => ({ id, verdict })),
       schemaUnknownFields: receipt.scan.schemaUnknownFields,
       schemaInvalidFields: receipt.scan.schemaInvalidFields,
