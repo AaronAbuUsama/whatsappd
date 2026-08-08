@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "issue": 111,
+  "scope": "Run A exact-head linked Client path",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "run-a-proof-run-start",
+    "gitHead": "9c134a746d70e5ca8637e25697a734e34efa2193",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "treeClean": true,
+    "startedAt": "2026-08-08T12:53:46.028Z",
+    "finalizedAt": "2026-08-08T12:54:13.093Z",
+    "command": "pnpm proof:run-a < /dev/null",
+    "observationStoreSha256": "c2cb056a05e4aaf1014e5fecd6f7e4ea02c7b8dd09bb575d5f3b95e9e82a7b9e"
+  },
+  "matrix": [
+    {
+      "id": "resume-unattended",
+      "verdict": "observed",
+      "captureSite": "subject-runtime-events",
+      "evidence": {
+        "linkMode": "resumed",
+        "challengeEventCount": 0,
+        "challengeProduced": false,
+        "interactive": false,
+        "subjectPid": 51517
+      }
+    },
+    {
+      "id": "inbound-text",
+      "verdict": "observed",
+      "captureSite": "client-live-upsert",
+      "evidence": {
+        "observedVia": "live-upsert",
+        "nonceSha256": "afc21fed40dbf315fd9298334bc55a02432c96219771e4e8e45843a0b2079720",
+        "nonceLength": 32,
+        "chatsList": true,
+        "messagesGet": true,
+        "peerPid": 51639,
+        "peerLinkMode": "resumed"
+      }
+    },
+    {
+      "id": "inbound-document",
+      "verdict": "observed",
+      "captureSite": "client-message-record",
+      "evidence": {
+        "kind": "document",
+        "mediaState": "stored",
+        "byteLength": 256,
+        "byteLengthMatches": true,
+        "peerPid": 51697,
+        "peerLinkMode": "resumed"
+      }
+    },
+    {
+      "id": "attachment-bytes",
+      "verdict": "observed",
+      "captureSite": "client-media-read",
+      "evidence": {
+        "sentSha256": "3ca895afd5b40d5ccfc3499c14395599452bb85f15650d38514dd86d2f3f6f89",
+        "storedSha256": "3ca895afd5b40d5ccfc3499c14395599452bb85f15650d38514dd86d2f3f6f89",
+        "equal": true
+      }
+    },
+    {
+      "id": "outbound-durable-send",
+      "verdict": "observed",
+      "captureSite": "android-client-operation-and-authoritative-echo",
+      "evidence": {
+        "targetKind": "allowlisted-group",
+        "bodySha256": "48d1a16e91532799d399c99db89caa7027a84d4f0aca6119b29637fcca011bc3",
+        "bodyLength": 48,
+        "idempotencyKeySha256": "a5c49318fc127e1d3fd653e274a9b52123bb14ad051dde544571134e3e72cd14",
+        "idempotencyKeyLength": 38,
+        "operationIdSha256": "3d748cda8e7af9f91be69335e61e16ca00119a12b3ac663360a569d32c732546",
+        "operationIdLength": 36,
+        "statusTimeline": ["queued", "claimed", "executing", "succeeded"],
+        "terminalStatus": "succeeded",
+        "messageRefIdSha256": "013ac43367092fd951a6eef9b119ae5a23aa7237b498b7f5f3eae8fe88bfa042",
+        "messageRefIdLength": 22,
+        "messageRefFromMe": true,
+        "messageRefChatMatchesTarget": true,
+        "authoritativeEchoCount": 1,
+        "sessionSendInvocationsBefore": 0,
+        "sessionSendInvocationsAfter": 1
+      }
+    },
+    {
+      "id": "saved-state",
+      "verdict": "observed",
+      "captureSite": "subject-client-runtime-backend-close",
+      "evidence": {
+        "closeOrder": ["client", "runtime", "backend"],
+        "durableDigest": {
+          "chats": "bbb28687a0946a7bb4dbe0cc57109ec2a12b017894d7812b5fde1ad266cdf33b",
+          "contacts": "1015f31f1e49c7bb089d36795a9b280247f998d5453e3d75f9b6e300a4db9524",
+          "groups": "c67becdda15d70f0e86fcd70f9751e751a3ec246f2c8f9a8140054e1e88b9f22",
+          "orderedIds": "4684c4cb2fa855d311dfae57c34db8572ee6fa336c0c0fd931721f9ba6080894",
+          "media": "7f4b7593e9b5b458acc1dbee966bae16c8e32a479a0e10b3822a968e10bd2c3f"
+        }
+      }
+    },
+    {
+      "id": "process-replacement",
+      "verdict": "failed",
+      "captureSite": "run-stage-verdict",
+      "evidence": {
+        "stage": "durable-comparison"
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "freeFormFields": 1,
+    "digestFields": 13,
+    "nonEmpty": true,
+    "floorPassed": true,
+    "knownValueControlCount": 8
+  }
+}
