@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "issue": 109,
+  "scope": "Unattended resume, fresh no-socket classification, and linked pair refusal",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "pairing-proof-run-start",
+    "gitHead": "b459250223d308280bae5ca3452527e95ca14cb5",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "proofHarnessSha256": "d2bbf9076e32dcf85a3eccc0c75a214d85ac6a910365ed38dca79aac88959a9f",
+    "treeClean": true,
+    "startedAt": "2026-08-08T11:40:41.520Z",
+    "finalizedAt": "2026-08-08T11:40:59.678Z",
+    "command": "pnpm proof:pairing < /dev/null"
+  },
+  "matrix": [
+    {
+      "id": "fresh-needs-pairing-no-socket",
+      "verdict": "observed",
+      "captureSite": "runtime-client-and-diagnostics",
+      "evidence": {
+        "interactive": false,
+        "freshLinkState": "needs_pairing",
+        "observationMs": 10250,
+        "netSocketCount": 0,
+        "netControlCount": 1,
+        "deterministicOpenCalls": 0
+      }
+    },
+    {
+      "id": "linked-challenge-observer-synthetic-control",
+      "verdict": "observed",
+      "captureSite": "client-account-observer-synthetic-control",
+      "evidence": {
+        "synthetic": true,
+        "nonChallengeEventCount": 0,
+        "liveChallengeEventCount": 1
+      }
+    },
+    {
+      "id": "linked-resume-no-challenge",
+      "verdict": "observed",
+      "captureSite": "client-account-observer",
+      "evidence": {
+        "linkMode": "resumed",
+        "resumeMs": 7507,
+        "challengeEventCount": 0,
+        "challengeProduced": false
+      }
+    },
+    {
+      "id": "linked-pair-rejected",
+      "verdict": "observed",
+      "captureSite": "operation-store-and-diagnostics",
+      "evidence": {
+        "pairOperationCount": 0,
+        "secondSocketCount": 0,
+        "sessionStillOnline": true
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "knownValueControlCount": 3,
+    "freeFormFields": 1,
+    "digestFields": 1,
+    "nonEmpty": true,
+    "floorPassed": true
+  }
+}
