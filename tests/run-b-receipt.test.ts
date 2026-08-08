@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -9,6 +10,8 @@ import {
   finalizeRunBFailure,
   gatingRows,
   scanRunBReceipt,
+  validateRunBReceiptArtifact,
+  writeRunBReceiptExclusively,
   DERIVED_MATRIX_IDS,
   SOURCE_MATRIX_IDS,
   type RunBMatrixRow,
@@ -198,6 +201,21 @@ test("Run B receipt refuses dishonest provenance and a stale carried-forward row
   );
   assert.throws(() => buildRunBReceipt(store, { gitHead: sha("f"), treeClean: true }), /head/);
   assert.throws(() => buildRunBReceipt({ ...store, finalizedAt: undefined }, current), /finalized/);
+  assert.throws(
+    () =>
+      buildRunBReceipt(
+        {
+          ...store,
+          rows: store.rows.map((row) =>
+            row.id === "runtime-survives-unlink-and-accepts-repair"
+              ? { ...row, evidence: { ...row.evidence, distinctFromPhaseOnePid: false } }
+              : row,
+          ),
+        },
+        current,
+      ),
+    /distinct process/,
+  );
   assert.throws(
     () => buildRunBReceipt({ ...store, rows: store.rows.slice(0, -1) }, current),
     /exactly 8 source rows/,
@@ -544,6 +562,39 @@ test("every source row and every derived row reaches the receipt exactly once", 
   assert.equal(new Set(ids).size, ids.length);
 });
 
+test("the checked-in artifact validator refuses the original over-claim shape", () => {
+  const store = completeStore();
+  const corrected = buildRunBReceipt(store, {
+    gitHead: store.runStart.gitHead,
+    treeClean: true,
+  });
+  const originalOverClaim = {
+    ...corrected,
+    matrix: matrixOf(corrected).filter(
+      ({ id }) => !DERIVED_MATRIX_IDS.includes(id as (typeof DERIVED_MATRIX_IDS)[number]),
+    ),
+  };
+
+  assert.throws(
+    () => validateRunBReceiptArtifact(originalOverClaim, store.knownValues),
+    /every source and derived matrix row exactly once/,
+  );
+  assert.doesNotThrow(() => validateRunBReceiptArtifact(corrected, store.knownValues));
+});
+
+test("the Run B writer uses exclusive creation and never overwrites evidence", () => {
+  const scratch = mkdtempSync(path.join(tmpdir(), "whatsappd-run-b-receipt-"));
+  try {
+    const occupied = path.join(scratch, "receipt.json");
+    writeFileSync(occupied, "sentinel\n");
+
+    assert.throws(() => writeRunBReceiptExclusively(occupied, "replacement\n"), /overwrite/);
+    assert.equal(readFileSync(occupied, "utf8"), "sentinel\n");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
 test("every committed Run B receipt still scans clean and names an honest verdict", () => {
   const directory = path.join(root, ".proof-receipts");
   const names = readdirSync(directory).filter((name) => name.startsWith("issue112-p4.run"));
@@ -555,40 +606,10 @@ test("every committed Run B receipt still scans clean and names an honest verdic
       string,
       unknown
     >;
-    const scan = scanRunBReceipt(receipt, ["15551234567@s.whatsapp.net"]);
-    assert.equal(scan.schemaUnknownFields, 0, `${name} carries an unschema'd field`);
-    assert.equal(scan.schemaInvalidFields, 0, `${name} carries an invalid field`);
-    assert.equal(scan.patternHits, 0, `${name} carries account-shaped material`);
-    assert.equal(scan.knownValueHits, 0, `${name} carries a known value`);
-    assert.ok(scan.floorPassed, `${name} does not clear the skip-proofing floor`);
-
-    for (const row of matrixOf(receipt)) {
-      assert.equal(
-        row.verdict === "not_observed",
-        row.notObservedReason !== undefined,
-        `${name}: row ${row.id} disagrees with its own absence reason`,
-      );
-      // The defect this correction closes: a row claiming more than its own
-      // evidence carries. Each of these reads the sub-clause the clause names.
-      if (row.id === "unlink-logout-preceded-the-clear")
-        assert.equal(
-          row.verdict === "observed",
-          row.evidence.logoutOrderingRetained === true,
-          `${name}: the logout-ordering verdict contradicts its evidence`,
-        );
-      if (row.id === "unlink-preserves-durable-messages")
-        assert.equal(
-          row.verdict === "observed",
-          row.evidence.beforeMessageCountRetained === true,
-          `${name}: a message comparison was claimed without a before-count`,
-        );
-      if (row.id === "pair-restart-recorded-as-a-labelled-reconnect")
-        assert.equal(
-          row.verdict === "observed",
-          row.evidence.restartLabelRetained === true,
-          `${name}: a 515 restart was claimed from a bare reconnect count`,
-        );
-    }
+    assert.doesNotThrow(
+      () => validateRunBReceiptArtifact(receipt, ["15551234567@s.whatsapp.net"]),
+      name,
+    );
   }
 });
 

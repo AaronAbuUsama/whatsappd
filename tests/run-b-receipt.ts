@@ -505,9 +505,12 @@ function validateStore(store: RunBObservationStore, current: CurrentRepoState): 
       repair.evidence.repairReachedSucceeded !== false ||
       repair.evidence.credentialsStillClearedAfterRepair !== true ||
       repair.evidence.coldRuntimeClosed !== false ||
-      repair.evidence.coldBackendReadable !== true
+      repair.evidence.coldBackendReadable !== true ||
+      repair.evidence.distinctFromPhaseOnePid !== true
     )
-      throw new Error("refusing receipt: the repair-and-survive observation is incomplete");
+      throw new Error(
+        "refusing receipt: the repair-and-survive observation is incomplete or not from a distinct process",
+      );
   }
 
   const paired = rows.get("pair-links-through-one-session")!;
@@ -665,6 +668,76 @@ export function assertRunBSanitizationDescribesFinalObject(
   }
 }
 
+/**
+ * Validate a serialized Run B receipt at the checked-in artifact seam.
+ *
+ * This is deliberately stricter than the schema scan. A schema can prove that
+ * every field is typed, but it cannot prove that a required sub-clause row was
+ * omitted. The original over-claim had exactly that shape: eight valid source
+ * rows and no rows naming the three observations the spent run did not retain.
+ */
+export function validateRunBReceiptArtifact(
+  receipt: Record<string, unknown>,
+  knownValues: readonly string[],
+): void {
+  const scan = scanRunBReceipt(receipt, knownValues);
+  if (
+    scan.schemaUnknownFields !== 0 ||
+    scan.schemaInvalidFields !== 0 ||
+    scan.patternHits !== 0 ||
+    scan.knownValueHits !== 0 ||
+    !scan.floorPassed
+  )
+    throw new Error(`refusing Run B artifact: sanitization failed: ${JSON.stringify(scan)}`);
+
+  const matrix = receipt.matrix;
+  if (!Array.isArray(matrix)) throw new Error("refusing Run B artifact: matrix is missing");
+  const rows = matrix as readonly RunBMatrixRow[];
+  const ids = rows.map(({ id }) => id);
+  if (
+    ids.length !== MATRIX_IDS.length ||
+    new Set(ids).size !== MATRIX_IDS.length ||
+    MATRIX_IDS.some((id) => !ids.includes(id))
+  )
+    throw new Error(
+      "refusing Run B artifact: every source and derived matrix row exactly once is required",
+    );
+
+  for (const row of rows) {
+    if ((row.verdict === "not_observed") !== (row.notObservedReason !== undefined))
+      throw new Error(`refusing Run B artifact: row ${row.id} contradicts its absence reason`);
+  }
+
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const restart = byId.get("pair-restart-recorded-as-a-labelled-reconnect")!;
+  if ((restart.verdict === "observed") !== (restart.evidence.restartLabelRetained === true))
+    throw new Error("refusing Run B artifact: a labelled restart was claimed without its label");
+  const logout = byId.get("unlink-logout-preceded-the-clear")!;
+  if ((logout.verdict === "observed") !== (logout.evidence.logoutOrderingRetained === true))
+    throw new Error("refusing Run B artifact: logout ordering contradicts its evidence");
+  const messages = byId.get("unlink-preserves-durable-messages")!;
+  if ((messages.verdict === "observed") !== (messages.evidence.beforeMessageCountRetained === true))
+    throw new Error("refusing Run B artifact: message preservation lacks a before observation");
+
+  const correction = receipt.correction;
+  if (correction !== undefined) {
+    if (typeof correction !== "object" || correction === null)
+      throw new Error("refusing Run B artifact: correction metadata is invalid");
+    const raised = Reflect.get(correction, "raisedRowCount");
+    const lowered = Reflect.get(correction, "loweredRowCount");
+    const added = Reflect.get(correction, "addedRowCount");
+    if (
+      raised !== 0 ||
+      typeof lowered !== "number" ||
+      typeof added !== "number" ||
+      lowered + added < 1
+    )
+      throw new Error("refusing Run B artifact: correction is not strictly claim-narrowing");
+  }
+
+  assertRunBSanitizationDescribesFinalObject(receipt, knownValues);
+}
+
 export interface RunBCorrection {
   readonly reason: RunBCorrectionReason;
   /** sha256 of the exact bytes being replaced, so a correction cannot drift. */
@@ -802,16 +875,20 @@ export function writeRunBReceipt(
     directory,
     `issue112-p4.run${runNumber}-${store.runStart.gitHead.slice(0, 7)}.json`,
   );
+  writeRunBReceiptExclusively(file, formatReceipt(root, receipt));
+  const written = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+  assertRunBSanitizationDescribesFinalObject(written, store.knownValues);
+  return { file, scan: scanRunBReceipt(written, store.knownValues) };
+}
+
+export function writeRunBReceiptExclusively(file: string, formatted: string): void {
   try {
-    writeFileSync(file, formatReceipt(root, receipt), { flag: "wx" });
+    writeFileSync(file, formatted, { flag: "wx" });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST")
       throw new Error(`refusing to overwrite existing receipt ${file}`);
     throw error;
   }
-  const written = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-  assertRunBSanitizationDescribesFinalObject(written, store.knownValues);
-  return { file, scan: scanRunBReceipt(written, store.knownValues) };
 }
 
 const formatReceipt = (root: string, receipt: Record<string, unknown>): string =>
