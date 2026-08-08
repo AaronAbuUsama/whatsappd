@@ -24,7 +24,7 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 // held and the receipt must not quote back. They are absent from a clean
 // receipt, which is the only way their hit count means anything — `origin/master`
 // would be a useless control, because the receipt names that ref legitimately.
-const KNOWN_VALUES = ["15551239876@s.whatsapp.net", "120363000000000000@g.us", ".proof-private"];
+const KNOWN_VALUES = ["15551234567@s.whatsapp.net", "120363042384062365@g.us", ".proof-private"];
 const gitSha = (seed: string): string => "b".repeat(39) + seed;
 
 const store = (

@@ -61,11 +61,14 @@ const log = (message: string): void => {
 /**
  * The planted positive for the `--hidden` control.
  *
- * Synthetic, and deliberately written as one literal rather than assembled from
- * pieces: a value split so the scanner stops matching it is the exact edit that
- * would let a real id survive every check in this mission.
+ * Taken from the repository's checked-in known-synthetic set rather than being
+ * a new literal: this file is scanned by `tests/account-fixture-scan.ts`, and
+ * inventing a fresh account-shaped value here would either fail that gate or
+ * push a value into the allowlist for no reason. Written as one literal — a
+ * value split so the scanner stops matching it is the exact edit that would let
+ * a real id survive every check in this mission.
  */
-const HIDDEN_CONTROL_JID = "15551239876@s.whatsapp.net";
+const HIDDEN_CONTROL_JID = "15551234567@s.whatsapp.net";
 
 interface RunOutcome {
   readonly code: number;
