@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   CANDIDATE_VERSION,
+  ROUND_CEILING,
   captureFinalGatesRunStart,
   writeFinalGatesReceipt,
   type CoverageFileDrop,
@@ -49,6 +50,12 @@ import {
   type Verdict,
 } from "./final-gates-receipt.ts";
 import { compareCoverage } from "./coverage-comparison.ts";
+import { parseLedgerRounds } from "./ledger-rounds.ts";
+import {
+  CHILD_ENV_ALLOWLIST,
+  childEnvironment,
+  forbiddenChildEnvironmentLeaks,
+} from "./child-environment.ts";
 
 const execFile = promisify(execFileCallback);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -82,6 +89,8 @@ interface RunOutcome {
  * Never a pipe: a pipe reports the exit code of the last stage, which is the
  * false-green shape this mission is built around. The output is captured and
  * filtered in-process instead.
+ *
+ * Never `process.env` either — see `CHILD_ENV_ALLOWLIST`.
  */
 const run = async (
   command: string,
@@ -91,7 +100,7 @@ const run = async (
   try {
     const { stdout, stderr } = await execFile(command, [...args], {
       cwd: options.cwd ?? root,
-      env: options.env ?? process.env,
+      env: options.env ?? childEnvironment(process.env),
       maxBuffer: 64 * 1024 * 1024,
     });
     return { code: 0, stdout, stderr };
@@ -388,7 +397,36 @@ try {
     path.join(probeDirectory, "failing.test.ts"),
   ]);
 
+  // The child-environment control, run through the same planted failure the
+  // probe above uses. A child handed NODE_TEST_CONTEXT skips its work and
+  // exits 0; the same child under the constructed allowlist exits non-zero.
+  // Both legs are measured here rather than asserted, because the exact
+  // behaviour is a Node version's, not this repository's.
+  const failingProbe = path.join(probeDirectory, "failing.test.ts");
+  const contaminatedChild = await run(
+    process.execPath,
+    ["--experimental-strip-types", "--test", failingProbe],
+    { env: { ...childEnvironment(process.env), NODE_TEST_CONTEXT: "child-v8" } },
+  );
+  const cleanChild = await run(
+    process.execPath,
+    ["--experimental-strip-types", "--test", failingProbe],
+    { env: childEnvironment({ ...process.env, NODE_TEST_CONTEXT: "child-v8" }) },
+  );
+  // The parent really does carry the variable while the two legs above run, so
+  // the allowlist is excluding something that is actually there.
+  const parentEnvironmentUnderTest = { ...process.env, NODE_TEST_CONTEXT: "child-v8" };
+  const constructedChildEnvironment = childEnvironment(parentEnvironmentUnderTest);
+
   const redProbes: readonly RedProbeObservation[] = [
+    {
+      id: "inherited-node-test-context-makes-a-red-child-green",
+      // Green leg and red leg are inverted from the others on purpose: what is
+      // being proved is that the *contaminated* child is the false green.
+      verdict: contaminatedChild.code === 0 && cleanChild.code !== 0 ? "observed" : "failed",
+      greenExit: contaminatedChild.code,
+      redExit: cleanChild.code,
+    },
     {
       id: "coverage-gate-at-a-raised-floor",
       verdict: realGate.code === 0 && raisedFloor.code !== 0 ? "observed" : "failed",
@@ -538,7 +576,20 @@ try {
   // ------------------------------------------------------------------- process
   log("process integrity");
   const MISSION_PULL_REQUESTS = [116, 120, 125, 128, 129, 131, 147] as const;
-  const pullRequests: PullRequestObservation[] = [];
+  const ledgerText = readFileSync(path.join(root, "docs/client-stack-defect-ledger.md"), "utf8");
+
+  interface PullRequestFacts {
+    readonly verdict: Verdict;
+    readonly headCommit: string;
+    readonly headClaimPresent: boolean;
+    readonly headClaimMatchesACommit: boolean;
+    readonly commitCount: number;
+    readonly reviewCount: number;
+    readonly commentCount: number;
+    readonly distinctCommentAuthorCount: number;
+  }
+  const facts = new Map<number, PullRequestFacts>();
+  const commitsByPullRequest = new Map<number, readonly string[]>();
   for (const number of MISSION_PULL_REQUESTS) {
     const view = await run("gh", [
       "pr",
@@ -548,8 +599,7 @@ try {
       "body,commits,reviews,comments",
     ]);
     if (view.code !== 0) {
-      pullRequests.push({
-        number,
+      facts.set(number, {
         verdict: "not_observed",
         headCommit: "",
         headClaimPresent: false,
@@ -559,6 +609,7 @@ try {
         commentCount: 0,
         distinctCommentAuthorCount: 0,
       });
+      commitsByPullRequest.set(number, []);
       continue;
     }
     const data = JSON.parse(view.stdout) as {
@@ -572,8 +623,8 @@ try {
     const headClaimMatchesACommit = claimed.some((claim) =>
       shas.some((sha) => sha.startsWith(claim) || claim.startsWith(sha.slice(0, 7))),
     );
-    pullRequests.push({
-      number,
+    commitsByPullRequest.set(number, shas);
+    facts.set(number, {
       verdict: "observed",
       headCommit: (shas.at(-1) ?? "").slice(0, 7),
       headClaimPresent: claimed.length > 0,
@@ -585,11 +636,29 @@ try {
     });
   }
 
-  const ledgerText = readFileSync(path.join(root, "docs/client-stack-defect-ledger.md"), "utf8");
-  const roundNumbers = [...ledgerText.matchAll(/^### Round (\d+)/gmu)].map((match) =>
-    Number(match[1]),
+  // The ceiling is a per-PR rule, so rounds are attributed to the PR whose
+  // commits they name rather than maximized over the whole document.
+  const rounds = parseLedgerRounds(ledgerText, commitsByPullRequest, ROUND_CEILING);
+  const roundsFor = new Map(rounds.pullRequests.map((entry) => [entry.number, entry]));
+  const pullRequests: PullRequestObservation[] = MISSION_PULL_REQUESTS.map((number) => {
+    const fact = facts.get(number)!;
+    const round = roundsFor.get(number)!;
+    return {
+      number,
+      ...fact,
+      roundsAttributed: round.roundsAttributed,
+      highestRoundNumber: round.highestRoundNumber,
+      counterRestartsAtOne: round.counterRestartsAtOne,
+      withinCeiling: round.withinCeiling,
+      replanRequired: round.replanRequired,
+      replanRecorded: round.replanRecorded,
+    };
+  });
+
+  const maxRoundsRecorded = rounds.headings.reduce(
+    (highest, { round }) => Math.max(highest, round),
+    0,
   );
-  const maxRoundsRecorded = roundNumbers.length === 0 ? 0 : Math.max(...roundNumbers);
   // The grader's independence is asserted in prose by the ledger and confirmed
   // by the owner; no API field records it, so this is `not_observed` as a
   // machine fact rather than a green box.
@@ -693,6 +762,16 @@ try {
       hiddenFlagWithoutHits: countLines(withoutHidden.stdout),
       hiddenFlagWithHits: countLines(withHidden.stdout),
     },
+    childEnvironment: {
+      allowlistedKeyCount: CHILD_ENV_ALLOWLIST.length,
+      parentKeyCount: Object.keys(parentEnvironmentUnderTest).length,
+      childKeyCount: Object.keys(constructedChildEnvironment).length,
+      forbiddenLeakCount: forbiddenChildEnvironmentLeaks(constructedChildEnvironment).length,
+      parentCarriedNodeTestContext: parentEnvironmentUnderTest.NODE_TEST_CONTEXT !== undefined,
+      childCarriedNodeTestContext: constructedChildEnvironment.NODE_TEST_CONTEXT !== undefined,
+      contaminatedChildExit: contaminatedChild.code,
+      cleanChildExit: cleanChild.code,
+    },
     proofPrivate: {
       trackedFileCount: proofPrivateTracked,
       ignored: proofPrivateIgnored,
@@ -712,6 +791,13 @@ try {
       reviewerSubstitutionRecorded: /substitution recorded on PR #116/u.test(ledgerText),
       ownerConfirmationRecorded: /confirmed by the\s+repository owner/u.test(ledgerText),
       independentGraderVerdict,
+      classCount: rounds.classCount,
+      classSectionCount: rounds.classSectionCount,
+      unattributedRoundCount: rounds.unattributedCommits.length,
+      attributedRoundCount: rounds.pullRequests.reduce(
+        (sum, entry) => sum + entry.roundsAttributed,
+        0,
+      ),
     },
   });
 

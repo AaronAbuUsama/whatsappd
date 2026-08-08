@@ -62,6 +62,7 @@ export const RED_PROBE_IDS = [
   "test-runner-reports-a-planted-failure",
   "coverage-comparator-has-direction",
   "coverage-comparator-refuses-an-empty-corpus",
+  "inherited-node-test-context-makes-a-red-child-green",
 ] as const;
 
 export type TrapId = (typeof TRAP_IDS)[number];
@@ -168,6 +169,27 @@ export interface RedProbeObservation {
   readonly redExit: number;
 }
 
+/**
+ * The environment this proof handed its spawned children.
+ *
+ * Children are launched with an explicit allowlist rather than a spread of
+ * `process.env`. `NODE_TEST_CONTEXT` is the concrete hazard — a child launched
+ * under `node --test` with it set skips its work and exits 0 — so the receipt
+ * records that the parent held it, that the child did not, and that a child
+ * given it really does go green on a planted failure.
+ */
+export interface ChildEnvironmentObservation {
+  readonly allowlistedKeyCount: number;
+  readonly parentKeyCount: number;
+  readonly childKeyCount: number;
+  readonly forbiddenLeakCount: number;
+  /** The control: the parent really did carry the variable being excluded. */
+  readonly parentCarriedNodeTestContext: boolean;
+  readonly childCarriedNodeTestContext: boolean;
+  readonly contaminatedChildExit: number;
+  readonly cleanChildExit: number;
+}
+
 export interface LeakScanObservation {
   readonly corpusFileCount: number;
   readonly baseMatchValueCount: number;
@@ -208,6 +230,20 @@ export interface PullRequestObservation {
   readonly reviewCount: number;
   readonly commentCount: number;
   readonly distinctCommentAuthorCount: number;
+  /**
+   * The four-round ceiling, evaluated for this pull request.
+   *
+   * The contract is per PR: the numeric counter restarts at 1 for each one
+   * while the class history does not reset. A single global maximum over the
+   * whole ledger cannot see that rule — it cannot tell a counter that restarted
+   * from one that carried over, which is the PR #93/#94 failure itself.
+   */
+  readonly roundsAttributed: number;
+  readonly highestRoundNumber: number;
+  readonly counterRestartsAtOne: boolean;
+  readonly withinCeiling: boolean;
+  readonly replanRequired: boolean;
+  readonly replanRecorded: boolean;
 }
 
 export interface LedgerObservation {
@@ -219,6 +255,19 @@ export interface LedgerObservation {
   readonly reviewerSubstitutionRecorded: boolean;
   readonly ownerConfirmationRecorded: boolean;
   readonly independentGraderVerdict: Verdict;
+  /**
+   * The class history, which survives every per-PR counter restart.
+   *
+   * One shared `## Classes` section holding a non-empty class list is what
+   * "does not reset" means mechanically. A second section would be a per-PR
+   * class history — the reset the contract forbids — so the count is asserted
+   * rather than the prose alone.
+   */
+  readonly classCount: number;
+  readonly classSectionCount: number;
+  /** A round heading belonging to no mission PR is an unrecorded review loop. */
+  readonly unattributedRoundCount: number;
+  readonly attributedRoundCount: number;
 }
 
 export interface FinalGatesObservationStore {
@@ -235,6 +284,7 @@ export interface FinalGatesObservationStore {
   readonly duplicationCeilingHundredthsOfPercent: number;
   readonly cloneCount: number;
   readonly leakScan: LeakScanObservation;
+  readonly childEnvironment: ChildEnvironmentObservation;
   readonly proofPrivate: ProofPrivateObservation;
   readonly profiles: readonly ProfileObservation[];
   readonly pullRequests: readonly PullRequestObservation[];
@@ -371,6 +421,17 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/safety/leakScan/hiddenFlagWithHits", field("count")],
   ["/safety/leakScan/hiddenFlagIsLoadBearing", field("boolean")],
 
+  ["/safety/childEnvironment/captureSite", field("enum", ["constructed-child-environment"])],
+  ["/safety/childEnvironment/allowlistedKeyCount", field("count")],
+  ["/safety/childEnvironment/parentKeyCount", field("count")],
+  ["/safety/childEnvironment/childKeyCount", field("count")],
+  ["/safety/childEnvironment/forbiddenLeakCount", field("count")],
+  ["/safety/childEnvironment/parentCarriedNodeTestContext", field("boolean")],
+  ["/safety/childEnvironment/childCarriedNodeTestContext", field("boolean")],
+  ["/safety/childEnvironment/contaminatedChildExit", field("count")],
+  ["/safety/childEnvironment/cleanChildExit", field("count")],
+  ["/safety/childEnvironment/childIsNarrowerThanParent", field("boolean")],
+
   ["/safety/proofPrivate/captureSite", field("enum", ["git-ls-files-and-check-ignore"])],
   ["/safety/proofPrivate/trackedFileCount", field("count")],
   ["/safety/proofPrivate/ignored", field("boolean")],
@@ -399,6 +460,12 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/process/pullRequests/*/reviewCount", field("count")],
   ["/process/pullRequests/*/commentCount", field("count")],
   ["/process/pullRequests/*/distinctCommentAuthorCount", field("count")],
+  ["/process/pullRequests/*/roundsAttributed", field("count")],
+  ["/process/pullRequests/*/highestRoundNumber", field("count")],
+  ["/process/pullRequests/*/counterRestartsAtOne", field("boolean")],
+  ["/process/pullRequests/*/withinCeiling", field("boolean")],
+  ["/process/pullRequests/*/replanRequired", field("boolean")],
+  ["/process/pullRequests/*/replanRecorded", field("boolean")],
 
   ["/process/ledger/captureSite", field("enum", ["defect-ledger-document"])],
   ["/process/ledger/maxRoundsRecorded", field("count")],
@@ -408,6 +475,10 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/process/ledger/classHistoryDoesNotReset", field("boolean")],
   ["/process/ledger/reviewerSubstitutionRecorded", field("boolean")],
   ["/process/ledger/ownerConfirmationRecorded", field("boolean")],
+  ["/process/ledger/classCount", field("count")],
+  ["/process/ledger/classSectionCount", field("count")],
+  ["/process/ledger/unattributedRoundCount", field("count")],
+  ["/process/ledger/attributedRoundCount", field("count")],
   [
     "/process/ledger/independentGraderVerdict",
     field("enum", ["observed", "not_observed", "failed"]),
@@ -688,6 +759,31 @@ export function validateFinalGatesStore(
   if (leak.hiddenFlagWithoutHits !== 0 || leak.hiddenFlagWithHits === 0)
     throw new Error("refusing receipt: --hidden was not shown to be load-bearing");
 
+  const child = store.childEnvironment;
+  if (child.forbiddenLeakCount !== 0)
+    throw new Error("refusing receipt: a forbidden variable reached the child environment");
+  if (child.childCarriedNodeTestContext)
+    throw new Error("refusing receipt: the child environment carries NODE_TEST_CONTEXT");
+  if (child.childKeyCount === 0)
+    throw new Error("refusing receipt: the child environment is empty, so it was never built");
+  if (child.childKeyCount >= child.parentKeyCount)
+    throw new Error(
+      "refusing receipt: the child environment is not narrower than the parent's, so it is not an allowlist",
+    );
+  // The control that makes the exclusion mean something. Without it, "the
+  // child did not carry NODE_TEST_CONTEXT" is satisfied by a parent that never
+  // had it — an absence proving nothing, on a machine where nothing set it.
+  if (!child.parentCarriedNodeTestContext)
+    throw new Error(
+      "refusing receipt: the parent never carried NODE_TEST_CONTEXT, so excluding it proves nothing",
+    );
+  // And the planted positive: a child that IS given the variable must go green
+  // on a failure, or the contamination this guards against is not real here.
+  if (child.contaminatedChildExit !== 0 || child.cleanChildExit === 0)
+    throw new Error(
+      "refusing receipt: the NODE_TEST_CONTEXT contamination control did not reproduce",
+    );
+
   const priv = store.proofPrivate;
   if (priv.trackedFileCount !== 0) throw new Error("refusing receipt: .proof-private is tracked");
   if (!priv.ignored) throw new Error("refusing receipt: .proof-private is not ignored");
@@ -728,6 +824,39 @@ export function validateFinalGatesStore(
   if (!ledger.classHistoryDoesNotReset)
     throw new Error(
       "refusing receipt: the ledger does not state that class history survives a restart",
+    );
+
+  // The ceiling is per PR, so it is evaluated per PR. A global maximum cannot
+  // distinguish a counter that restarted from one that carried over — the
+  // PR #93/#94 failure — and lets one PR's replan satisfy every other's.
+  for (const pr of store.pullRequests.filter(({ verdict }) => verdict === "observed")) {
+    if (!pr.withinCeiling || pr.highestRoundNumber > ledger.roundCeiling)
+      throw new Error(`refusing receipt: PR #${pr.number} exceeded the four-round ceiling`);
+    if (!pr.counterRestartsAtOne)
+      throw new Error(`refusing receipt: PR #${pr.number}'s round counter did not restart at 1`);
+    if (pr.replanRequired && !pr.replanRecorded)
+      throw new Error(`refusing receipt: PR #${pr.number} hit the ceiling without a replan`);
+  }
+  // An absence that proves nothing: if no PR carries a round, the per-PR check
+  // above ran over nothing and every one of its verdicts is vacuous.
+  if (!store.pullRequests.some(({ roundsAttributed }) => roundsAttributed > 0))
+    throw new Error(
+      "refusing receipt: no round was attributed to any PR, so the per-PR ceiling proves nothing",
+    );
+  // The oracle, after the assertion it cross-checks: the per-PR rows must
+  // account for every round the ledger holds, or rows were dropped between the
+  // scan and the receipt.
+  const attributed = store.pullRequests.reduce((sum, pr) => sum + pr.roundsAttributed, 0);
+  if (ledger.attributedRoundCount !== attributed)
+    throw new Error("refusing receipt: the attributed round count disagrees with the per-PR rows");
+  if (ledger.unattributedRoundCount !== 0)
+    throw new Error(
+      "refusing receipt: a review round belongs to no mission PR, so it is unrecorded",
+    );
+  // Class history does not reset: one shared, non-empty class list.
+  if (ledger.classSectionCount !== 1 || ledger.classCount === 0)
+    throw new Error(
+      "refusing receipt: the ledger does not hold exactly one non-empty shared class history",
     );
 }
 
@@ -801,6 +930,7 @@ export function buildFinalGatesReceipt(
         redProbes: store.redProbes,
         staticGates: store.staticGates,
         leakScan: store.leakScan,
+        childEnvironment: store.childEnvironment,
         proofPrivate: store.proofPrivate,
         profiles: store.profiles,
         pullRequests: store.pullRequests,
@@ -871,6 +1001,12 @@ export function buildFinalGatesReceipt(
         ...store.leakScan,
         hiddenFlagIsLoadBearing:
           store.leakScan.hiddenFlagWithHits > store.leakScan.hiddenFlagWithoutHits,
+      },
+      childEnvironment: {
+        captureSite: "constructed-child-environment",
+        ...store.childEnvironment,
+        childIsNarrowerThanParent:
+          store.childEnvironment.childKeyCount < store.childEnvironment.parentKeyCount,
       },
       proofPrivate: { captureSite: "git-ls-files-and-check-ignore", ...store.proofPrivate },
       profiles: store.profiles.map((profile) => ({

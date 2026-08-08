@@ -17,6 +17,12 @@ import {
   type FinalGatesObservationStore,
 } from "./final-gates-receipt.ts";
 import { compareCoverage, hundredths, parseLcov } from "./coverage-comparison.ts";
+import { parseLedgerRounds } from "./ledger-rounds.ts";
+import {
+  CHILD_ENV_ALLOWLIST,
+  childEnvironment,
+  forbiddenChildEnvironmentLeaks,
+} from "./child-environment.ts";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -146,6 +152,16 @@ const store = (
     hiddenFlagWithoutHits: 0,
     hiddenFlagWithHits: 1,
   },
+  childEnvironment: {
+    allowlistedKeyCount: 17,
+    parentKeyCount: 64,
+    childKeyCount: 8,
+    forbiddenLeakCount: 0,
+    parentCarriedNodeTestContext: true,
+    childCarriedNodeTestContext: false,
+    contaminatedChildExit: 0,
+    cleanChildExit: 1,
+  },
   proofPrivate: {
     trackedFileCount: 0,
     ignored: true,
@@ -189,6 +205,12 @@ const store = (
       reviewCount: 0,
       commentCount: 7,
       distinctCommentAuthorCount: 1,
+      roundsAttributed: 3,
+      highestRoundNumber: 3,
+      counterRestartsAtOne: true,
+      withinCeiling: true,
+      replanRequired: false,
+      replanRecorded: true,
     },
   ],
   ledger: {
@@ -200,6 +222,10 @@ const store = (
     reviewerSubstitutionRecorded: true,
     ownerConfirmationRecorded: true,
     independentGraderVerdict: "not_observed",
+    classCount: 9,
+    classSectionCount: 1,
+    unattributedRoundCount: 0,
+    attributedRoundCount: 3,
   },
   ...overrides,
 });
@@ -539,6 +565,191 @@ test("a leaked account-shaped value that is not known-synthetic is a refusal", (
   );
 });
 
+test("a child environment that inherits the parent's is a refusal", () => {
+  const withChild = (
+    patch: Partial<FinalGatesObservationStore["childEnvironment"]>,
+  ): FinalGatesObservationStore =>
+    store({ childEnvironment: { ...store().childEnvironment, ...patch } });
+
+  assert.throws(
+    () => validateFinalGatesStore(withChild({ forbiddenLeakCount: 1 }), current),
+    /a forbidden variable reached the child environment/u,
+  );
+  assert.throws(
+    () => validateFinalGatesStore(withChild({ childCarriedNodeTestContext: true }), current),
+    /carries NODE_TEST_CONTEXT/u,
+  );
+  // A spread of process.env is exactly as wide as the parent's, so "not
+  // narrower" is what an inherited environment looks like from here.
+  assert.throws(
+    () => validateFinalGatesStore(withChild({ childKeyCount: 64 }), current),
+    /not narrower than the parent/u,
+  );
+  assert.throws(
+    () => validateFinalGatesStore(withChild({ childKeyCount: 0 }), current),
+    /is empty, so it was never built/u,
+  );
+});
+
+test("the NODE_TEST_CONTEXT control must reproduce, or its exclusion proves nothing", () => {
+  const withChild = (
+    patch: Partial<FinalGatesObservationStore["childEnvironment"]>,
+  ): FinalGatesObservationStore =>
+    store({ childEnvironment: { ...store().childEnvironment, ...patch } });
+
+  // Excluding a variable the parent never had is an absence proving nothing.
+  assert.throws(
+    () => validateFinalGatesStore(withChild({ parentCarriedNodeTestContext: false }), current),
+    /so excluding it proves nothing/u,
+  );
+  // The planted positive: a contaminated child that did NOT go falsely green
+  // means the hazard did not reproduce, so the guard is unproven here.
+  assert.throws(
+    () => validateFinalGatesStore(withChild({ contaminatedChildExit: 1 }), current),
+    /contamination control did not reproduce/u,
+  );
+  // And a clean child that also exits 0 makes the two legs indistinguishable.
+  assert.throws(
+    () => validateFinalGatesStore(withChild({ cleanChildExit: 0 }), current),
+    /contamination control did not reproduce/u,
+  );
+});
+
+test("the four-round ceiling is enforced per pull request, not globally", () => {
+  const withPullRequests = (
+    ...entries: readonly Partial<FinalGatesObservationStore["pullRequests"][number]>[]
+  ): FinalGatesObservationStore => {
+    const pullRequests = entries.map((entry, index) => ({
+      ...store().pullRequests[0]!,
+      number: 200 + index,
+      ...entry,
+    }));
+    return store({
+      pullRequests,
+      // The ledger's own total must agree with the rows, or the cross-check
+      // fires first and this test would pass for the wrong reason.
+      ledger: {
+        ...store().ledger,
+        attributedRoundCount: pullRequests.reduce((sum, pr) => sum + pr.roundsAttributed, 0),
+      },
+    });
+  };
+
+  // The shape a global maximum cannot see: one PR within the ceiling and
+  // another over it. `Math.max` over the whole ledger reports the same number
+  // whichever PR owns the rounds, so it cannot attribute the breach.
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        withPullRequests(
+          { roundsAttributed: 2, highestRoundNumber: 2 },
+          { roundsAttributed: 5, highestRoundNumber: 5, withinCeiling: false },
+        ),
+        current,
+      ),
+    /PR #201 exceeded the four-round ceiling/u,
+  );
+
+  // A counter that carried over instead of restarting — the PR #93/#94 failure,
+  // where one review loop was relabelled as two attempts.
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        withPullRequests(
+          { roundsAttributed: 2, highestRoundNumber: 2 },
+          { roundsAttributed: 2, highestRoundNumber: 4, counterRestartsAtOne: false },
+        ),
+        current,
+      ),
+    /round counter did not restart at 1/u,
+  );
+
+  // Hitting the ceiling forces a replan on that PR. Another PR's replan does
+  // not discharge it, which a single global boolean could not express.
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        withPullRequests(
+          { roundsAttributed: 1, highestRoundNumber: 1, replanRecorded: true },
+          {
+            roundsAttributed: 4,
+            highestRoundNumber: 4,
+            replanRequired: true,
+            replanRecorded: false,
+          },
+        ),
+        current,
+      ),
+    /PR #201 hit the ceiling without a replan/u,
+  );
+
+  // And the same four rounds with the replan recorded is accepted, so the
+  // refusals above are about the missing replan rather than the round count.
+  assert.doesNotThrow(() =>
+    validateFinalGatesStore(
+      withPullRequests({
+        roundsAttributed: 4,
+        highestRoundNumber: 4,
+        replanRequired: true,
+        replanRecorded: true,
+      }),
+      current,
+    ),
+  );
+});
+
+test("a per-PR ceiling nobody could apply is a refusal, not a pass", () => {
+  // Every PR carrying zero rounds makes each per-PR verdict vacuously true.
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({
+          pullRequests: [
+            { ...store().pullRequests[0]!, roundsAttributed: 0, highestRoundNumber: 0 },
+          ],
+          ledger: { ...store().ledger, attributedRoundCount: 0 },
+        }),
+        current,
+      ),
+    /no round was attributed to any PR/u,
+  );
+  // A round belonging to no mission PR is an unrecorded review loop.
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ ledger: { ...store().ledger, unattributedRoundCount: 1 } }),
+        current,
+      ),
+    /belongs to no mission PR/u,
+  );
+  // The per-PR rows must account for every round the ledger holds.
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ ledger: { ...store().ledger, attributedRoundCount: 2 } }),
+        current,
+      ),
+    /disagrees with the per-PR rows/u,
+  );
+});
+
+test("class history is one shared, non-empty list that no PR resets", () => {
+  // A second class section would be a per-PR class history — the reset the
+  // contract forbids while the numeric counter restarts.
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ ledger: { ...store().ledger, classSectionCount: 2 } }),
+        current,
+      ),
+    /exactly one non-empty shared class history/u,
+  );
+  assert.throws(
+    () => validateFinalGatesStore(store({ ledger: { ...store().ledger, classCount: 0 } }), current),
+    /exactly one non-empty shared class history/u,
+  );
+});
+
 test("exceeding the four-round ceiling without a replan is a refusal", () => {
   assert.throws(
     () =>
@@ -727,6 +938,127 @@ test("hundredths are integers, so rounding is never a regression", () => {
   assert.equal(hundredths(2, 3), 6667);
   assert.equal(hundredths(0, 0), 10_000, "an empty denominator is complete, not zero");
   assert.ok(Number.isSafeInteger(hundredths(969, 976)));
+});
+
+test("the child environment is an allowlist, not a filtered copy", () => {
+  const parent = {
+    PATH: "/usr/bin",
+    HOME: "/home/x",
+    NODE_TEST_CONTEXT: "child-v8",
+    NODE_OPTIONS: "--throw-deprecation",
+    AWS_SECRET_ACCESS_KEY: "unrelated",
+    WHATEVER_ELSE: "unrelated",
+  };
+  const child = childEnvironment(parent);
+
+  // What it keeps is named, and what it drops is everything else — including
+  // variables no denylist anticipated. That is the difference between an
+  // allowlist and a filtered copy.
+  assert.deepEqual(Object.keys(child).sort(), ["HOME", "PATH"]);
+  assert.deepEqual(forbiddenChildEnvironmentLeaks(child), []);
+  assert.ok(Object.keys(child).length < Object.keys(parent).length);
+
+  // The positive control: the same function is asked about an environment that
+  // genuinely carries the forbidden variables, and reports them.
+  assert.deepEqual(forbiddenChildEnvironmentLeaks(parent), ["NODE_TEST_CONTEXT", "NODE_OPTIONS"]);
+
+  // An explicit override still reaches the child — that is how WA_LOG_LEVEL
+  // and the probe's own variables get through.
+  assert.equal(childEnvironment(parent, { WA_LOG_LEVEL: "silent" }).WA_LOG_LEVEL, "silent");
+
+  // The list is the guard, so it is asserted rather than trusted: no forbidden
+  // variable may be added to it, and it may not quietly become a wildcard.
+  assert.deepEqual(
+    CHILD_ENV_ALLOWLIST.filter((key) => forbiddenChildEnvironmentLeaks({ [key]: "x" }).length > 0),
+    [],
+  );
+  assert.equal(new Set(CHILD_ENV_ALLOWLIST).size, CHILD_ENV_ALLOWLIST.length);
+});
+
+test("rounds are attributed to the PR whose commits they name", () => {
+  const ledger = [
+    "## Classes",
+    "",
+    "### C1 — a class",
+    "",
+    "### C2 — another class",
+    "",
+    "## #106 — review rounds",
+    "",
+    "### Round 1 — `aaaaaaa`",
+    "",
+    "Replanned rather than patched again.",
+    "",
+    "### Round 2 — `bbbbbbb`",
+    "",
+    "## #105 — review rounds",
+    "",
+    "### Round 1 — `ccccccc`",
+    "",
+  ].join("\n");
+  const commits = new Map<number, readonly string[]>([
+    [125, ["a".repeat(40), "b".repeat(40)]],
+    [116, ["c".repeat(40)]],
+    [120, ["d".repeat(40)]],
+  ]);
+  const report = parseLedgerRounds(ledger, commits, 4);
+  const of = (number: number) => report.pullRequests.find((entry) => entry.number === number)!;
+
+  assert.equal(of(125).roundsAttributed, 2);
+  assert.equal(of(125).highestRoundNumber, 2);
+  assert.equal(of(116).roundsAttributed, 1);
+  assert.equal(of(116).highestRoundNumber, 1);
+  // A PR with no rounds is not a PR that breached anything.
+  assert.equal(of(120).roundsAttributed, 0);
+  assert.equal(of(120).withinCeiling, true);
+  assert.deepEqual(report.unattributedCommits, []);
+  assert.equal(report.classCount, 2);
+  assert.equal(report.classSectionCount, 1);
+
+  // The replan is scoped to the section its own PR owns. #116's rounds sit in
+  // a different section, so #106's replan does not discharge #116.
+  assert.equal(of(125).replanRecorded, true);
+  assert.equal(of(116).replanRecorded, false);
+
+  // A global maximum would report 2 for this ledger and call it compliant;
+  // per-PR, the same document says #125 ran two rounds and #116 ran one.
+  assert.notDeepEqual(
+    report.pullRequests.map(({ highestRoundNumber }) => highestRoundNumber),
+    report.pullRequests.map(() => 2),
+  );
+});
+
+test("a round whose commit belongs to no mission PR is reported, never dropped", () => {
+  const ledger = ["## Rounds", "", "### Round 1 — `fedcba9`", ""].join("\n");
+  const report = parseLedgerRounds(ledger, new Map([[125, ["a".repeat(40)]]]), 4);
+
+  assert.deepEqual(report.unattributedCommits, ["fedcba9"]);
+  assert.equal(report.pullRequests[0]!.roundsAttributed, 0);
+  // The positive control: the same heading against the PR that owns it is
+  // attributed, so the report above is about ownership and not about parsing.
+  const owned = parseLedgerRounds(ledger, new Map([[125, [`fedcba9${"0".repeat(33)}`]]]), 4);
+  assert.deepEqual(owned.unattributedCommits, []);
+  assert.equal(owned.pullRequests[0]!.roundsAttributed, 1);
+});
+
+test("the ledger this repository ships keeps every PR under the ceiling", () => {
+  const ledgerText = readFileSync(path.join(root, "docs/client-stack-defect-ledger.md"), "utf8");
+  // The real commits, so this reads the shipped document rather than a fixture.
+  const commits = new Map<number, readonly string[]>([
+    [125, ["c81b671", "b513985", "018ca47", "e8d2028", "21b1816", "5d195df"]],
+    [116, ["4ecd58f", "cfd8bc5", "c57714f", "6db9e58", "3e87ee7", "ebfc14e", "98c01c4"]],
+  ]);
+  const report = parseLedgerRounds(ledgerText, commits, ROUND_CEILING);
+
+  assert.ok(report.headings.length > 0, "no rounds were parsed, so this proves nothing");
+  assert.deepEqual(report.unattributedCommits, [], "a round belongs to no known PR");
+  assert.equal(report.classSectionCount, 1);
+  assert.ok(report.classCount > 0);
+  for (const pr of report.pullRequests) {
+    assert.ok(pr.withinCeiling, `PR #${pr.number} exceeded the ceiling`);
+    assert.ok(pr.counterRestartsAtOne, `PR #${pr.number} did not restart its counter`);
+    if (pr.replanRequired) assert.ok(pr.replanRecorded, `PR #${pr.number} needs a replan`);
+  }
 });
 
 test("every committed final-gates receipt still scans clean and names this scope", () => {
