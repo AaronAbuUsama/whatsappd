@@ -45,10 +45,10 @@ import {
   captureRunBRunStart,
   finalizeRunBFailure,
   gatingRows,
-  type RunBMatrixId,
-  type RunBMatrixRow,
   type RunBMode,
   type RunBObservationStore,
+  type RunBSourceMatrixId,
+  type RunBSourceMatrixRow,
   type RunBStage,
 } from "./run-b-receipt.ts";
 import type { WhatsAppOperation } from "../src/index.ts";
@@ -217,11 +217,11 @@ async function main(): Promise<void> {
   assert.notEqual(handoff.accountId, "android");
   assert.notEqual(handoff.accountId, "ios");
 
-  const rows: RunBMatrixRow[] = [];
+  const rows: RunBSourceMatrixRow[] = [];
   const knownValues: string[] = [handoff.accountId, handoff.directory, handoff.salt];
-  let failedId: RunBMatrixId = "durable-profiles-untouched-by-run-b";
+  let failedId: RunBSourceMatrixId = "durable-profiles-untouched-by-run-b";
   let stage: RunBStage = "sandbox";
-  let finalizedRows: readonly RunBMatrixRow[] | undefined;
+  let finalizedRows: readonly RunBSourceMatrixRow[] | undefined;
   let mode: RunBMode = "unlink";
   let profile: ThrowawayProfile | undefined;
 

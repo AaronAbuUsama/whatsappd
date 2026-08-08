@@ -55,6 +55,7 @@
     "proof:run-b:unlink": "node --experimental-strip-types --permission --allow-addons --allow-child-process --allow-wasi --allow-fs-read=./src --allow-fs-read=./tests --allow-fs-read=./node_modules --allow-fs-read=./package.json --allow-fs-read=./.git --allow-fs-read=/usr/bin/git --allow-fs-read=./.proof-private/throwaway-* --allow-fs-read=./.proof-private/run-b-*.json --allow-fs-write=./.proof-private/throwaway-* --allow-fs-write=./.proof-private/issue112-run-b-*.json tests/run-b-unlink.ts",
     "proof:run-b:verify": "RUN_B_MODE=verify pnpm proof:run-b:unlink",
     "proof:run-b:receipt": "node --experimental-strip-types tests/run-b-write-receipt.ts",
+    "proof:run-b:correct": "node --experimental-strip-types tests/run-b-correct-receipt.ts",
     "proof:run-a:diagnose": "node --experimental-strip-types tests/run-a-diagnosis.ts",
     "proof:live-send": "node --experimental-strip-types tests/live-send-proof.ts",
     "proof:pairing": "node --experimental-strip-types tests/pairing-proof.ts",

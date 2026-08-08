@@ -1,16 +1,34 @@
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertRunBSanitizationDescribesFinalObject,
   buildRunBReceipt,
+  deriveRunBMatrix,
   finalizeRunBFailure,
   gatingRows,
   scanRunBReceipt,
+  DERIVED_MATRIX_IDS,
+  SOURCE_MATRIX_IDS,
   type RunBObservationStore,
 } from "./run-b-receipt.ts";
 import { test } from "./_expect.ts";
 
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sha = (character: string): string => character.repeat(40);
 const digest = (character: string): string => character.repeat(64);
+
+interface MatrixRow {
+  readonly id: string;
+  readonly verdict: string;
+  readonly notObservedReason?: string;
+  readonly evidence: Record<string, unknown>;
+}
+const matrixOf = (receipt: Record<string, unknown>): readonly MatrixRow[] =>
+  receipt.matrix as readonly MatrixRow[];
+const rowOf = (receipt: Record<string, unknown>, id: string): MatrixRow =>
+  matrixOf(receipt).find((row) => row.id === id)!;
 
 function completeStore(): RunBObservationStore {
   const phaseOne = {
@@ -158,9 +176,7 @@ test("the receipt records the challenge length and never the value or a hash of 
   const store = completeStore();
   const receipt = buildRunBReceipt(store, { gitHead: store.runStart.gitHead, treeClean: true });
   const serialized = JSON.stringify(receipt);
-  const once = (receipt.matrix as Array<{ id: string; evidence: Record<string, unknown> }>).find(
-    ({ id }) => id === "challenge-consumed-exactly-once",
-  )!;
+  const once = rowOf(receipt, "challenge-consumed-exactly-once");
 
   assert.equal(once.evidence.challengeValueLength, 277);
   assert.equal(once.evidence.challengeValueRetained, false);
@@ -272,9 +288,7 @@ test("Run B receipt refuses an incomplete observation on each gating row", () =>
 test("an addition is reported rather than refused", () => {
   const store = completeStore();
   const receipt = buildRunBReceipt(store, { gitHead: store.runStart.gitHead, treeClean: true });
-  const preserved = (
-    receipt.matrix as Array<{ id: string; evidence: Record<string, unknown> }>
-  ).find(({ id }) => id === "unlink-preserves-durable-chats-and-media")!;
+  const preserved = rowOf(receipt, "unlink-preserves-durable-chats-and-media");
 
   assert.deepEqual(preserved.evidence.countAdditions, { chats: 5, contacts: 4, groups: 1 });
   assert.deepEqual(preserved.evidence.countShortfall, { chats: 0, contacts: 0, groups: 0 });
@@ -314,11 +328,249 @@ test("a failure finalizes every measured row rather than losing the run", () => 
       ["bonus-first-link-history-sync", "not_observed"],
     ],
   );
-  // No absence is ever presented as success.
+  // No absence is ever presented as success, and none without its reason.
   assert.equal(
     finalized.every(({ verdict }) => ["observed", "not_observed", "failed"].includes(verdict)),
     true,
   );
+  for (const row of finalized.filter(({ verdict }) => verdict === "not_observed"))
+    assert.equal(row.notObservedReason, "the-run-ended-before-this-observation", row.id);
+  for (const row of finalized.filter(({ verdict }) => verdict !== "not_observed"))
+    assert.equal(row.notObservedReason, undefined, row.id);
+});
+
+test("a not_observed row without a reason, or a reason without an absence, is refused", () => {
+  const store = completeStore();
+  const current = { gitHead: store.runStart.gitHead, treeClean: true };
+  const replace = (id: string, patch: Record<string, unknown>): RunBObservationStore => ({
+    ...store,
+    rows: store.rows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+  });
+
+  assert.throws(
+    () =>
+      buildRunBReceipt(
+        replace("bonus-first-link-history-sync", { verdict: "not_observed" }),
+        current,
+      ),
+    /not_observed with no recorded reason/u,
+  );
+  assert.throws(
+    () =>
+      buildRunBReceipt(
+        replace("bonus-first-link-history-sync", {
+          notObservedReason: "the-run-ended-before-this-observation",
+        }),
+        current,
+      ),
+    /carries a reason it is not an absence for/u,
+  );
+  // The same row with both halves agreeing is accepted, so the two refusals
+  // above are about the disagreement rather than about the row.
+  assert.doesNotThrow(() =>
+    buildRunBReceipt(
+      replace("bonus-first-link-history-sync", {
+        verdict: "not_observed",
+        notObservedReason: "the-run-ended-before-this-observation",
+      }),
+      current,
+    ),
+  );
+});
+
+test("a sub-clause the run never observed gets its own not_observed row", () => {
+  const store = completeStore();
+  const receipt = buildRunBReceipt(store, { gitHead: store.runStart.gitHead, treeClean: true });
+
+  // The three defects this split exists to correct. Each parent keeps the part
+  // it genuinely observed; each sub-clause carries its own absence and says why
+  // it can never be re-observed — Run B's live lifecycle is spent.
+  for (const [id, reason] of [
+    [
+      "unlink-logout-preceded-the-clear",
+      "logout-ordering-was-asserted-only-in-the-spent-unlinking-process",
+    ],
+    ["unlink-preserves-durable-messages", "no-message-count-was-captured-before-the-spent-unlink"],
+    [
+      "pair-restart-recorded-as-a-labelled-reconnect",
+      "no-reconnect-was-labelled-as-the-515-restart-in-the-spent-pairing",
+    ],
+  ] as const) {
+    const row = rowOf(receipt, id);
+    assert.equal(row.verdict, "not_observed", id);
+    assert.equal(row.notObservedReason, reason, id);
+  }
+
+  // The strong halves survive the split rather than being thrown away.
+  assert.equal(rowOf(receipt, "unlink-clears-only-target-credentials").verdict, "observed");
+  assert.equal(rowOf(receipt, "unlink-preserves-durable-chats-and-media").verdict, "observed");
+  assert.equal(rowOf(receipt, "pair-links-through-one-session").verdict, "observed");
+  assert.equal(
+    rowOf(receipt, "unlink-preserves-durable-chats-and-media").evidence.mediaDigestEqual,
+    true,
+  );
+  assert.equal(
+    rowOf(receipt, "pair-links-through-one-session").evidence.sessionFactoryOpenCalls,
+    1,
+  );
+
+  // A count is not a label: the bare reconnectCount is carried as context and
+  // is explicitly not the thing the sub-clause turns on.
+  const restart = rowOf(receipt, "pair-restart-recorded-as-a-labelled-reconnect");
+  assert.equal(restart.evidence.reconnectCount, 2);
+  assert.equal(restart.evidence.restartLabelRetained, false);
+});
+
+test("a sub-clause row is derived from evidence, never asserted by a caller", () => {
+  const store = completeStore();
+  const current = { gitHead: store.runStart.gitHead, treeClean: true };
+  // A caller cannot hand one in: the source row set is closed, so an asserted
+  // derived row is an extra row and the writer refuses the count.
+  assert.throws(
+    () =>
+      buildRunBReceipt(
+        {
+          ...store,
+          rows: [
+            ...store.rows,
+            {
+              id: "unlink-logout-preceded-the-clear",
+              verdict: "observed",
+              captureSite: "throwaway-credentials-oracle",
+              evidence: { logoutOrderingRetained: true },
+            },
+          ] as RunBObservationStore["rows"],
+        },
+        current,
+      ),
+    /exactly 8 source rows/u,
+  );
+
+  // And it tracks the evidence rather than a wish: the same three rows go green
+  // the moment a run actually records the observations they name.
+  const observed = deriveRunBMatrix(
+    store.rows.map((row) => {
+      if (row.id === "unlink-clears-only-target-credentials")
+        return { ...row, evidence: { ...row.evidence, logoutOrderingRetained: true } };
+      if (row.id === "pair-links-through-one-session")
+        return { ...row, evidence: { ...row.evidence, labelledRestartReconnectCount: 1 } };
+      if (row.id === "unlink-preserves-durable-chats-and-media")
+        return {
+          ...row,
+          evidence: {
+            ...row.evidence,
+            phaseOneCounts: { chats: 63, contacts: 79, groups: 21, messages: 1200 },
+          },
+        };
+      return row;
+    }),
+  );
+  assert.deepEqual(
+    observed.map(({ verdict }) => verdict),
+    ["observed", "observed", "observed"],
+  );
+  assert.equal(
+    observed.every(({ notObservedReason }) => notObservedReason === undefined),
+    true,
+  );
+});
+
+test("the message comparison is asymmetric: a loss fails, an addition is reported", () => {
+  const store = completeStore();
+  const withMessages = (before: number, after: number): readonly unknown[] =>
+    deriveRunBMatrix(
+      store.rows.map((row) =>
+        row.id === "unlink-preserves-durable-chats-and-media"
+          ? {
+              ...row,
+              evidence: {
+                ...row.evidence,
+                phaseOneCounts: { chats: 63, contacts: 79, groups: 21, messages: before },
+                afterCounts: { chats: 68, contacts: 83, groups: 22, messages: after },
+              },
+            }
+          : row,
+      ),
+    ).filter(({ id }) => id === "unlink-preserves-durable-messages");
+
+  const [gained] = withMessages(1200, 1323) as [MatrixRow];
+  assert.equal(gained.verdict, "observed");
+  assert.equal(gained.evidence.messageShortfall, 0, "an addition is reported, not a shortfall");
+
+  // One message fewer than before is a loss, and a loss is never absorbed.
+  const [lost] = withMessages(1324, 1323) as [MatrixRow];
+  assert.equal(lost.verdict, "not_observed");
+  assert.equal(lost.evidence.messageShortfall, 1);
+});
+
+test("a sub-clause of a row that failed is failed, not merely unobserved", () => {
+  const store = completeStore();
+  // The ceiling rule: a sub-clause cannot read better than the clause it
+  // belongs to, so a failed parent never leaves a green child behind it.
+  const derived = deriveRunBMatrix(
+    finalizeRunBFailure(store.rows, "unlink-clears-only-target-credentials", "unlink"),
+  );
+  const logout = derived.find(({ id }) => id === "unlink-logout-preceded-the-clear")!;
+
+  assert.equal(logout.verdict, "failed");
+  assert.equal(logout.notObservedReason, undefined);
+});
+
+test("every source row and every derived row reaches the receipt exactly once", () => {
+  const store = completeStore();
+  const receipt = buildRunBReceipt(store, { gitHead: store.runStart.gitHead, treeClean: true });
+  const ids = matrixOf(receipt).map(({ id }) => id);
+
+  assert.deepEqual(ids, [...SOURCE_MATRIX_IDS, ...DERIVED_MATRIX_IDS]);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test("every committed Run B receipt still scans clean and names an honest verdict", () => {
+  const directory = path.join(root, ".proof-receipts");
+  const names = readdirSync(directory).filter((name) => name.startsWith("issue112-p4.run"));
+  // The skip-proofing floor: an empty set passes every loop ever written.
+  assert.ok(names.length > 0, "no Run B receipt is committed, so this scan proves nothing");
+
+  for (const name of names) {
+    const receipt = JSON.parse(readFileSync(path.join(directory, name), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const scan = scanRunBReceipt(receipt, ["15551234567@s.whatsapp.net"]);
+    assert.equal(scan.schemaUnknownFields, 0, `${name} carries an unschema'd field`);
+    assert.equal(scan.schemaInvalidFields, 0, `${name} carries an invalid field`);
+    assert.equal(scan.patternHits, 0, `${name} carries account-shaped material`);
+    assert.equal(scan.knownValueHits, 0, `${name} carries a known value`);
+    assert.ok(scan.floorPassed, `${name} does not clear the skip-proofing floor`);
+
+    for (const row of matrixOf(receipt)) {
+      assert.equal(
+        row.verdict === "not_observed",
+        row.notObservedReason !== undefined,
+        `${name}: row ${row.id} disagrees with its own absence reason`,
+      );
+      // The defect this correction closes: a row claiming more than its own
+      // evidence carries. Each of these reads the sub-clause the clause names.
+      if (row.id === "unlink-logout-preceded-the-clear")
+        assert.equal(
+          row.verdict === "observed",
+          row.evidence.logoutOrderingRetained === true,
+          `${name}: the logout-ordering verdict contradicts its evidence`,
+        );
+      if (row.id === "unlink-preserves-durable-messages")
+        assert.equal(
+          row.verdict === "observed",
+          row.evidence.beforeMessageCountRetained === true,
+          `${name}: a message comparison was claimed without a before-count`,
+        );
+      if (row.id === "pair-restart-recorded-as-a-labelled-reconnect")
+        assert.equal(
+          row.verdict === "observed",
+          row.evidence.restartLabelRetained === true,
+          `${name}: a 515 restart was claimed from a bare reconnect count`,
+        );
+    }
+  }
 });
 
 test("a row already measured as observed is downgraded when its own assertion fails", () => {
