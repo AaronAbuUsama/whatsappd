@@ -627,14 +627,12 @@ export function deriveRunBMatrix(rows: readonly RunBSourceMatrixRow[]): readonly
 /**
  * The rows a Run B verdict is allowed to turn on. The bonus row is not one.
  *
- * Derived rows are not one either, and are excluded by construction rather
- * than by filter: this takes the source rows, which the derived ones are not.
- * They record residue the run cannot reach on any path — a runner that exited
- * non-zero on them would exit non-zero for ever while asserting nothing new.
- * The receipt carries them as `not_observed` with a reason, which is where an
- * unreachable clause belongs.
+ * Derived rows are gates because each represents a named sub-clause of the
+ * same acceptance contract. Recording an unreachable clause honestly as
+ * `not_observed` must keep the feature out of green; excluding it would recreate
+ * the original overclaim under a second row name.
  */
-export function gatingRows(rows: readonly RunBSourceMatrixRow[]): readonly RunBSourceMatrixRow[] {
+export function gatingRows(rows: readonly RunBMatrixRow[]): readonly RunBMatrixRow[] {
   return rows.filter(({ id }) => id !== BONUS_ID);
 }
 

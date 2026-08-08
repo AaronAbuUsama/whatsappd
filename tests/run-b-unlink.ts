@@ -43,6 +43,7 @@ import {
 } from "./run-b-proof.ts";
 import {
   captureRunBRunStart,
+  deriveRunBMatrix,
   finalizeRunBFailure,
   gatingRows,
   type RunBMode,
@@ -589,7 +590,8 @@ async function main(): Promise<void> {
       verdicts: store.rows.map(({ id, verdict }) => ({ id, verdict })),
     })}\n`,
   );
-  if (gatingRows(store.rows).some(({ verdict }) => verdict !== "observed")) process.exitCode = 1;
+  if (gatingRows(deriveRunBMatrix(store.rows)).some(({ verdict }) => verdict !== "observed"))
+    process.exitCode = 1;
 }
 
 await main();

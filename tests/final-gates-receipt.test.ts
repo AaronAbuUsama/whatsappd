@@ -18,7 +18,7 @@ import {
   type FinalGatesObservationStore,
 } from "./final-gates-receipt.ts";
 import { compareCoverage, hundredths, parseLcov } from "./coverage-comparison.ts";
-import { parseLedgerRounds } from "./ledger-rounds.ts";
+import { parseLedgerRounds, REQUIRED_DEFECT_CLASS_IDS } from "./ledger-rounds.ts";
 import {
   CHILD_ENV_ALLOWLIST,
   childEnvironment,
@@ -94,6 +94,7 @@ const store = (
     headUncoveredSourceIdentityCount: 5,
     newlyUncoveredPreExistingCount: 0,
     uncoveredNewSourceCount: 5,
+    unclassifiedRegressionCount: 0,
     newSourceMissesTrackedByIssue: 148,
     realGateExit: 0,
     raisedFloorHundredths: 9674,
@@ -102,6 +103,8 @@ const store = (
     selfTestInvertedRegressions: 9,
     selfTestEmptyCorpusRefused: true,
     selfTestPlantedPreExistingRegressionCount: 1,
+    selfTestPlantedPreExistingFunctionRegressionCount: 1,
+    selfTestPlantedPreExistingBranchRegressionCount: 1,
     verdict: "observed",
   },
   suite: {
@@ -215,6 +218,7 @@ const store = (
       roundsAttributed: 3,
       highestRoundNumber: 3,
       counterRestartsAtOne: true,
+      roundNumbersSequential: true,
       withinCeiling: true,
       replanRequired: false,
       replanRecorded: true,
@@ -231,6 +235,8 @@ const store = (
     independentGraderVerdict: "not_observed",
     classCount: 9,
     classSectionCount: 1,
+    baselineClassCount: 9,
+    missingRequiredClassCount: 0,
     unattributedRoundCount: 0,
     attributedRoundCount: 3,
   },
@@ -462,6 +468,23 @@ test("an inert coverage gate and a directionless comparator are refusals", () =>
       ),
     /not measured in one session/u,
   );
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ coverage: { ...store().coverage, unclassifiedRegressionCount: 1 } }),
+        current,
+      ),
+    /no coverage-identity cause/u,
+  );
+  for (const field of [
+    "selfTestPlantedPreExistingFunctionRegressionCount",
+    "selfTestPlantedPreExistingBranchRegressionCount",
+  ] as const)
+    assert.throws(
+      () =>
+        validateFinalGatesStore(store({ coverage: { ...store().coverage, [field]: 0 } }), current),
+      /missed a planted pre-existing/u,
+    );
 });
 
 test("a suite that did not execute is a refusal", () => {
@@ -672,6 +695,19 @@ test("the four-round ceiling is enforced per pull request, not globally", () => 
       ),
     /round counter did not restart at 1/u,
   );
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        withPullRequests({
+          roundsAttributed: 5,
+          highestRoundNumber: 4,
+          roundNumbersSequential: false,
+          withinCeiling: true,
+        }),
+        current,
+      ),
+    /duplicated or gapped/u,
+  );
 
   // Hitting the ceiling forces a replan on that PR. Another PR's replan does
   // not discharge it, which a single global boolean could not express.
@@ -755,6 +791,14 @@ test("class history is one shared, non-empty list that no PR resets", () => {
   );
   assert.throws(
     () => validateFinalGatesStore(store({ ledger: { ...store().ledger, classCount: 0 } }), current),
+    /exactly one non-empty shared class history/u,
+  );
+  assert.throws(
+    () =>
+      validateFinalGatesStore(
+        store({ ledger: { ...store().ledger, missingRequiredClassCount: 1 } }),
+        current,
+      ),
     /exactly one non-empty shared class history/u,
   );
 });
@@ -906,6 +950,60 @@ test("the comparator separates pre-existing coverage loss from uncovered new sou
     headSources: baseSources,
   });
   assert.deepEqual(inverted.newlyUncoveredPreExisting, []);
+});
+
+test("coverage identity classification includes functions and branches, not lines alone", () => {
+  const lcov = ({
+    functionHits,
+    branchHits,
+    sourceLine = 1,
+  }: {
+    readonly functionHits: number;
+    readonly branchHits: number;
+    readonly sourceLine?: number;
+  }): string =>
+    [
+      "SF:/tree/src/a.ts",
+      `FN:${sourceLine},branchy`,
+      `FNDA:${functionHits},branchy`,
+      `DA:${sourceLine},1`,
+      `BRDA:${sourceLine},0,0,${branchHits}`,
+      "LH:1",
+      "LF:1",
+      `FNH:${functionHits > 0 ? 1 : 0}`,
+      "FNF:1",
+      `BRH:${branchHits > 0 ? 1 : 0}`,
+      "BRF:1",
+      "end_of_record",
+    ].join("\n");
+  const source = new Map([
+    ["src/a.ts", "export function branchy(flag: boolean) { return flag; }\n"],
+  ]);
+  const comparison = compareCoverage(
+    lcov({ functionHits: 1, branchHits: 1 }),
+    lcov({ functionHits: 0, branchHits: 0 }),
+    { baseSources: source, headSources: source },
+  );
+
+  assert.deepEqual(comparison.newlyUncoveredPreExisting, [
+    "src/a.ts:branch:1:0:0",
+    "src/a.ts:function:1:branchy",
+  ]);
+  assert.deepEqual(comparison.uncoveredNewSource, []);
+
+  const newSource = new Map([
+    ["src/a.ts", "export function existing() { return true; }\nexport function branchy() {}\n"],
+  ]);
+  const added = compareCoverage(
+    lcov({ functionHits: 1, branchHits: 1 }),
+    lcov({ functionHits: 0, branchHits: 0, sourceLine: 2 }),
+    { baseSources: source, headSources: newSource },
+  );
+  assert.deepEqual(added.newlyUncoveredPreExisting, []);
+  assert.deepEqual(added.uncoveredNewSource, [
+    "src/a.ts:branch:head:2:0:0",
+    "src/a.ts:function:head:2:branchy",
+  ]);
 });
 
 test("source-identity classification refuses a one-sided or empty corpus", () => {
@@ -1112,6 +1210,56 @@ test("a round whose commit belongs to no mission PR is reported, never dropped",
   assert.equal(owned.pullRequests[0]!.roundsAttributed, 1);
 });
 
+test("a duplicated or gapped round number cannot hide a fifth review", () => {
+  const ledger = [
+    "## Classes",
+    "",
+    "### C1 — persistent class",
+    "",
+    "## #107 — review rounds",
+    "",
+    "### Round 1 — `aaaaaaa`",
+    "",
+    "### Round 2 — `bbbbbbb`",
+    "",
+    "### Round 4 — `ccccccc`",
+    "",
+    "### Round 4 — `ddddddd`",
+    "",
+    "### Round 4 — `eeeeeee`",
+    "",
+    "Replanned rather than patched again.",
+  ].join("\n");
+  const commits = new Map<number, readonly string[]>([
+    [
+      120,
+      [
+        `aaaaaaa${"0".repeat(33)}`,
+        `bbbbbbb${"0".repeat(33)}`,
+        `ccccccc${"0".repeat(33)}`,
+        `ddddddd${"0".repeat(33)}`,
+        `eeeeeee${"0".repeat(33)}`,
+      ],
+    ],
+  ]);
+  const pr = parseLedgerRounds(ledger, commits, 4).pullRequests[0]!;
+
+  assert.equal(pr.roundsAttributed, 5);
+  assert.equal(pr.highestRoundNumber, 4);
+  assert.equal(pr.roundNumbersSequential, false);
+  assert.equal(pr.withinCeiling, false);
+});
+
+test("the shared defect-class history must retain every baseline class id", () => {
+  const currentLedger = ["## Classes", "", "### C1 — first class", "", "### C3 — third class"].join(
+    "\n",
+  );
+  const report = parseLedgerRounds(currentLedger, new Map(), 4, [1, 2, 3]);
+
+  assert.deepEqual(report.classIds, [1, 3]);
+  assert.deepEqual(report.missingRequiredClassIds, [2]);
+});
+
 test("the ledger this repository ships keeps every PR under the ceiling", () => {
   const ledgerText = readFileSync(path.join(root, "docs/client-stack-defect-ledger.md"), "utf8");
   // The real commits, so this reads the shipped document rather than a fixture.
@@ -1119,15 +1267,29 @@ test("the ledger this repository ships keeps every PR under the ceiling", () => 
     [125, ["c81b671", "b513985", "018ca47", "e8d2028", "21b1816", "5d195df"]],
     [116, ["4ecd58f", "cfd8bc5", "c57714f", "6db9e58", "3e87ee7", "ebfc14e", "98c01c4"]],
   ]);
-  const report = parseLedgerRounds(ledgerText, commits, ROUND_CEILING);
+  const report = parseLedgerRounds(ledgerText, commits, ROUND_CEILING, REQUIRED_DEFECT_CLASS_IDS);
+  const of = (number: number) => report.pullRequests.find((entry) => entry.number === number)!;
 
   assert.ok(report.headings.length > 0, "no rounds were parsed, so this proves nothing");
+  assert.deepEqual(
+    report.headings.map(({ round, commit }) => [round, commit]),
+    [
+      [1, "c81b671"],
+      [2, "018ca47"],
+      [3, "e8d2028"],
+    ],
+    "the shipped ledger's recorded history changed",
+  );
   assert.deepEqual(report.unattributedCommits, [], "a round belongs to no known PR");
   assert.equal(report.classSectionCount, 1);
-  assert.ok(report.classCount > 0);
+  assert.deepEqual(report.classIds, REQUIRED_DEFECT_CLASS_IDS);
+  assert.deepEqual(report.missingRequiredClassIds, []);
+  assert.equal(of(125).roundsAttributed, 3);
+  assert.equal(of(116).roundsAttributed, 0, "the ledger records no review rounds for PR #116");
   for (const pr of report.pullRequests) {
     assert.ok(pr.withinCeiling, `PR #${pr.number} exceeded the ceiling`);
     assert.ok(pr.counterRestartsAtOne, `PR #${pr.number} did not restart its counter`);
+    assert.ok(pr.roundNumbersSequential, `PR #${pr.number} has duplicate or missing rounds`);
     if (pr.replanRequired) assert.ok(pr.replanRecorded, `PR #${pr.number} needs a replan`);
   }
 });
@@ -1172,6 +1334,30 @@ test("an older receipt is complete for its own version, a new one for the curren
   const missing = missingFinalGatesFields(lying);
   assert.ok(missing.includes("/safety/childEnvironment/forbiddenLeakCount"));
   assert.ok(missing.includes("/process/pullRequests/*/counterRestartsAtOne"));
+
+  const version3 = structuredClone(fresh);
+  version3.schemaVersion = 3;
+  const version3Coverage = version3.coverage as Record<string, unknown>;
+  for (const key of [
+    "unclassifiedRegressionCount",
+    "selfTestPlantedPreExistingFunctionRegressionCount",
+    "selfTestPlantedPreExistingBranchRegressionCount",
+  ])
+    delete version3Coverage[key];
+  const version3Process = version3.process as Record<string, unknown>;
+  const version3Ledger = version3Process.ledger as Record<string, unknown>;
+  delete version3Ledger.baselineClassCount;
+  delete version3Ledger.missingRequiredClassCount;
+  version3Process.pullRequests = (version3Process.pullRequests as Record<string, unknown>[]).map(
+    ({ roundNumbersSequential: _removed, ...pr }) => pr,
+  );
+  assert.deepEqual(missingFinalGatesFields(version3), []);
+  const lyingVersion4 = { ...structuredClone(version3), schemaVersion: RECEIPT_SCHEMA_VERSION };
+  assert.ok(
+    missingFinalGatesFields(lyingVersion4).includes(
+      "/coverage/selfTestPlantedPreExistingFunctionRegressionCount",
+    ),
+  );
 
   // And a version 1 receipt is still held to every field version 1 had, so the
   // exemption did not quietly excuse the whole schema.

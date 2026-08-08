@@ -26,6 +26,24 @@ export interface FileCoverage {
   readonly branchesHit: number;
   readonly branchesFound: number;
   readonly uncoveredLines: readonly number[];
+  readonly functions: readonly {
+    readonly line: number;
+    readonly name: string;
+  }[];
+  readonly uncoveredFunctions: readonly {
+    readonly line: number;
+    readonly name: string;
+  }[];
+  readonly branches: readonly {
+    readonly line: number;
+    readonly block: string;
+    readonly branch: string;
+  }[];
+  readonly uncoveredBranches: readonly {
+    readonly line: number;
+    readonly block: string;
+    readonly branch: string;
+  }[];
 }
 
 export type CoverageMetric = "lines" | "branches" | "functions";
@@ -69,18 +87,52 @@ export function parseLcov(text: string): ReadonlyMap<string, FileCoverage> {
   let path: string | undefined;
   let counters: Record<string, number> = {};
   let uncoveredLines: number[] = [];
+  let functions: { readonly line: number; readonly name: string }[] = [];
+  let functionHits = new Map<string, number>();
+  let branches: {
+    readonly line: number;
+    readonly block: string;
+    readonly branch: string;
+  }[] = [];
+  let uncoveredBranches: {
+    readonly line: number;
+    readonly block: string;
+    readonly branch: string;
+  }[] = [];
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (line.startsWith("SF:")) {
       path = line.slice(3);
       counters = {};
       uncoveredLines = [];
+      functions = [];
+      functionHits = new Map();
+      branches = [];
+      uncoveredBranches = [];
     } else if (path && /^(LH|LF|FNH|FNF|BRH|BRF):/u.test(line)) {
       const [key, value] = line.split(":");
       if (key && value !== undefined) counters[key] = Number(value);
     } else if (path && line.startsWith("DA:")) {
       const [lineNumber, hits] = line.slice(3).split(",");
       if (Number(hits) === 0 && lineNumber !== undefined) uncoveredLines.push(Number(lineNumber));
+    } else if (path && line.startsWith("FN:")) {
+      const separator = line.indexOf(",", 3);
+      if (separator !== -1)
+        functions.push({
+          line: Number(line.slice(3, separator)),
+          name: line.slice(separator + 1),
+        });
+    } else if (path && line.startsWith("FNDA:")) {
+      const separator = line.indexOf(",", 5);
+      if (separator !== -1)
+        functionHits.set(line.slice(separator + 1), Number(line.slice(5, separator)));
+    } else if (path && line.startsWith("BRDA:")) {
+      const [lineNumber, block, branch, taken] = line.slice(5).split(",");
+      if (lineNumber !== undefined && block !== undefined && branch !== undefined) {
+        const observation = { line: Number(lineNumber), block, branch };
+        branches.push(observation);
+        if (taken === "-" || Number(taken) === 0) uncoveredBranches.push(observation);
+      }
     } else if (line === "end_of_record" && path) {
       // lcov paths are absolute and carry the worktree they were measured in,
       // so they must be made relative or base and head never match at all.
@@ -94,6 +146,10 @@ export function parseLcov(text: string): ReadonlyMap<string, FileCoverage> {
         branchesHit: counters.BRH ?? 0,
         branchesFound: counters.BRF ?? 0,
         uncoveredLines,
+        functions,
+        uncoveredFunctions: functions.filter(({ name }) => (functionHits.get(name) ?? 0) === 0),
+        branches,
+        uncoveredBranches,
       });
       path = undefined;
     }
@@ -216,9 +272,22 @@ export function compareCoverage(
       for (let line = 1; line <= baseLines.length; line++)
         preExistingSourceIdentities.add(`${filePath}:${line}`);
       const baseFile = baseByPath.get(filePath);
-      if (baseFile)
+      if (baseFile) {
         for (const line of baseFile.uncoveredLines)
           if (line <= baseLines.length) baseUncoveredSourceIdentities.add(`${filePath}:${line}`);
+        for (const { line, name } of baseFile.uncoveredFunctions)
+          if (line <= baseLines.length)
+            baseUncoveredSourceIdentities.add(`${filePath}:function:${line}:${name}`);
+        for (const { line, block, branch } of baseFile.uncoveredBranches)
+          if (line <= baseLines.length)
+            baseUncoveredSourceIdentities.add(`${filePath}:branch:${line}:${block}:${branch}`);
+        for (const { line, name } of baseFile.functions)
+          if (line <= baseLines.length)
+            preExistingSourceIdentities.add(`${filePath}:function:${line}:${name}`);
+        for (const { line, block, branch } of baseFile.branches)
+          if (line <= baseLines.length)
+            preExistingSourceIdentities.add(`${filePath}:branch:${line}:${block}:${branch}`);
+      }
     }
     for (const headFile of head) {
       const baseSource = options.baseSources.get(headFile.path);
@@ -232,6 +301,24 @@ export function compareCoverage(
         const baseLine = mapping.get(line);
         const identity =
           baseLine === undefined ? `${headFile.path}:head:${line}` : `${headFile.path}:${baseLine}`;
+        headUncoveredSourceIdentities.add(identity);
+        if (!preExistingSourceIdentities.has(identity)) uncoveredNewSource.push(identity);
+      }
+      for (const { line, name } of headFile.uncoveredFunctions) {
+        const baseLine = mapping.get(line);
+        const identity =
+          baseLine === undefined
+            ? `${headFile.path}:function:head:${line}:${name}`
+            : `${headFile.path}:function:${baseLine}:${name}`;
+        headUncoveredSourceIdentities.add(identity);
+        if (!preExistingSourceIdentities.has(identity)) uncoveredNewSource.push(identity);
+      }
+      for (const { line, block, branch } of headFile.uncoveredBranches) {
+        const baseLine = mapping.get(line);
+        const identity =
+          baseLine === undefined
+            ? `${headFile.path}:branch:head:${line}:${block}:${branch}`
+            : `${headFile.path}:branch:${baseLine}:${block}:${branch}`;
         headUncoveredSourceIdentities.add(identity);
         if (!preExistingSourceIdentities.has(identity)) uncoveredNewSource.push(identity);
       }

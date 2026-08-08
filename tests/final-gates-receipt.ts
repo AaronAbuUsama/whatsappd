@@ -25,6 +25,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { childEnvironment } from "./child-environment.ts";
 import {
   receiptField as field,
   scanSchemaDrivenReceipt,
@@ -134,6 +135,7 @@ export interface CoverageObservation {
   readonly headUncoveredSourceIdentityCount: number;
   readonly newlyUncoveredPreExistingCount: number;
   readonly uncoveredNewSourceCount: number;
+  readonly unclassifiedRegressionCount: number;
   readonly newSourceMissesTrackedByIssue: number;
   readonly realGateExit: number;
   readonly raisedFloorHundredths: number;
@@ -142,6 +144,8 @@ export interface CoverageObservation {
   readonly selfTestInvertedRegressions: number;
   readonly selfTestEmptyCorpusRefused: boolean;
   readonly selfTestPlantedPreExistingRegressionCount: number;
+  readonly selfTestPlantedPreExistingFunctionRegressionCount: number;
+  readonly selfTestPlantedPreExistingBranchRegressionCount: number;
   readonly verdict: Verdict;
 }
 
@@ -247,6 +251,7 @@ export interface PullRequestObservation {
   readonly roundsAttributed: number;
   readonly highestRoundNumber: number;
   readonly counterRestartsAtOne: boolean;
+  readonly roundNumbersSequential: boolean;
   readonly withinCeiling: boolean;
   readonly replanRequired: boolean;
   readonly replanRecorded: boolean;
@@ -271,6 +276,8 @@ export interface LedgerObservation {
    */
   readonly classCount: number;
   readonly classSectionCount: number;
+  readonly baselineClassCount: number;
+  readonly missingRequiredClassCount: number;
   /** A round heading belonging to no mission PR is an unrecorded review loop. */
   readonly unattributedRoundCount: number;
   readonly attributedRoundCount: number;
@@ -374,6 +381,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/coverage/headUncoveredSourceIdentityCount", field("count")],
   ["/coverage/newlyUncoveredPreExistingCount", field("count")],
   ["/coverage/uncoveredNewSourceCount", field("count")],
+  ["/coverage/unclassifiedRegressionCount", field("count")],
   ["/coverage/newSourceMissesTrackedByIssue", field("count")],
   ["/coverage/realGateExit", field("count")],
   ["/coverage/raisedFloorHundredths", field("count")],
@@ -382,6 +390,8 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/coverage/selfTestInvertedRegressions", field("count")],
   ["/coverage/selfTestEmptyCorpusRefused", field("boolean")],
   ["/coverage/selfTestPlantedPreExistingRegressionCount", field("count")],
+  ["/coverage/selfTestPlantedPreExistingFunctionRegressionCount", field("count")],
+  ["/coverage/selfTestPlantedPreExistingBranchRegressionCount", field("count")],
   ["/coverage/verdict", field("enum", ["observed", "not_observed", "failed"])],
 
   ["/suite/captureSite", field("enum", ["tap-artifact-and-per-file-runs"])],
@@ -475,6 +485,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/process/pullRequests/*/roundsAttributed", field("count")],
   ["/process/pullRequests/*/highestRoundNumber", field("count")],
   ["/process/pullRequests/*/counterRestartsAtOne", field("boolean")],
+  ["/process/pullRequests/*/roundNumbersSequential", field("boolean")],
   ["/process/pullRequests/*/withinCeiling", field("boolean")],
   ["/process/pullRequests/*/replanRequired", field("boolean")],
   ["/process/pullRequests/*/replanRecorded", field("boolean")],
@@ -489,6 +500,8 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/process/ledger/ownerConfirmationRecorded", field("boolean")],
   ["/process/ledger/classCount", field("count")],
   ["/process/ledger/classSectionCount", field("count")],
+  ["/process/ledger/baselineClassCount", field("count")],
+  ["/process/ledger/missingRequiredClassCount", field("count")],
   ["/process/ledger/unattributedRoundCount", field("count")],
   ["/process/ledger/attributedRoundCount", field("count")],
   [
@@ -509,7 +522,12 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
 ]);
 
 function git(root: string, args: readonly string[]): string {
-  return execFileSync("git", args, { cwd: root }).toString().trim();
+  return execFileSync("git", args, {
+    cwd: root,
+    env: childEnvironment(process.env),
+  })
+    .toString()
+    .trim();
 }
 
 export function captureFinalGatesRunStart(root: string): FinalGatesRunStart {
@@ -602,7 +620,7 @@ const CONDITIONAL_FIELDS = /^\/coverage\/regressions\//u;
  * to be hand-edited or deleted, which is the one thing a receipt must never
  * invite.
  */
-export const RECEIPT_SCHEMA_VERSION = 3;
+export const RECEIPT_SCHEMA_VERSION = 4;
 
 /**
  * Pointers introduced after version 1.
@@ -616,6 +634,8 @@ const FIELDS_ADDED_IN_VERSION_2 =
   /^\/(safety\/childEnvironment\/|process\/(ledger\/(classCount|classSectionCount|unattributedRoundCount|attributedRoundCount)|pullRequests\/\*\/(roundsAttributed|highestRoundNumber|counterRestartsAtOne|withinCeiling|replanRequired|replanRecorded)))/u;
 const FIELDS_ADDED_IN_VERSION_3 =
   /^\/coverage\/(preExistingSourceIdentityCount|headUncoveredSourceIdentityCount|newlyUncoveredPreExistingCount|uncoveredNewSourceCount|newSourceMissesTrackedByIssue|selfTestPlantedPreExistingRegressionCount)$/u;
+const FIELDS_ADDED_IN_VERSION_4 =
+  /^\/(coverage\/(unclassifiedRegressionCount|selfTestPlantedPreExistingFunctionRegressionCount|selfTestPlantedPreExistingBranchRegressionCount)|process\/(ledger\/(baselineClassCount|missingRequiredClassCount)|pullRequests\/\*\/roundNumbersSequential))$/u;
 
 export function missingFinalGatesFields(receipt: unknown): readonly string[] {
   const present = new Set(
@@ -637,6 +657,7 @@ export function missingFinalGatesFields(receipt: unknown): readonly string[] {
     .filter((key) => reported || !CONDITIONAL_FIELDS.test(key))
     .filter((key) => version >= 2 || !FIELDS_ADDED_IN_VERSION_2.test(key))
     .filter((key) => version >= 3 || !FIELDS_ADDED_IN_VERSION_3.test(key))
+    .filter((key) => version >= 4 || !FIELDS_ADDED_IN_VERSION_4.test(key))
     .sort();
 }
 
@@ -748,13 +769,22 @@ export function validateFinalGatesStore(
     throw new Error("refusing receipt: the uncovered source-identity corpus is empty");
   if (coverage.selfTestPlantedPreExistingRegressionCount === 0)
     throw new Error("refusing receipt: the comparator missed a planted pre-existing-line loss");
+  if (coverage.selfTestPlantedPreExistingFunctionRegressionCount === 0)
+    throw new Error("refusing receipt: the comparator missed a planted pre-existing-function loss");
+  if (coverage.selfTestPlantedPreExistingBranchRegressionCount === 0)
+    throw new Error("refusing receipt: the comparator missed a planted pre-existing-branch loss");
+  if (coverage.unclassifiedRegressionCount !== 0)
+    throw new Error("refusing receipt: a percentage regression has no coverage-identity cause");
   if (coverage.uncoveredNewSourceCount > 0 && coverage.newSourceMissesTrackedByIssue !== 148)
     throw new Error("refusing receipt: uncovered new source is not tracked by issue 148");
   if (!coverage.aggregateMeetsFloor)
     throw new Error("refusing receipt: aggregate coverage is below the configured floor");
   // A per-file regression is a recordable outcome, not a refusal: this receipt
   // exists to say so. What is refused is a verdict that disagrees with it.
-  if (coverage.newlyUncoveredPreExistingCount > 0 !== (coverage.verdict === "failed"))
+  if (
+    (coverage.newlyUncoveredPreExistingCount > 0 || coverage.unclassifiedRegressionCount > 0) !==
+    (coverage.verdict === "failed")
+  )
     throw new Error(
       "refusing receipt: the coverage verdict disagrees with pre-existing source loss",
     );
@@ -889,6 +919,8 @@ export function validateFinalGatesStore(
       throw new Error(`refusing receipt: PR #${pr.number} exceeded the four-round ceiling`);
     if (!pr.counterRestartsAtOne)
       throw new Error(`refusing receipt: PR #${pr.number}'s round counter did not restart at 1`);
+    if (!pr.roundNumbersSequential)
+      throw new Error(`refusing receipt: PR #${pr.number}'s rounds are duplicated or gapped`);
     if (pr.replanRequired && !pr.replanRecorded)
       throw new Error(`refusing receipt: PR #${pr.number} hit the ceiling without a replan`);
   }
@@ -909,7 +941,12 @@ export function validateFinalGatesStore(
       "refusing receipt: a review round belongs to no mission PR, so it is unrecorded",
     );
   // Class history does not reset: one shared, non-empty class list.
-  if (ledger.classSectionCount !== 1 || ledger.classCount === 0)
+  if (
+    ledger.classSectionCount !== 1 ||
+    ledger.classCount === 0 ||
+    ledger.baselineClassCount === 0 ||
+    ledger.missingRequiredClassCount !== 0
+  )
     throw new Error(
       "refusing receipt: the ledger does not hold exactly one non-empty shared class history",
     );
@@ -1133,7 +1170,12 @@ export function writeFinalGatesReceipt(
   const formatted = execFileSync(
     path.join(root, "node_modules", ".bin", "vp"),
     ["fmt", "--stdin-filepath=.proof-receipts/receipt.json"],
-    { cwd: root, input: `${JSON.stringify(receipt, null, 2)}\n`, encoding: "utf8" },
+    {
+      cwd: root,
+      env: childEnvironment(process.env),
+      input: `${JSON.stringify(receipt, null, 2)}\n`,
+      encoding: "utf8",
+    },
   );
   try {
     writeFileSync(file, formatted, { flag: "wx" });

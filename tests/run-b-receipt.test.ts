@@ -11,6 +11,7 @@ import {
   scanRunBReceipt,
   DERIVED_MATRIX_IDS,
   SOURCE_MATRIX_IDS,
+  type RunBMatrixRow,
   type RunBObservationStore,
 } from "./run-b-receipt.ts";
 import { test } from "./_expect.ts";
@@ -296,12 +297,30 @@ test("an addition is reported rather than refused", () => {
 
 test("the bonus row gates nothing", () => {
   const store = completeStore();
-  const gating = gatingRows(store.rows);
+  const receipt = buildRunBReceipt(store, {
+    gitHead: store.runStart.gitHead,
+    treeClean: true,
+  }) as {
+    readonly matrix: readonly RunBMatrixRow[];
+  };
+  const gating = gatingRows(receipt.matrix);
 
-  assert.equal(gating.length, store.rows.length - 1);
+  assert.equal(gating.length, receipt.matrix.length - 1);
   assert.equal(
     gating.some(({ id }) => id === "bonus-first-link-history-sync"),
     false,
+  );
+  assert.equal(
+    gating.some(({ id }) => id === "pair-restart-recorded-as-a-labelled-reconnect"),
+    true,
+  );
+  assert.equal(
+    gating.some(({ id }) => id === "unlink-logout-preceded-the-clear"),
+    true,
+  );
+  assert.equal(
+    gating.some(({ id }) => id === "unlink-preserves-durable-messages"),
+    true,
   );
 });
 

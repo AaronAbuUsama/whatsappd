@@ -146,6 +146,12 @@ try {
   const changesetConfig = JSON.parse(
     await readFile(path.join(root, ".changeset/config.json"), "utf8"),
   ) as { readonly fixed?: readonly unknown[]; readonly linked?: readonly unknown[] };
+  const prerelease = JSON.parse(await readFile(path.join(root, ".changeset/pre.json"), "utf8")) as {
+    readonly mode: string;
+    readonly tag: string;
+    readonly initialVersions: Readonly<Record<string, string>>;
+    readonly changesets: readonly string[];
+  };
   const changelog = await readFile(path.join(root, "CHANGELOG.md"), "utf8");
   const changelogLines = changelog.split("\n");
   const sectionStart = changelogLines.findIndex((line) => line === `## ${EXPECTED_VERSION}`);
@@ -155,15 +161,7 @@ try {
   const sectionBody = changelogLines
     .slice(sectionStart + 1, sectionEnd === -1 ? changelogLines.length : sectionEnd)
     .filter((line) => line.trim().length > 0);
-  // The consumed count comes from the commit that removed them, not from a
-  // literal: a hardcoded 11 would agree with itself for ever.
-  const consumedChangesetCount = execFileSync(
-    "git",
-    ["log", "-1", "--diff-filter=D", "--name-only", "--format=", "--", ".changeset"],
-    { cwd: root, encoding: "utf8" },
-  )
-    .split("\n")
-    .filter((line) => line.endsWith(".md")).length;
+  const consumedChangesetCount = prerelease.changesets.length;
 
   // 2. Pack, from the tree this proof is running in.
   await execFile("pnpm", ["build"], { cwd: root });
@@ -391,6 +389,9 @@ process.stdout.write(JSON.stringify({ ...JSON.parse(receipt), nodeVersion: proce
       packageVersion: packageJson.version,
       pendingChangesetCount: pendingChangesets.length,
       consumedChangesetCount,
+      changesetMode: prerelease.mode,
+      prereleaseTag: prerelease.tag,
+      initialVersion: prerelease.initialVersions.whatsappd ?? "",
       changelogSectionPresent: sectionStart !== -1,
       changelogSectionLineCount: sectionBody.length,
       changesetFixedGroupCount: changesetConfig.fixed?.length ?? 0,

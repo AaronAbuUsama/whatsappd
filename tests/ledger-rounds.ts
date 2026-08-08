@@ -38,6 +38,8 @@ export interface PullRequestRounds {
   readonly lowestRoundNumber: number;
   /** The counter restarts per PR. Vacuously true for a PR with no rounds. */
   readonly counterRestartsAtOne: boolean;
+  /** Exactly 1..N, with no duplicate label and no missing round. */
+  readonly roundNumbersSequential: boolean;
   readonly withinCeiling: boolean;
   /** The ceiling forces a replan; below it, one is permitted but not required. */
   readonly replanRequired: boolean;
@@ -52,11 +54,16 @@ export interface LedgerRoundReport {
   /** One shared class list rather than a per-PR one — the "does not reset" shape. */
   readonly classCount: number;
   readonly classSectionCount: number;
+  readonly classIds: readonly number[];
+  readonly missingRequiredClassIds: readonly number[];
 }
 
 const ROUND_HEADING = /^### Round (\d+) — `([0-9a-f]{7,40})`/gmu;
 const CLASS_HEADING = /^### C(\d+) —/gmu;
 const REPLAN = /Replanned rather than patched again/u;
+
+/** Defect classes present before the release-candidate review began. */
+export const REQUIRED_DEFECT_CLASS_IDS = [1, 2, 3, 4, 5, 6, 8, 9, 10] as const;
 
 /** The section a character offset falls in, by `## ` heading. */
 function sectionsOf(text: string): readonly { readonly title: string; readonly body: string }[] {
@@ -78,6 +85,7 @@ export function parseLedgerRounds(
   ledgerText: string,
   commitsByPullRequest: ReadonlyMap<number, readonly string[]>,
   roundCeiling: number,
+  requiredClassIds: readonly number[] = [],
 ): LedgerRoundReport {
   const sections = sectionsOf(ledgerText);
   const sectionFor = (offset: number): string => {
@@ -108,8 +116,13 @@ export function parseLedgerRounds(
   const pullRequests = [...commitsByPullRequest.keys()].map((number): PullRequestRounds => {
     const mine = headings.filter((heading) => ownerOf(heading.commit) === number);
     const numbers = mine.map(({ round }) => round);
+    const sortedNumbers = [...numbers].sort((left, right) => left - right);
     const highestRoundNumber = numbers.length === 0 ? 0 : Math.max(...numbers);
     const lowestRoundNumber = numbers.length === 0 ? 0 : Math.min(...numbers);
+    const roundNumbersSequential =
+      numbers.length === 0 ||
+      (new Set(numbers).size === numbers.length &&
+        sortedNumbers.every((round, index) => round === index + 1));
     // Scoped to this PR's own sections: a replan recorded on another PR says
     // nothing about this one, which is what a single global boolean asserted.
     const bodies = sections
@@ -123,11 +136,18 @@ export function parseLedgerRounds(
       highestRoundNumber,
       lowestRoundNumber,
       counterRestartsAtOne: numbers.length === 0 || lowestRoundNumber === 1,
-      withinCeiling: highestRoundNumber <= roundCeiling,
+      roundNumbersSequential,
+      withinCeiling:
+        roundNumbersSequential && mine.length <= roundCeiling && highestRoundNumber <= roundCeiling,
       replanRequired,
       replanRecorded: REPLAN.test(bodies),
     };
   });
+
+  const classIds = [...ledgerText.matchAll(CLASS_HEADING)]
+    .map((match) => Number(match[1]))
+    .sort((left, right) => left - right);
+  const classIdSet = new Set(classIds);
 
   return {
     headings,
@@ -135,10 +155,14 @@ export function parseLedgerRounds(
     unattributedCommits: headings
       .filter((heading) => ownerOf(heading.commit) === undefined)
       .map(({ commit }) => commit),
-    classCount: [...ledgerText.matchAll(CLASS_HEADING)].length,
+    classCount: classIds.length,
     // The class list lives under one `## Classes` heading shared by every PR.
     // A second one would be a per-PR class history, which is the reset the
     // contract forbids.
     classSectionCount: sections.filter(({ title }) => title === "Classes").length,
+    classIds,
+    missingRequiredClassIds: [...new Set(requiredClassIds)]
+      .filter((id) => !classIdSet.has(id))
+      .sort((left, right) => left - right),
   };
 }

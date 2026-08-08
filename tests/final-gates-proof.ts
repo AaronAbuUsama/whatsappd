@@ -115,7 +115,11 @@ const run = async (
 };
 
 const gitOut = (args: readonly string[], cwd = root): string =>
-  execFileSync("git", [...args], { cwd, encoding: "utf8" }).trim();
+  execFileSync("git", [...args], {
+    cwd,
+    env: childEnvironment(process.env),
+    encoding: "utf8",
+  }).trim();
 
 const COVERAGE_ARGS = [
   "--experimental-strip-types",
@@ -288,7 +292,11 @@ try {
   const headText = readFileSync(headLcov, "utf8");
   const sourceCorpus = (cwd: string): ReadonlyMap<string, string> =>
     new Map(
-      execFileSync("find", ["src", "-type", "f"], { cwd, encoding: "utf8" })
+      execFileSync("find", ["src", "-type", "f"], {
+        cwd,
+        env: childEnvironment(process.env),
+        encoding: "utf8",
+      })
         .split("\n")
         .filter(Boolean)
         .sort()
@@ -308,21 +316,52 @@ try {
   const plantedLcov = (hits: readonly number[]): string =>
     [
       "SF:/probe/src/planted.ts",
+      "FN:1,planted",
+      `FNDA:${hits[0] ?? 0},planted`,
       ...hits.map((count, index) => `DA:${index + 1},${count}`),
+      `BRDA:1,0,0,${hits[0] ?? 0}`,
       `LH:${hits.filter((count) => count > 0).length}`,
       `LF:${hits.length}`,
-      "FNH:1",
+      `FNH:${(hits[0] ?? 0) > 0 ? 1 : 0}`,
       "FNF:1",
-      "BRH:1",
+      `BRH:${(hits[0] ?? 0) > 0 ? 1 : 0}`,
       "BRF:1",
       "end_of_record",
     ].join("\n");
   const plantedSource = new Map([["src/planted.ts", "covered\nmissed\n"]]);
-  const selfTestPlantedPreExistingRegressionCount = compareCoverage(
-    plantedLcov([1, 0]),
-    plantedLcov([0, 0]),
-    { baseSources: plantedSource, headSources: plantedSource },
-  ).newlyUncoveredPreExisting.length;
+  const plantedComparison = compareCoverage(plantedLcov([1, 0]), plantedLcov([0, 0]), {
+    baseSources: plantedSource,
+    headSources: plantedSource,
+  });
+  const selfTestPlantedPreExistingRegressionCount =
+    plantedComparison.newlyUncoveredPreExisting.length;
+  const selfTestPlantedPreExistingFunctionRegressionCount =
+    plantedComparison.newlyUncoveredPreExisting.filter((identity) =>
+      identity.startsWith("src/planted.ts:function:"),
+    ).length;
+  const selfTestPlantedPreExistingBranchRegressionCount =
+    plantedComparison.newlyUncoveredPreExisting.filter((identity) =>
+      identity.startsWith("src/planted.ts:branch:"),
+    ).length;
+  const identityMatchesMetric = (identity: string, filePath: string, metric: string): boolean =>
+    identity.startsWith(`${filePath}:`) &&
+    (metric === "functions"
+      ? identity.startsWith(`${filePath}:function:`)
+      : metric === "branches"
+        ? identity.startsWith(`${filePath}:branch:`)
+        : metric === "lines" &&
+          !identity.startsWith(`${filePath}:function:`) &&
+          !identity.startsWith(`${filePath}:branch:`));
+  const unclassifiedRegressionCount = regressions.filter(
+    (regression) =>
+      !sourceComparison.newlyUncoveredPreExisting.some((identity) =>
+        identityMatchesMetric(identity, regression.path, regression.metric),
+      ) &&
+      !sourceComparison.uncoveredNewSource.some((identity) =>
+        identityMatchesMetric(identity, regression.path, regression.metric),
+      ) &&
+      !comparison.denominatorOnly.includes(regression.path),
+  ).length;
 
   // --------------------------------------------------------------------- suite
   log("executed suite");
@@ -334,6 +373,7 @@ try {
 
   const testFiles = execFileSync("find", ["tests", "-name", "*.test.ts"], {
     cwd: root,
+    env: childEnvironment(process.env),
     encoding: "utf8",
   })
     .split("\n")
@@ -606,6 +646,7 @@ try {
   log("process integrity");
   const MISSION_PULL_REQUESTS = [116, 120, 125, 128, 129, 131, 147] as const;
   const ledgerText = readFileSync(path.join(root, "docs/client-stack-defect-ledger.md"), "utf8");
+  const baselineLedgerText = gitOut(["show", "origin/master:docs/client-stack-defect-ledger.md"]);
 
   interface PullRequestFacts {
     readonly verdict: Verdict;
@@ -667,7 +708,13 @@ try {
 
   // The ceiling is a per-PR rule, so rounds are attributed to the PR whose
   // commits they name rather than maximized over the whole document.
-  const rounds = parseLedgerRounds(ledgerText, commitsByPullRequest, ROUND_CEILING);
+  const baselineClassIds = parseLedgerRounds(baselineLedgerText, new Map(), ROUND_CEILING).classIds;
+  const rounds = parseLedgerRounds(
+    ledgerText,
+    commitsByPullRequest,
+    ROUND_CEILING,
+    baselineClassIds,
+  );
   const roundsFor = new Map(rounds.pullRequests.map((entry) => [entry.number, entry]));
   const pullRequests: PullRequestObservation[] = MISSION_PULL_REQUESTS.map((number) => {
     const fact = facts.get(number)!;
@@ -678,6 +725,7 @@ try {
       roundsAttributed: round.roundsAttributed,
       highestRoundNumber: round.highestRoundNumber,
       counterRestartsAtOne: round.counterRestartsAtOne,
+      roundNumbersSequential: round.roundNumbersSequential,
       withinCeiling: round.withinCeiling,
       replanRequired: round.replanRequired,
       replanRecorded: round.replanRecorded,
@@ -752,6 +800,7 @@ try {
       headUncoveredSourceIdentityCount: sourceComparison.headUncoveredSourceIdentityCount,
       newlyUncoveredPreExistingCount: sourceComparison.newlyUncoveredPreExisting.length,
       uncoveredNewSourceCount: sourceComparison.uncoveredNewSource.length,
+      unclassifiedRegressionCount,
       newSourceMissesTrackedByIssue: 148,
       realGateExit: realGate.code,
       raisedFloorHundredths,
@@ -760,7 +809,12 @@ try {
       selfTestInvertedRegressions: selfTestInverted,
       selfTestEmptyCorpusRefused,
       selfTestPlantedPreExistingRegressionCount,
-      verdict: sourceComparison.newlyUncoveredPreExisting.length > 0 ? "failed" : "observed",
+      selfTestPlantedPreExistingFunctionRegressionCount,
+      selfTestPlantedPreExistingBranchRegressionCount,
+      verdict:
+        sourceComparison.newlyUncoveredPreExisting.length > 0 || unclassifiedRegressionCount > 0
+          ? "failed"
+          : "observed",
     },
     suite: {
       planPresent: planMatch !== null,
@@ -818,16 +872,17 @@ try {
     ledger: {
       maxRoundsRecorded,
       roundCeiling: 4,
-      withinCeiling: maxRoundsRecorded <= 4,
+      withinCeiling: rounds.pullRequests.every(({ withinCeiling }) => withinCeiling),
       replanRecorded: /Replanned rather than patched again/u.test(ledgerText),
-      classHistoryDoesNotReset: /this file\s+does not reset|the classes above do not/u.test(
-        ledgerText,
-      ),
+      classHistoryDoesNotReset:
+        rounds.classSectionCount === 1 && rounds.missingRequiredClassIds.length === 0,
       reviewerSubstitutionRecorded: /substitution recorded on PR #116/u.test(ledgerText),
       ownerConfirmationRecorded: /confirmed by the\s+repository owner/u.test(ledgerText),
       independentGraderVerdict,
       classCount: rounds.classCount,
       classSectionCount: rounds.classSectionCount,
+      baselineClassCount: baselineClassIds.length,
+      missingRequiredClassCount: rounds.missingRequiredClassIds.length,
       unattributedRoundCount: rounds.unattributedCommits.length,
       attributedRoundCount: rounds.pullRequests.reduce(
         (sum, entry) => sum + entry.roundsAttributed,

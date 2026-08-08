@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "./_expect.ts";
 import {
+  EXPECTED_INITIAL_VERSION,
+  EXPECTED_PREMODE,
   EXPECTED_VERSION,
   EXPECTED_PREMODE_CHANGESET_COUNT,
+  EXPECTED_PRERELEASE_TAG,
   NODE_MATRIX_IDS,
+  RELEASE_CANDIDATE_SCHEMA_VERSION,
   RELEASE_CANDIDATE_SCOPE,
   TARBALL_CEILING_BYTES,
   assertReleaseCandidateSanitizationDescribesFinalObject,
@@ -70,6 +75,7 @@ const store = (
     captureSite: "release-candidate-proof-run-start",
     gitHead: gitSha("0"),
     sourceTreeHash: gitSha("1"),
+    treeHash: gitSha("2"),
     treeClean: true,
     startedAt: "2026-08-08T00:00:00Z",
   },
@@ -79,6 +85,9 @@ const store = (
     packageVersion: EXPECTED_VERSION,
     pendingChangesetCount: EXPECTED_PREMODE_CHANGESET_COUNT,
     consumedChangesetCount: EXPECTED_PREMODE_CHANGESET_COUNT,
+    changesetMode: EXPECTED_PREMODE,
+    prereleaseTag: EXPECTED_PRERELEASE_TAG,
+    initialVersion: EXPECTED_INITIAL_VERSION,
     changelogSectionPresent: true,
     changelogSectionLineCount: 180,
     changesetFixedGroupCount: 0,
@@ -121,7 +130,11 @@ const store = (
   ...overrides,
 });
 
-const current: CurrentRepoState = { gitHead: gitSha("0"), treeClean: true };
+const current: CurrentRepoState = {
+  gitHead: gitSha("0"),
+  treeHash: gitSha("2"),
+  treeClean: true,
+};
 
 const refuses = (
   overrides: Partial<ReleaseCandidateObservationStore>,
@@ -141,8 +154,25 @@ test("the release-candidate receipt is schema-known, sanitary, and non-vacuous",
   assert.equal(scan.floorPassed, true);
   assert.ok(scan.freeFormFields > 0);
   assert.ok(scan.digestFields > 0);
+  assert.equal(receipt.schemaVersion, RELEASE_CANDIDATE_SCHEMA_VERSION);
   assert.equal(receipt.tier, "P6", "the run never reaches a linked account");
   assert.equal(receipt.scope, RELEASE_CANDIDATE_SCOPE);
+});
+
+test("an older package receipt remains complete only for its own schema version", () => {
+  const fresh = buildReleaseCandidateReceipt(store(), current) as Record<string, unknown>;
+  const older = structuredClone(fresh);
+  older.schemaVersion = 1;
+  delete (older.provenance as Record<string, unknown>).treeHash;
+  const version = older.version as Record<string, unknown>;
+  delete version.changesetMode;
+  delete version.prereleaseTag;
+  delete version.initialVersion;
+  assert.deepEqual(missingReleaseCandidateFields(older), []);
+
+  const lying = { ...structuredClone(older), schemaVersion: RELEASE_CANDIDATE_SCHEMA_VERSION };
+  assert.ok(missingReleaseCandidateFields(lying).includes("/provenance/treeHash"));
+  assert.ok(missingReleaseCandidateFields(lying).includes("/version/changesetMode"));
 });
 
 test("recorded verdicts are derived from the measurements, not asserted against themselves", () => {
@@ -179,8 +209,21 @@ test("recorded verdicts are derived from the measurements, not asserted against 
 });
 
 test("the writer refuses a dirty tree, a moved head, and an unfinalized run", () => {
-  refuses({}, /current head does not match/u, { gitHead: gitSha("5"), treeClean: true });
-  refuses({}, /worktree is dirty/u, { gitHead: gitSha("0"), treeClean: false });
+  refuses({}, /current head does not match/u, {
+    gitHead: gitSha("5"),
+    treeHash: gitSha("2"),
+    treeClean: true,
+  });
+  refuses({}, /current tree does not match/u, {
+    gitHead: gitSha("0"),
+    treeHash: gitSha("5"),
+    treeClean: true,
+  });
+  refuses({}, /worktree is dirty/u, {
+    gitHead: gitSha("0"),
+    treeHash: gitSha("2"),
+    treeClean: false,
+  });
   refuses({ runStart: { ...store().runStart, treeClean: false } }, /worktree is dirty/u);
   refuses({ finalizedAt: undefined }, /not finalized/u);
   refuses({ knownValues: ["only", "two"] }, /known-value negative control/u);
@@ -195,6 +238,15 @@ test("the writer refuses a version that is not the current alpha pre-mode candid
   refuses(
     { version: { ...store().version, consumedChangesetCount: 0 } },
     /not bound to the pre-mode changesets/u,
+  );
+  refuses({ version: { ...store().version, changesetMode: "exit" } }, /not in pre mode/u);
+  refuses(
+    { version: { ...store().version, prereleaseTag: "beta" } },
+    /prerelease tag is not alpha/u,
+  );
+  refuses(
+    { version: { ...store().version, initialVersion: "0.3.0" } },
+    /initial version is not 0\.2\.2/u,
   );
   refuses({ version: { ...store().version, changelogSectionPresent: false } }, /absent or a stub/u);
   refuses({ version: { ...store().version, changelogSectionLineCount: 1 } }, /absent or a stub/u);
@@ -470,9 +522,16 @@ test("every account-shaped pattern and forbidden entry pattern still matches its
 
 test("every committed release-candidate receipt is sanitary and head-bound to its filename", () => {
   assert.ok(committedReceipts.length > 0, "no release-candidate receipt is committed");
+  let currentCandidateReceiptCount = 0;
   for (const name of committedReceipts) {
     const receipt = JSON.parse(readFileSync(path.join(receiptDirectory, name), "utf8")) as {
-      readonly provenance: { readonly gitHead: string; readonly sourceTreeHash: string };
+      readonly schemaVersion: number;
+      readonly provenance: {
+        readonly gitHead: string;
+        readonly sourceTreeHash: string;
+        readonly treeHash?: string;
+      };
+      readonly version: { readonly packageVersion: string };
       readonly tier: string;
       readonly tarball: { readonly byteLength: number; readonly underCeiling: boolean };
       readonly nodeMatrix: readonly { readonly observedMajor: number }[];
@@ -493,6 +552,43 @@ test("every committed release-candidate receipt is sanitary and head-bound to it
       name.includes(receipt.provenance.gitHead.slice(0, 7)),
       `${name} is not named for the head it records`,
     );
+    if (receipt.version.packageVersion === EXPECTED_VERSION) {
+      currentCandidateReceiptCount++;
+      assert.doesNotThrow(
+        () =>
+          execFileSync("git", ["merge-base", "--is-ancestor", receipt.provenance.gitHead, "HEAD"], {
+            cwd: root,
+          }),
+        `${name} records a head outside the current candidate history`,
+      );
+      const addedBy = execFileSync(
+        "git",
+        ["log", "--diff-filter=A", "--format=%H", "--", `.proof-receipts/${name}`],
+        { cwd: root, encoding: "utf8" },
+      )
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      assert.equal(addedBy.length, 1, `${name} was not added exactly once`);
+      const addingParent = execFileSync("git", ["rev-parse", `${addedBy[0]}^`], {
+        cwd: root,
+        encoding: "utf8",
+      }).trim();
+      assert.equal(
+        addingParent,
+        receipt.provenance.gitHead,
+        `${name} was not committed directly after its proven candidate`,
+      );
+      if (receipt.schemaVersion >= 2)
+        assert.equal(
+          receipt.provenance.treeHash,
+          execFileSync("git", ["rev-parse", `${receipt.provenance.gitHead}^{tree}`], {
+            cwd: root,
+            encoding: "utf8",
+          }).trim(),
+          `${name} does not bind the full candidate tree`,
+        );
+    }
     assert.ok(
       receipt.tarball.byteLength < TARBALL_CEILING_BYTES && receipt.tarball.underCeiling,
       `${name} records a tarball at or above the ceiling`,
@@ -507,4 +603,5 @@ test("every committed release-candidate receipt is sanitary and head-bound to it
       [...KNOWN_VALUES],
     );
   }
+  assert.ok(currentCandidateReceiptCount > 0, "no receipt proves the accepted alpha candidate");
 });

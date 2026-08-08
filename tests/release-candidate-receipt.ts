@@ -25,6 +25,10 @@ import {
 export const TARBALL_CEILING_BYTES = 120_000;
 export const EXPECTED_VERSION = "0.3.0-alpha.0";
 export const EXPECTED_PREMODE_CHANGESET_COUNT = 11;
+export const EXPECTED_PREMODE = "pre";
+export const EXPECTED_PRERELEASE_TAG = "alpha";
+export const EXPECTED_INITIAL_VERSION = "0.2.2";
+export const RELEASE_CANDIDATE_SCHEMA_VERSION = 2;
 export const RELEASE_CANDIDATE_SCOPE =
   "0.3.0 release candidate: version, tarball, and dual-Node packed consumer";
 export const NODE_MATRIX_IDS = ["node22", "node24"] as const;
@@ -36,6 +40,7 @@ export interface ReleaseCandidateRunStart {
   readonly captureSite: "release-candidate-proof-run-start";
   readonly gitHead: string;
   readonly sourceTreeHash: string;
+  readonly treeHash: string;
   readonly treeClean: boolean;
   readonly startedAt: string;
 }
@@ -44,6 +49,9 @@ export interface VersionObservation {
   readonly packageVersion: string;
   readonly pendingChangesetCount: number;
   readonly consumedChangesetCount: number;
+  readonly changesetMode: string;
+  readonly prereleaseTag: string;
+  readonly initialVersion: string;
   readonly changelogSectionPresent: boolean;
   readonly changelogSectionLineCount: number;
   readonly changesetFixedGroupCount: number;
@@ -133,6 +141,7 @@ export interface ReleaseSideEffectObservation {
 
 export interface CurrentRepoState {
   readonly gitHead: string;
+  readonly treeHash: string;
   readonly treeClean: boolean;
 }
 
@@ -145,6 +154,7 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/provenance/captureSite", field("enum", ["release-candidate-proof-run-start"])],
   ["/provenance/gitHead", field("git_sha")],
   ["/provenance/sourceTreeHash", field("git_sha")],
+  ["/provenance/treeHash", field("git_sha")],
   ["/provenance/treeClean", field("boolean")],
   ["/provenance/startedAt", field("iso8601")],
   ["/provenance/finalizedAt", field("iso8601")],
@@ -157,6 +167,9 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/version/matchesExpected", field("boolean")],
   ["/version/pendingChangesetCount", field("count")],
   ["/version/consumedChangesetCount", field("count")],
+  ["/version/changesetMode", field("enum", [EXPECTED_PREMODE])],
+  ["/version/prereleaseTag", field("enum", [EXPECTED_PRERELEASE_TAG])],
+  ["/version/initialVersion", field("free_form")],
   ["/version/changelogSectionPresent", field("boolean")],
   ["/version/changelogSectionLineCount", field("count")],
   ["/version/changesetFixedGroupCount", field("count")],
@@ -240,6 +253,7 @@ export function captureReleaseCandidateRunStart(root: string): ReleaseCandidateR
     captureSite: "release-candidate-proof-run-start",
     gitHead: git(root, ["rev-parse", "HEAD"]),
     sourceTreeHash: git(root, ["rev-parse", "HEAD:src"]),
+    treeHash: git(root, ["rev-parse", "HEAD^{tree}"]),
     treeClean: git(root, ["status", "--porcelain", "--untracked-files=all"]).length === 0,
     startedAt: new Date().toISOString(),
   };
@@ -274,7 +288,15 @@ export function missingReleaseCandidateFields(receipt: unknown): readonly string
   const present = new Set(
     leafPointers(receipt).map((pointer) => pointer.replace(/\/\d+(?=\/|$)/gu, "/*")),
   );
-  return [...RECEIPT_SCHEMA.keys()].filter((key) => !present.has(key)).sort();
+  const version = Number(
+    (typeof receipt === "object" && receipt !== null && Reflect.get(receipt, "schemaVersion")) || 0,
+  );
+  const version2 =
+    /^\/(provenance\/treeHash|version\/(changesetMode|prereleaseTag|initialVersion))$/u;
+  return [...RECEIPT_SCHEMA.keys()]
+    .filter((key) => !present.has(key))
+    .filter((key) => version >= 2 || !version2.test(key))
+    .sort();
 }
 
 /**
@@ -302,6 +324,8 @@ export function validateReleaseCandidateStore(
     throw new Error("refusing receipt: the run or current worktree is dirty");
   if (store.runStart.gitHead !== current.gitHead)
     throw new Error("refusing receipt: current head does not match the captured run head");
+  if (store.runStart.treeHash !== current.treeHash)
+    throw new Error("refusing receipt: current tree does not match the captured candidate tree");
   if (!store.finalizedAt) throw new Error("refusing receipt: the run is not finalized");
   if (
     store.knownValues.length < 3 ||
@@ -316,6 +340,12 @@ export function validateReleaseCandidateStore(
     throw new Error("refusing receipt: the alpha pre-mode changeset set is incomplete");
   if (store.version.consumedChangesetCount !== EXPECTED_PREMODE_CHANGESET_COUNT)
     throw new Error("refusing receipt: the alpha receipt is not bound to the pre-mode changesets");
+  if (store.version.changesetMode !== EXPECTED_PREMODE)
+    throw new Error("refusing receipt: changesets is not in pre mode");
+  if (store.version.prereleaseTag !== EXPECTED_PRERELEASE_TAG)
+    throw new Error("refusing receipt: the prerelease tag is not alpha");
+  if (store.version.initialVersion !== EXPECTED_INITIAL_VERSION)
+    throw new Error("refusing receipt: the prerelease initial version is not 0.2.2");
   if (!store.version.changelogSectionPresent || store.version.changelogSectionLineCount < 2)
     throw new Error("refusing receipt: the alpha CHANGELOG section is absent or a stub");
   if (store.version.changesetFixedGroupCount !== 0 || store.version.changesetLinkedGroupCount !== 0)
@@ -437,7 +467,7 @@ export function buildReleaseCandidateReceipt(
     .digest("hex");
   const observedLegs = store.nodeMatrix.filter((leg) => leg.verdict === "observed");
   const withoutSanitization = {
-    schemaVersion: 1,
+    schemaVersion: RELEASE_CANDIDATE_SCHEMA_VERSION,
     issue: 112,
     scope: RELEASE_CANDIDATE_SCOPE,
     tier: "P6",
@@ -533,6 +563,7 @@ export function writeReleaseCandidateReceipt(
 ): { readonly file: string; readonly scan: ReceiptScanReport } {
   const current = {
     gitHead: git(root, ["rev-parse", "HEAD"]),
+    treeHash: git(root, ["rev-parse", "HEAD^{tree}"]),
     treeClean: git(root, ["status", "--porcelain", "--untracked-files=all"]).length === 0,
   };
   const receipt = buildReleaseCandidateReceipt(store, current);
