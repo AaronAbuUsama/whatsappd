@@ -23,7 +23,8 @@ import {
 } from "./proof-receipt-scan.ts";
 
 export const TARBALL_CEILING_BYTES = 120_000;
-export const EXPECTED_VERSION = "0.3.0";
+export const EXPECTED_VERSION = "0.3.0-alpha.0";
+export const EXPECTED_PREMODE_CHANGESET_COUNT = 11;
 export const RELEASE_CANDIDATE_SCOPE =
   "0.3.0 release candidate: version, tarball, and dual-Node packed consumer";
 export const NODE_MATRIX_IDS = ["node22", "node24"] as const;
@@ -311,12 +312,12 @@ export function validateReleaseCandidateStore(
 
   if (store.version.packageVersion !== EXPECTED_VERSION)
     throw new Error(`refusing receipt: package version is not ${EXPECTED_VERSION}`);
-  if (store.version.pendingChangesetCount !== 0)
-    throw new Error("refusing receipt: changesets are still pending");
-  if (store.version.consumedChangesetCount < 1)
-    throw new Error("refusing receipt: no changeset was consumed into this version");
+  if (store.version.pendingChangesetCount !== EXPECTED_PREMODE_CHANGESET_COUNT)
+    throw new Error("refusing receipt: the alpha pre-mode changeset set is incomplete");
+  if (store.version.consumedChangesetCount !== EXPECTED_PREMODE_CHANGESET_COUNT)
+    throw new Error("refusing receipt: the alpha receipt is not bound to the pre-mode changesets");
   if (!store.version.changelogSectionPresent || store.version.changelogSectionLineCount < 2)
-    throw new Error("refusing receipt: the CHANGELOG 0.3.0 section is absent or a stub");
+    throw new Error("refusing receipt: the alpha CHANGELOG section is absent or a stub");
   if (store.version.changesetFixedGroupCount !== 0 || store.version.changesetLinkedGroupCount !== 0)
     throw new Error("refusing receipt: changeset fixed/linked groups must stay empty");
 

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "./_expect.ts";
 import {
   EXPECTED_VERSION,
+  EXPECTED_PREMODE_CHANGESET_COUNT,
   NODE_MATRIX_IDS,
   RELEASE_CANDIDATE_SCOPE,
   TARBALL_CEILING_BYTES,
@@ -76,8 +77,8 @@ const store = (
   knownValues: [...KNOWN_VALUES],
   version: {
     packageVersion: EXPECTED_VERSION,
-    pendingChangesetCount: 0,
-    consumedChangesetCount: 11,
+    pendingChangesetCount: EXPECTED_PREMODE_CHANGESET_COUNT,
+    consumedChangesetCount: EXPECTED_PREMODE_CHANGESET_COUNT,
     changelogSectionPresent: true,
     changelogSectionLineCount: 180,
     changesetFixedGroupCount: 0,
@@ -185,12 +186,15 @@ test("the writer refuses a dirty tree, a moved head, and an unfinalized run", ()
   refuses({ knownValues: ["only", "two"] }, /known-value negative control/u);
 });
 
-test("the writer refuses a version that is not the consumed 0.3.0", () => {
+test("the writer refuses a version that is not the current alpha pre-mode candidate", () => {
   refuses({ version: { ...store().version, packageVersion: "0.2.2" } }, /is not 0\.3\.0/u);
-  refuses({ version: { ...store().version, pendingChangesetCount: 1 } }, /still pending/u);
+  refuses(
+    { version: { ...store().version, pendingChangesetCount: 1 } },
+    /pre-mode changeset set is incomplete/u,
+  );
   refuses(
     { version: { ...store().version, consumedChangesetCount: 0 } },
-    /no changeset was consumed/u,
+    /not bound to the pre-mode changesets/u,
   );
   refuses({ version: { ...store().version, changelogSectionPresent: false } }, /absent or a stub/u);
   refuses({ version: { ...store().version, changelogSectionLineCount: 1 } }, /absent or a stub/u);

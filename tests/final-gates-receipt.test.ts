@@ -11,6 +11,7 @@ import {
   buildFinalGatesReceipt,
   deriveFinalGatesVerdict,
   missingFinalGatesFields,
+  RECEIPT_SCHEMA_VERSION,
   scanFinalGatesReceipt,
   validateFinalGatesStore,
   type CurrentRepoState,
@@ -89,12 +90,18 @@ const store = (
     regressedFileCount: 0,
     regressions: [],
     denominatorOnlyFileCount: 0,
+    preExistingSourceIdentityCount: 100,
+    headUncoveredSourceIdentityCount: 5,
+    newlyUncoveredPreExistingCount: 0,
+    uncoveredNewSourceCount: 5,
+    newSourceMissesTrackedByIssue: 148,
     realGateExit: 0,
     raisedFloorHundredths: 9674,
     raisedFloorExit: 1,
     selfTestBaseVsBaseRegressions: 0,
     selfTestInvertedRegressions: 9,
     selfTestEmptyCorpusRefused: true,
+    selfTestPlantedPreExistingRegressionCount: 1,
     verdict: "observed",
   },
   suite: {
@@ -355,6 +362,7 @@ test("a coverage regression is recorded, not refused, but the verdict must agree
     coverage: {
       ...store().coverage,
       regressedFileCount: 1,
+      newlyUncoveredPreExistingCount: 1,
       regressions: [
         {
           path: "src/session.ts",
@@ -380,7 +388,7 @@ test("a coverage regression is recorded, not refused, but the verdict must agree
         store({ coverage: { ...regressed.coverage, verdict: "observed" } }),
         current,
       ),
-    /disagrees with its own regression list/u,
+    /disagrees with pre-existing source loss/u,
   );
   assert.throws(
     () =>
@@ -398,6 +406,7 @@ test("a coverage regression is recorded, not refused, but the verdict must agree
     coverage: {
       ...store().coverage,
       regressedFileCount: 1,
+      newlyUncoveredPreExistingCount: 1,
       regressions: (["lines", "branches", "functions"] as const).map((metric) => ({
         path: "src/runtime/runtime.ts",
         metric,
@@ -863,6 +872,68 @@ test("the comparator refuses an empty corpus rather than reporting it clean", ()
   assert.equal(parseLcov("").size, 0);
 });
 
+test("the comparator separates pre-existing coverage loss from uncovered new source", () => {
+  const lcov = (hits: readonly number[]): string =>
+    [
+      "SF:/tree/src/a.ts",
+      ...hits.map((count, index) => `DA:${index + 1},${count}`),
+      `LH:${hits.filter((count) => count > 0).length}`,
+      `LF:${hits.length}`,
+      "FNH:1",
+      "FNF:1",
+      "BRH:1",
+      "BRF:1",
+      "end_of_record",
+    ].join("\n");
+  const baseSources = new Map([["src/a.ts", "covered\nstays missed\ncovered duplicate\n"]]);
+  const headSources = new Map([
+    ["src/a.ts", "covered\nstays missed\ncovered duplicate\nnew feature miss\n"],
+  ]);
+  const comparison = compareCoverage(lcov([1, 0, 1]), lcov([0, 0, 1, 0]), {
+    baseSources,
+    headSources,
+  });
+
+  assert.deepEqual(comparison.newlyUncoveredPreExisting, ["src/a.ts:1:covered"]);
+  assert.deepEqual(comparison.uncoveredNewSource, ["src/a.ts:1:new feature miss"]);
+  assert.equal(comparison.preExistingSourceIdentityCount, 4);
+  assert.equal(comparison.headUncoveredSourceIdentityCount, 3);
+
+  // Direction is load-bearing: reversing base and head reports no loss of the
+  // line that is covered at the later side.
+  const inverted = compareCoverage(lcov([0, 0, 1, 0]), lcov([1, 0, 1]), {
+    baseSources: headSources,
+    headSources: baseSources,
+  });
+  assert.deepEqual(inverted.newlyUncoveredPreExisting, []);
+});
+
+test("source-identity classification refuses a one-sided or empty corpus", () => {
+  const lcov = [
+    "SF:/tree/src/a.ts",
+    "DA:1,0",
+    "LH:0",
+    "LF:1",
+    "FNH:1",
+    "FNF:1",
+    "BRH:1",
+    "BRF:1",
+    "end_of_record",
+  ].join("\n");
+  assert.throws(
+    () => compareCoverage(lcov, lcov, { baseSources: new Map([["src/a.ts", "x"]]) }),
+    /only one source corpus/u,
+  );
+  assert.throws(
+    () =>
+      compareCoverage(lcov, lcov, {
+        baseSources: new Map(),
+        headSources: new Map(),
+      }),
+    /empty source or uncovered corpus/u,
+  );
+});
+
 test("the branch tolerance is branch-only and named-file-only", () => {
   const record = (file: string, brh: number, brf: number, lh: number): string =>
     [
@@ -1059,6 +1130,54 @@ test("the ledger this repository ships keeps every PR under the ceiling", () => 
     assert.ok(pr.counterRestartsAtOne, `PR #${pr.number} did not restart its counter`);
     if (pr.replanRequired) assert.ok(pr.replanRecorded, `PR #${pr.number} needs a replan`);
   }
+});
+
+test("an older receipt is complete for its own version, a new one for the current schema", () => {
+  const fresh = buildFinalGatesReceipt(store(), current) as Record<string, unknown>;
+  assert.equal(fresh.schemaVersion, RECEIPT_SCHEMA_VERSION);
+  assert.deepEqual(missingFinalGatesFields(fresh), []);
+
+  // Strip everything version 2 added and label it version 1: that is exactly a
+  // receipt written before this change, and it is complete for what it claims.
+  const older: Record<string, unknown> = structuredClone(fresh);
+  older.schemaVersion = 1;
+  delete (older.safety as Record<string, unknown>).childEnvironment;
+  const process_ = older.process as Record<string, unknown>;
+  const ledger = process_.ledger as Record<string, unknown>;
+  for (const key of [
+    "classCount",
+    "classSectionCount",
+    "unattributedRoundCount",
+    "attributedRoundCount",
+  ])
+    delete ledger[key];
+  process_.pullRequests = (process_.pullRequests as Record<string, unknown>[]).map((pr) => {
+    const copy = { ...pr };
+    for (const key of [
+      "roundsAttributed",
+      "highestRoundNumber",
+      "counterRestartsAtOne",
+      "withinCeiling",
+      "replanRequired",
+      "replanRecorded",
+    ])
+      delete copy[key];
+    return copy;
+  });
+  assert.deepEqual(missingFinalGatesFields(older), []);
+
+  // The exemption is version-scoped, not a hole: the same stripped body
+  // claiming the current version is incomplete, and says so field by field.
+  const lying = { ...structuredClone(older), schemaVersion: RECEIPT_SCHEMA_VERSION };
+  const missing = missingFinalGatesFields(lying);
+  assert.ok(missing.includes("/safety/childEnvironment/forbiddenLeakCount"));
+  assert.ok(missing.includes("/process/pullRequests/*/counterRestartsAtOne"));
+
+  // And a version 1 receipt is still held to every field version 1 had, so the
+  // exemption did not quietly excuse the whole schema.
+  const trimmed = structuredClone(older);
+  delete (trimmed.safety as Record<string, unknown>).leakScan;
+  assert.ok(missingFinalGatesFields(trimmed).length > 0);
 });
 
 test("every committed final-gates receipt still scans clean and names this scope", () => {

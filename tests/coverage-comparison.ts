@@ -25,6 +25,7 @@ export interface FileCoverage {
   readonly functionsFound: number;
   readonly branchesHit: number;
   readonly branchesFound: number;
+  readonly uncoveredLines: readonly number[];
 }
 
 export type CoverageMetric = "lines" | "branches" | "functions";
@@ -46,6 +47,10 @@ export interface CoverageComparison {
   readonly removedAtHead: readonly string[];
   readonly regressions: readonly CoverageRegression[];
   readonly denominatorOnly: readonly string[];
+  readonly preExistingSourceIdentityCount: number;
+  readonly headUncoveredSourceIdentityCount: number;
+  readonly newlyUncoveredPreExisting: readonly string[];
+  readonly uncoveredNewSource: readonly string[];
   readonly aggregateBase: Readonly<Record<CoverageMetric, number>>;
   readonly aggregateHead: Readonly<Record<CoverageMetric, number>>;
 }
@@ -63,14 +68,19 @@ export function parseLcov(text: string): ReadonlyMap<string, FileCoverage> {
   const files = new Map<string, FileCoverage>();
   let path: string | undefined;
   let counters: Record<string, number> = {};
+  let uncoveredLines: number[] = [];
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (line.startsWith("SF:")) {
       path = line.slice(3);
       counters = {};
+      uncoveredLines = [];
     } else if (path && /^(LH|LF|FNH|FNF|BRH|BRF):/u.test(line)) {
       const [key, value] = line.split(":");
       if (key && value !== undefined) counters[key] = Number(value);
+    } else if (path && line.startsWith("DA:")) {
+      const [lineNumber, hits] = line.slice(3).split(",");
+      if (Number(hits) === 0 && lineNumber !== undefined) uncoveredLines.push(Number(lineNumber));
     } else if (line === "end_of_record" && path) {
       // lcov paths are absolute and carry the worktree they were measured in,
       // so they must be made relative or base and head never match at all.
@@ -83,12 +93,34 @@ export function parseLcov(text: string): ReadonlyMap<string, FileCoverage> {
         functionsFound: counters.FNF ?? 0,
         branchesHit: counters.BRH ?? 0,
         branchesFound: counters.BRF ?? 0,
+        uncoveredLines,
       });
       path = undefined;
     }
   }
   return files;
 }
+
+const sourceLineIdentities = (source: string): readonly string[] => {
+  const occurrences = new Map<string, number>();
+  return source.split("\n").map((line) => {
+    const occurrence = (occurrences.get(line) ?? 0) + 1;
+    occurrences.set(line, occurrence);
+    return `${occurrence}:${line}`;
+  });
+};
+
+const uncoveredSourceIdentities = (
+  file: FileCoverage,
+  source: string | undefined,
+): readonly string[] => {
+  if (source === undefined) return [];
+  const lines = sourceLineIdentities(source);
+  return file.uncoveredLines.flatMap((line) => {
+    const identity = lines[line - 1];
+    return identity === undefined ? [] : [`${file.path}:${identity}`];
+  });
+};
 
 const metricsOf = (file: FileCoverage): Record<CoverageMetric, number> => ({
   lines: hundredths(file.linesHit, file.linesFound),
@@ -135,7 +167,11 @@ const aggregate = (files: Iterable<FileCoverage>): Record<CoverageMetric, number
 export function compareCoverage(
   baseText: string,
   headText: string,
-  options: { readonly onlyPrefix?: string } = {},
+  options: {
+    readonly onlyPrefix?: string;
+    readonly baseSources?: ReadonlyMap<string, string>;
+    readonly headSources?: ReadonlyMap<string, string>;
+  } = {},
 ): CoverageComparison {
   const prefix = options.onlyPrefix ?? "src/";
   const keep = (path: string): boolean => path.startsWith(prefix);
@@ -147,7 +183,33 @@ export function compareCoverage(
   const regressions: CoverageRegression[] = [];
   const removedAtHead: string[] = [];
   const denominatorOnly: string[] = [];
+  const preExistingSourceIdentities = new Set<string>();
+  const baseUncoveredSourceIdentities = new Set<string>();
+  const headUncoveredSourceIdentities = new Set<string>();
+  const uncoveredNewSource: string[] = [];
   let comparedFileCount = 0;
+
+  if ((options.baseSources === undefined) !== (options.headSources === undefined))
+    throw new Error("refusing source-identity comparison with only one source corpus");
+
+  if (options.baseSources && options.headSources) {
+    for (const [filePath, source] of options.baseSources) {
+      if (!keep(filePath)) continue;
+      for (const identity of sourceLineIdentities(source))
+        preExistingSourceIdentities.add(`${filePath}:${identity}`);
+      const baseFile = baseByPath.get(filePath);
+      if (baseFile)
+        for (const identity of uncoveredSourceIdentities(baseFile, source))
+          baseUncoveredSourceIdentities.add(identity);
+    }
+    for (const headFile of head) {
+      const source = options.headSources.get(headFile.path);
+      for (const identity of uncoveredSourceIdentities(headFile, source)) {
+        headUncoveredSourceIdentities.add(identity);
+        if (!preExistingSourceIdentities.has(identity)) uncoveredNewSource.push(identity);
+      }
+    }
+  }
 
   for (const baseFile of base) {
     const headFile = headByPath.get(baseFile.path);
@@ -191,6 +253,21 @@ export function compareCoverage(
 
   if (comparedFileCount === 0)
     throw new Error("refusing a coverage comparison over no files: the corpus is empty");
+  if (
+    options.baseSources &&
+    options.headSources &&
+    (preExistingSourceIdentities.size === 0 || headUncoveredSourceIdentities.size === 0)
+  )
+    throw new Error(
+      "refusing a source-identity comparison over an empty source or uncovered corpus",
+    );
+
+  const newlyUncoveredPreExisting = [...headUncoveredSourceIdentities]
+    .filter(
+      (identity) =>
+        preExistingSourceIdentities.has(identity) && !baseUncoveredSourceIdentities.has(identity),
+    )
+    .sort();
 
   return {
     baseFileCount: base.length,
@@ -203,6 +280,10 @@ export function compareCoverage(
     removedAtHead: removedAtHead.sort(),
     regressions,
     denominatorOnly: denominatorOnly.sort(),
+    preExistingSourceIdentityCount: preExistingSourceIdentities.size,
+    headUncoveredSourceIdentityCount: headUncoveredSourceIdentities.size,
+    newlyUncoveredPreExisting,
+    uncoveredNewSource: uncoveredNewSource.sort(),
     aggregateBase: aggregate(base),
     aggregateHead: aggregate(head),
   };

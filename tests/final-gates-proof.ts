@@ -286,6 +286,17 @@ try {
 
   const baseText = readFileSync(baseLcov, "utf8");
   const headText = readFileSync(headLcov, "utf8");
+  const sourceCorpus = (cwd: string): ReadonlyMap<string, string> =>
+    new Map(
+      execFileSync("find", ["src", "-type", "f"], { cwd, encoding: "utf8" })
+        .split("\n")
+        .filter(Boolean)
+        .sort()
+        .map((file) => [file, readFileSync(path.join(cwd, file), "utf8")]),
+    );
+  const baseSources = sourceCorpus(baseWorktree);
+  const headSources = sourceCorpus(root);
+  const sourceComparison = compareCoverage(baseText, headText, { baseSources, headSources });
   const selfTestBaseVsBase = compareCoverage(baseText, baseText).regressions.length;
   const selfTestInverted = compareCoverage(headText, baseText).regressions.length;
   let selfTestEmptyCorpusRefused = false;
@@ -294,6 +305,24 @@ try {
   } catch {
     selfTestEmptyCorpusRefused = true;
   }
+  const plantedLcov = (hits: readonly number[]): string =>
+    [
+      "SF:/probe/src/planted.ts",
+      ...hits.map((count, index) => `DA:${index + 1},${count}`),
+      `LH:${hits.filter((count) => count > 0).length}`,
+      `LF:${hits.length}`,
+      "FNH:1",
+      "FNF:1",
+      "BRH:1",
+      "BRF:1",
+      "end_of_record",
+    ].join("\n");
+  const plantedSource = new Map([["src/planted.ts", "covered\nmissed\n"]]);
+  const selfTestPlantedPreExistingRegressionCount = compareCoverage(
+    plantedLcov([1, 0]),
+    plantedLcov([0, 0]),
+    { baseSources: plantedSource, headSources: plantedSource },
+  ).newlyUncoveredPreExisting.length;
 
   // --------------------------------------------------------------------- suite
   log("executed suite");
@@ -719,13 +748,19 @@ try {
       regressedFileCount,
       regressions,
       denominatorOnlyFileCount: comparison.denominatorOnly.length,
+      preExistingSourceIdentityCount: sourceComparison.preExistingSourceIdentityCount,
+      headUncoveredSourceIdentityCount: sourceComparison.headUncoveredSourceIdentityCount,
+      newlyUncoveredPreExistingCount: sourceComparison.newlyUncoveredPreExisting.length,
+      uncoveredNewSourceCount: sourceComparison.uncoveredNewSource.length,
+      newSourceMissesTrackedByIssue: 148,
       realGateExit: realGate.code,
       raisedFloorHundredths,
       raisedFloorExit: raisedFloor.code,
       selfTestBaseVsBaseRegressions: selfTestBaseVsBase,
       selfTestInvertedRegressions: selfTestInverted,
       selfTestEmptyCorpusRefused,
-      verdict: regressedFileCount > 0 ? "failed" : "observed",
+      selfTestPlantedPreExistingRegressionCount,
+      verdict: sourceComparison.newlyUncoveredPreExisting.length > 0 ? "failed" : "observed",
     },
     suite: {
       planPresent: planMatch !== null,

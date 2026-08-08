@@ -130,12 +130,18 @@ export interface CoverageObservation {
   readonly regressedFileCount: number;
   readonly regressions: readonly CoverageFileDrop[];
   readonly denominatorOnlyFileCount: number;
+  readonly preExistingSourceIdentityCount: number;
+  readonly headUncoveredSourceIdentityCount: number;
+  readonly newlyUncoveredPreExistingCount: number;
+  readonly uncoveredNewSourceCount: number;
+  readonly newSourceMissesTrackedByIssue: number;
   readonly realGateExit: number;
   readonly raisedFloorHundredths: number;
   readonly raisedFloorExit: number;
   readonly selfTestBaseVsBaseRegressions: number;
   readonly selfTestInvertedRegressions: number;
   readonly selfTestEmptyCorpusRefused: boolean;
+  readonly selfTestPlantedPreExistingRegressionCount: number;
   readonly verdict: Verdict;
 }
 
@@ -364,12 +370,18 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/coverage/regressions/*/baseUncovered", field("count")],
   ["/coverage/regressions/*/headUncovered", field("count")],
   ["/coverage/denominatorOnlyFileCount", field("count")],
+  ["/coverage/preExistingSourceIdentityCount", field("count")],
+  ["/coverage/headUncoveredSourceIdentityCount", field("count")],
+  ["/coverage/newlyUncoveredPreExistingCount", field("count")],
+  ["/coverage/uncoveredNewSourceCount", field("count")],
+  ["/coverage/newSourceMissesTrackedByIssue", field("count")],
   ["/coverage/realGateExit", field("count")],
   ["/coverage/raisedFloorHundredths", field("count")],
   ["/coverage/raisedFloorExit", field("count")],
   ["/coverage/selfTestBaseVsBaseRegressions", field("count")],
   ["/coverage/selfTestInvertedRegressions", field("count")],
   ["/coverage/selfTestEmptyCorpusRefused", field("boolean")],
+  ["/coverage/selfTestPlantedPreExistingRegressionCount", field("count")],
   ["/coverage/verdict", field("enum", ["observed", "not_observed", "failed"])],
 
   ["/suite/captureSite", field("enum", ["tap-artifact-and-per-file-runs"])],
@@ -579,6 +591,32 @@ function leafPointers(value: unknown, pointer = ""): string[] {
  */
 const CONDITIONAL_FIELDS = /^\/coverage\/regressions\//u;
 
+/**
+ * The schema version this writer emits.
+ *
+ * Bumped when a field is added, because the committed-receipt scan checks every
+ * receipt on disk against the schema. Without a version, adding a field made
+ * that scan red for receipts written before it — and since the scan runs inside
+ * the suite the final-gates proof must pass *before* it writes a receipt, the
+ * red could not be cleared by rerunning the proof. A stale receipt would have
+ * to be hand-edited or deleted, which is the one thing a receipt must never
+ * invite.
+ */
+export const RECEIPT_SCHEMA_VERSION = 3;
+
+/**
+ * Pointers introduced after version 1.
+ *
+ * An older receipt is complete for its own version; it is not evidence that the
+ * run behind it observed something it never measured. Back-filling these into
+ * a version 1 receipt would be exactly that, so they are excused there and
+ * required everywhere else.
+ */
+const FIELDS_ADDED_IN_VERSION_2 =
+  /^\/(safety\/childEnvironment\/|process\/(ledger\/(classCount|classSectionCount|unattributedRoundCount|attributedRoundCount)|pullRequests\/\*\/(roundsAttributed|highestRoundNumber|counterRestartsAtOne|withinCeiling|replanRequired|replanRecorded)))/u;
+const FIELDS_ADDED_IN_VERSION_3 =
+  /^\/coverage\/(preExistingSourceIdentityCount|headUncoveredSourceIdentityCount|newlyUncoveredPreExistingCount|uncoveredNewSourceCount|newSourceMissesTrackedByIssue|selfTestPlantedPreExistingRegressionCount)$/u;
+
 export function missingFinalGatesFields(receipt: unknown): readonly string[] {
   const present = new Set(
     leafPointers(receipt).map((pointer) => pointer.replace(/\/\d+(?=\/|$)/gu, "/*")),
@@ -587,9 +625,18 @@ export function missingFinalGatesFields(receipt: unknown): readonly string[] {
     typeof receipt === "object" &&
     receipt !== null &&
     Number(Reflect.get(Reflect.get(receipt, "coverage") ?? {}, "regressedFileCount") ?? 0) > 0;
+  // A receipt is judged complete against the schema version it was written at.
+  // Never against the newest one: a field added later was not measurable by an
+  // earlier run, and demanding it would ask that receipt to claim more than the
+  // run observed.
+  const version = Number(
+    (typeof receipt === "object" && receipt !== null && Reflect.get(receipt, "schemaVersion")) || 0,
+  );
   return [...RECEIPT_SCHEMA.keys()]
     .filter((key) => !present.has(key))
     .filter((key) => reported || !CONDITIONAL_FIELDS.test(key))
+    .filter((key) => version >= 2 || !FIELDS_ADDED_IN_VERSION_2.test(key))
+    .filter((key) => version >= 3 || !FIELDS_ADDED_IN_VERSION_3.test(key))
     .sort();
 }
 
@@ -695,13 +742,21 @@ export function validateFinalGatesStore(
     );
   if (!coverage.selfTestEmptyCorpusRefused)
     throw new Error("refusing receipt: the comparator passes an empty corpus");
+  if (coverage.preExistingSourceIdentityCount === 0)
+    throw new Error("refusing receipt: the source-identity base corpus is empty");
+  if (coverage.headUncoveredSourceIdentityCount === 0)
+    throw new Error("refusing receipt: the uncovered source-identity corpus is empty");
+  if (coverage.selfTestPlantedPreExistingRegressionCount === 0)
+    throw new Error("refusing receipt: the comparator missed a planted pre-existing-line loss");
+  if (coverage.uncoveredNewSourceCount > 0 && coverage.newSourceMissesTrackedByIssue !== 148)
+    throw new Error("refusing receipt: uncovered new source is not tracked by issue 148");
   if (!coverage.aggregateMeetsFloor)
     throw new Error("refusing receipt: aggregate coverage is below the configured floor");
   // A per-file regression is a recordable outcome, not a refusal: this receipt
   // exists to say so. What is refused is a verdict that disagrees with it.
-  if (coverage.regressedFileCount > 0 !== (coverage.verdict === "failed"))
+  if (coverage.newlyUncoveredPreExistingCount > 0 !== (coverage.verdict === "failed"))
     throw new Error(
-      "refusing receipt: the coverage verdict disagrees with its own regression list",
+      "refusing receipt: the coverage verdict disagrees with pre-existing source loss",
     );
   // `regressedFileCount` counts files; the list carries one row per metric, so
   // one file can contribute three. The check is that they describe the same set
@@ -940,7 +995,7 @@ export function buildFinalGatesReceipt(
     .digest("hex");
 
   const withoutSanitization = {
-    schemaVersion: 1,
+    schemaVersion: RECEIPT_SCHEMA_VERSION,
     issue: 112,
     scope: FINAL_GATES_SCOPE,
     tier: "P0",
