@@ -9,7 +9,11 @@
     "tests/history-proof.ts",
     "tests/operation-replacement-child.ts",
     "tests/operation-states-child.ts",
+    "tests/run-b-correct-receipt.ts",
     "tests/run-b-cold-child.ts",
+    "tests/run-b-link.ts",
+    "tests/run-b-unlink.ts",
+    "tests/run-b-write-receipt.ts",
     "tests/send-guard-proof.ts"
   ],
   "project": ["src/**/*.ts", "tests/**/*.ts"],
