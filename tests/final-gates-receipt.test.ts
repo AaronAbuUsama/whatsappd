@@ -358,6 +358,26 @@ test("a coverage regression is recorded, not refused, but the verdict must agree
       ),
     /does not match its own count/u,
   );
+
+  // One file regressing on all three metrics is three rows and one file. The
+  // count is over files, so this must be accepted — the length comparison it
+  // replaces rejected exactly this, which is the shape the real run produced.
+  const threeMetrics = store({
+    coverage: {
+      ...store().coverage,
+      regressedFileCount: 1,
+      regressions: (["lines", "branches", "functions"] as const).map((metric) => ({
+        path: "src/runtime/runtime.ts",
+        metric,
+        baseHundredths: 9928,
+        headHundredths: 9893,
+        baseUncovered: 7,
+        headUncovered: 9,
+      })),
+      verdict: "failed" as const,
+    },
+  });
+  assert.doesNotThrow(() => validateFinalGatesStore(threeMetrics, current));
 });
 
 test("an inert coverage gate and a directionless comparator are refusals", () => {

@@ -575,7 +575,11 @@ export function validateFinalGatesStore(
     throw new Error(
       "refusing receipt: the coverage verdict disagrees with its own regression list",
     );
-  if (coverage.regressions.length !== coverage.regressedFileCount)
+  // `regressedFileCount` counts files; the list carries one row per metric, so
+  // one file can contribute three. The check is that they describe the same set
+  // of files, not that they are the same length — the length comparison was
+  // wrong and rejected a correct three-metric regression on one file.
+  if (new Set(coverage.regressions.map((entry) => entry.path)).size !== coverage.regressedFileCount)
     throw new Error("refusing receipt: the regression list does not match its own count");
 
   const suite = store.suite;
