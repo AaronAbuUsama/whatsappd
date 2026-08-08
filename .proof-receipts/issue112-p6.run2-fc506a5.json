@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "issue": 112,
+  "scope": "0.3.0 release candidate: version, tarball, and dual-Node packed consumer",
+  "tier": "P6",
+  "provenance": {
+    "captureSite": "release-candidate-proof-run-start",
+    "gitHead": "fc506a558d212d6d116c26ea69a3ac3462faef7f",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "treeClean": true,
+    "startedAt": "2026-08-08T14:58:46.768Z",
+    "finalizedAt": "2026-08-08T14:58:54.847Z",
+    "command": "pnpm proof:release",
+    "observationStoreSha256": "3deb5f12635c15c299ad6c1176ecd481cc215941806564da955b8571e38d1925"
+  },
+  "version": {
+    "captureSite": "package-json-and-changeset-directory",
+    "packageVersion": "0.3.0",
+    "pendingChangesetCount": 0,
+    "consumedChangesetCount": 11,
+    "changelogSectionPresent": true,
+    "changelogSectionLineCount": 187,
+    "changesetFixedGroupCount": 0,
+    "changesetLinkedGroupCount": 0,
+    "expectedVersion": "0.3.0",
+    "matchesExpected": true
+  },
+  "tarball": {
+    "captureSite": "pnpm-pack-output",
+    "byteLength": 98409,
+    "ceilingBytes": 120000,
+    "underCeiling": true,
+    "sha256": "d4b2980b3417514efd487072795673b99cba62daee05f799cc9fef7a386f6d36",
+    "entryCount": 10,
+    "unexpectedEntryCount": 0,
+    "missingRequiredRootFileCount": 0,
+    "forbiddenPatternHitCount": 0,
+    "entries": [
+      {
+        "path": "CHANGELOG.md",
+        "byteLength": 16016
+      },
+      {
+        "path": "dist/index.d.mts",
+        "byteLength": 11165
+      },
+      {
+        "path": "dist/index.mjs",
+        "byteLength": 138006
+      },
+      {
+        "path": "dist/runtime-C5nwq53t.d.mts",
+        "byteLength": 63326
+      },
+      {
+        "path": "dist/runtime-CgbpQADz.mjs",
+        "byteLength": 118155
+      },
+      {
+        "path": "dist/testing.d.mts",
+        "byteLength": 3310
+      },
+      {
+        "path": "dist/testing.mjs",
+        "byteLength": 3365
+      },
+      {
+        "path": "LICENSE",
+        "byteLength": 1071
+      },
+      {
+        "path": "package.json",
+        "byteLength": 3759
+      },
+      {
+        "path": "README.md",
+        "byteLength": 8340
+      }
+    ]
+  },
+  "distIdentity": {
+    "captureSite": "packed-versus-fresh-build",
+    "fileCount": 6,
+    "packedMatchesFreshBuild": true,
+    "digests": [
+      {
+        "file": "dist/index.d.mts",
+        "sha256": "7297cfb9a4c23f2cccecd26993a1533c32e2503a2ffcf6f8e916ce98f96f359b"
+      },
+      {
+        "file": "dist/index.mjs",
+        "sha256": "546cd018f210400ce072680b81c4bd0f0bc6d2e531bc3c314fbd146a625f8fd7"
+      },
+      {
+        "file": "dist/runtime-C5nwq53t.d.mts",
+        "sha256": "f910bee39495423661a806fb722e17ad3fa5078aff5ef0164330c6b8aa63e8bf"
+      },
+      {
+        "file": "dist/runtime-CgbpQADz.mjs",
+        "sha256": "3acdfc224f360514c07b1a36a6ea4ebc6a2613891a006518c56cf8419f7aab78"
+      },
+      {
+        "file": "dist/testing.d.mts",
+        "sha256": "fccf4c0e928c59868acda2b92a7670ea0d00624b1b1076b5e4cad753149f21d7"
+      },
+      {
+        "file": "dist/testing.mjs",
+        "sha256": "6f71c1a863f013ef0adabe35c6b9b27abf1b754892791d995a46c1adbb43fb98"
+      }
+    ]
+  },
+  "leakScan": {
+    "captureSite": "extracted-tarball-corpus",
+    "filesScanned": 10,
+    "hiddenFilesInCorpus": 0,
+    "accountShapedHits": 0,
+    "allowlistedSyntheticHits": 2,
+    "privatePathHits": 0,
+    "plantedControlHits": 1,
+    "plantedControlHiddenFileHits": 1
+  },
+  "nodeMatrix": [
+    {
+      "id": "node22",
+      "verdict": "observed",
+      "captureSite": "packed-consumer-child-stdout",
+      "observedVersion": "v22.22.2",
+      "observedMajor": 22,
+      "writePid": 36053,
+      "readPid": 36124,
+      "distinctPids": true,
+      "durableDigestEqual": true,
+      "deterministicDigest": "92e10f883da51367d2eb540472841c36c01d3576921ac9f2008595578d0b5b04",
+      "pageMessageCount": 2,
+      "mediaDigest": "74d87cbca08a9e0c0d87454899639a794d5d4808a6a65f612bd7e601da6a5ecf",
+      "liveConnectionObserved": true,
+      "liveIdentityObserved": true,
+      "livePresenceObserved": true,
+      "connectionPresent": false,
+      "identityPresent": false,
+      "presenceRestored": false
+    },
+    {
+      "id": "node24",
+      "verdict": "observed",
+      "captureSite": "packed-consumer-child-stdout",
+      "observedVersion": "v24.18.0",
+      "observedMajor": 24,
+      "writePid": 36129,
+      "readPid": 36131,
+      "distinctPids": true,
+      "durableDigestEqual": true,
+      "deterministicDigest": "92e10f883da51367d2eb540472841c36c01d3576921ac9f2008595578d0b5b04",
+      "pageMessageCount": 2,
+      "mediaDigest": "74d87cbca08a9e0c0d87454899639a794d5d4808a6a65f612bd7e601da6a5ecf",
+      "liveConnectionObserved": true,
+      "liveIdentityObserved": true,
+      "livePresenceObserved": true,
+      "connectionPresent": false,
+      "identityPresent": false,
+      "presenceRestored": false
+    }
+  ],
+  "crossVersion": {
+    "captureSite": "node-matrix-comparison",
+    "legCount": 2,
+    "distinctMajorCount": 2,
+    "deterministicDigestsEqual": true
+  },
+  "releaseSideEffects": {
+    "captureSite": "local-git-tag-listing",
+    "localReleaseTagCount": 2,
+    "candidateTag": "v0.3.0",
+    "candidateTagPresent": false,
+    "tagListingSawKnownTag": true
+  },
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "freeFormFields": 22,
+    "digestFields": 12,
+    "nonEmpty": true,
+    "floorPassed": true,
+    "knownValueControlCount": 4
+  }
+}
