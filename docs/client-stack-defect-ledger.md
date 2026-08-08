@@ -302,6 +302,21 @@ a construction.**
   live session (`src/baileys/socket.ts`) builds a fresh one per call, so a cache
   keyed on object identity passed its test and was inert in production. The
   double now allocates per call, and the test fails red against the real shape.
+- **Run A compared two different Client windows and called the mismatch
+  reconstruction failure.** The live parent hashed only the messages retained
+  by earlier inbound observation, while the cold replacement first walked the
+  proof chat to `exhausted` and then hashed the full retained window. A bounded
+  no-send control observed account-wide chats, contacts and groups unchanged;
+  the unnormalized replacement differed only in proof-chat ordered ids and
+  media, despite matching credentials and a deterministic no-socket Session.
+  Repeating the replacement after both sides walked the public stored-page seam
+  produced exact equality for all five components. The product reconstructed
+  correctly; the proof compared unlike inputs. Run A now normalizes the proof
+  chat before its pre-close snapshot, keeps ordered ids and media exact, and
+  treats account-wide collections as a relative floor rather than a live-account
+  equality assertion. Receipt
+  `.proof-receipts/issue111-p4.diagnosis1-209347c.json` records both controls and
+  carries the prior outbound row explicitly rather than presenting a new send.
 
 **Inherited obligation.** Derive mutations from decision points, not intuition.
 Keep the harness out of the PR (issue #52's lesson: a harness in the diff

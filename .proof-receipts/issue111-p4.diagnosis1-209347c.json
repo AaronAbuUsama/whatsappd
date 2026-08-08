@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "issue": 111,
+  "scope": "Run A non-sending process-replacement diagnosis",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "run-a-proof-run-start",
+    "gitHead": "209347cc7344066f756a55cb94643fc555e0d5a0",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "treeClean": true,
+    "startedAt": "2026-08-08T13:18:59.714Z",
+    "finalizedAt": "2026-08-08T13:19:44.351Z",
+    "command": "pnpm proof:run-a:diagnose < /dev/null",
+    "observationStoreSha256": "5d4a92286355028a78026d87f60a649bab9a3d06df605f227f5f5da74980b890"
+  },
+  "priorOutbound": {
+    "captureSite": "carried-from-run2-receipt",
+    "sourceReceiptSha256": "e90ff58144176f2285da200154d19caba0c0e49b6cb1f5a178c05280b2b095fe",
+    "sourceGitHead": "9c134a746d70e5ca8637e25697a734e34efa2193",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "currentSourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "sourceTreeMatches": true,
+    "terminalStatus": "succeeded",
+    "authoritativeEchoCount": 1,
+    "sessionSendInvocations": 1,
+    "observedThisRun": false
+  },
+  "liveDriftControl": {
+    "captureSite": "same-process-read-only-snapshots",
+    "subjectPid": 93908,
+    "intervalMs": 30000,
+    "noSendInvocations": 0,
+    "componentMatches": {
+      "chats": true,
+      "contacts": true,
+      "groups": true,
+      "orderedIds": true,
+      "media": true
+    },
+    "stableProofStateEqual": true,
+    "collectionFloorsSatisfied": true
+  },
+  "unnormalizedReplacement": {
+    "captureSite": "replacement-child-result",
+    "replacementPid": 94477,
+    "distinctPid": true,
+    "noSendInvocations": 0,
+    "componentMatches": {
+      "chats": true,
+      "contacts": true,
+      "groups": true,
+      "orderedIds": false,
+      "media": false
+    },
+    "stableProofStateEqual": false,
+    "collectionFloorsSatisfied": true,
+    "credentialIdentityMatchesOriginal": true,
+    "sessionAttached": true,
+    "liveSocketResumed": false,
+    "durableReconstructedWhileNoLive": true
+  },
+  "replacement": {
+    "captureSite": "replacement-child-result",
+    "replacementPid": 94596,
+    "distinctPid": true,
+    "noSendInvocations": 0,
+    "componentMatches": {
+      "chats": true,
+      "contacts": true,
+      "groups": true,
+      "orderedIds": true,
+      "media": true
+    },
+    "stableProofStateEqual": true,
+    "collectionFloorsSatisfied": true,
+    "credentialIdentityMatchesOriginal": true,
+    "sessionAttached": true,
+    "liveSocketResumed": false,
+    "durableReconstructedWhileNoLive": true
+  },
+  "conclusion": "proof-chat-window-asymmetry",
+  "assertionChange": "normalize-proof-chat-window-stable-exact-collections-relative-floor",
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "freeFormFields": 1,
+    "digestFields": 2,
+    "nonEmpty": true,
+    "floorPassed": true,
+    "knownValueControlCount": 3
+  }
+}
