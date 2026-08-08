@@ -31,7 +31,10 @@ import {
   type WhatsAppRuntime,
   type WhatsAppSession,
 } from "../src/index.ts";
-import { createTestWhatsAppRuntime as createWhatsAppRuntime } from "../src/testing.ts";
+import {
+  createTestWhatsAppRuntime as createWhatsAppRuntime,
+  createTestWhatsAppSession,
+} from "../src/testing.ts";
 import { DEFAULT_ALLOWLIST_PATH, guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
 import {
   captureClientProofRunStart,
@@ -260,6 +263,7 @@ interface PeerProcessOptions {
   readonly mode?: PeerMode;
   readonly timeoutMs?: number;
   readonly identityHashSalt?: string;
+  readonly originalCredentialIdentityDigest?: string;
 }
 
 const PEER_ENV_KEYS = new Set([
@@ -268,6 +272,7 @@ const PEER_ENV_KEYS = new Set([
   "WA_LOG_LEVEL",
   "CLIENT_PROOF_CHILD_MODE",
   "CLIENT_PROOF_HASH_SALT",
+  "CLIENT_PROOF_ORIGINAL_CREDENTIAL_DIGEST",
   // Node injects its coverage directory into children of an
   // `--experimental-test-coverage` process. It is runner instrumentation, not
   // inherited application state, and does not carry NODE_TEST_CONTEXT.
@@ -283,6 +288,15 @@ function hashIdentity(salt: string, identity: string): string {
 
 function sha256(bytes: string | Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function credentialIdentityDigest(
+  credentials: CredentialStore,
+  salt: string,
+): Promise<string> {
+  const serialized = await credentials.read("creds");
+  if (!serialized) throw new Error("the linked profile has no resumable credential identity");
+  return sha256(`${salt}\0${serialized}`);
 }
 
 export function proofGroupId(): string {
@@ -348,6 +362,11 @@ interface DurableDigest {
 
 export interface ReplacementObservation {
   readonly durableDigest: DurableDigest;
+  readonly credentialIdentityDigest: string;
+  readonly credentialIdentityMatchesOriginal: true;
+  readonly sessionAttached: true;
+  readonly liveSocketResumed: false;
+  readonly durableReconstructedWhileNoLive: true;
   readonly connectionPresent: false;
   readonly identityPresent: false;
   readonly presenceAddressCount: number;
@@ -670,6 +689,9 @@ export function runPeerProcess(options: PeerProcessOptions = {}): Promise<PeerPr
           WA_LOG_LEVEL: "silent",
           CLIENT_PROOF_CHILD_MODE: mode,
           CLIENT_PROOF_HASH_SALT: identityHashSalt,
+          ...(options.originalCredentialIdentityDigest && {
+            CLIENT_PROOF_ORIGINAL_CREDENTIAL_DIGEST: options.originalCredentialIdentityDigest,
+          }),
         },
       },
     );
@@ -825,6 +847,9 @@ async function allStoredMessages(
 
 async function coldReplacement(salt: string): Promise<ReplacementObservation> {
   proofStage = "cold-backend-open";
+  const originalCredentialIdentityDigest = process.env.CLIENT_PROOF_ORIGINAL_CREDENTIAL_DIGEST;
+  if (!originalCredentialIdentityDigest)
+    throw new Error("the replacement process received no original credential derivation");
   const directory = profileDirectory("android");
   const media = fileMediaStore({ directory });
   const backend = libsqlBackend({
@@ -832,17 +857,23 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
     accountId: "android",
     media,
   });
+  const driver = createTestWhatsAppSession();
+  let sessionAttachCount = 0;
+  let replacementCredentialIdentityDigest: string | undefined;
   const runtime = createWhatsAppRuntime({
     accountId: "android",
     backend,
-    openSession(credentials: CredentialStore) {
-      return createSession({ store: credentials, auth: qrAuth() });
+    async openSession(credentials: CredentialStore) {
+      sessionAttachCount += 1;
+      replacementCredentialIdentityDigest = await credentialIdentityDigest(credentials, salt);
+      return driver.session;
     },
   });
   let client: WhatsAppClient | undefined;
   try {
-    // Do not start the Runtime. Factory resolution must reflect only durable
-    // state, before a live session can attach and manufacture current status.
+    // Reconstruct durable state first. Then attach a deterministic no-socket
+    // Session so credential continuity and Session attachment are observed
+    // positively without resuming a live WhatsApp socket.
     proofStage = "cold-client-factory";
     client = await createWhatsAppClient(runtime);
     const account = client.account.get();
@@ -872,14 +903,41 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
       oracle: () => allStoredMessages(backend, "android", chatId),
     });
     proofStage = "cold-durable-digest";
+    const reconstructedDigest = await durableDigest({
+      client,
+      media,
+      accountId: "android",
+      chatId,
+      salt,
+    });
+    proofStage = "replacement-session-attach";
+    await runtime.start();
+    if (
+      sessionAttachCount !== 1 ||
+      replacementCredentialIdentityDigest !== originalCredentialIdentityDigest
+    )
+      throw new Error("the replacement Session did not resume the original credential identity");
+    const attachedDigest = await durableDigest({
+      client,
+      media,
+      accountId: "android",
+      chatId,
+      salt,
+    });
+    if (JSON.stringify(attachedDigest) !== JSON.stringify(reconstructedDigest))
+      throw new Error("attaching the replacement Session changed reconstructed durable state");
+    if (
+      client.account.get().connection !== undefined ||
+      client.account.get().identity !== undefined
+    )
+      throw new Error("the deterministic replacement Session manufactured live socket state");
     return {
-      durableDigest: await durableDigest({
-        client,
-        media,
-        accountId: "android",
-        chatId,
-        salt,
-      }),
+      durableDigest: reconstructedDigest,
+      credentialIdentityDigest: replacementCredentialIdentityDigest,
+      credentialIdentityMatchesOriginal: true,
+      sessionAttached: true,
+      liveSocketResumed: false,
+      durableReconstructedWhileNoLive: true,
       connectionPresent: false,
       identityPresent: false,
       presenceAddressCount: addresses.length,
@@ -933,6 +991,10 @@ async function pagingReplacementRun(): Promise<void> {
       chatId,
       salt,
     });
+    const originalCredentialIdentityDigest = await credentialIdentityDigest(
+      subject.backend.credentials,
+      salt,
+    );
 
     proofStage = "subject-close";
     await subject.close();
@@ -941,6 +1003,7 @@ async function pagingReplacementRun(): Promise<void> {
     const replacementProcess = await runPeerProcess({
       mode: "replacement",
       identityHashSalt: salt,
+      originalCredentialIdentityDigest,
       timeoutMs: 120_000,
     });
     const replacement = replacementProcess.replacement;
@@ -971,6 +1034,11 @@ async function pagingReplacementRun(): Promise<void> {
           distinctPid: true,
           durableDigestEqual: true,
           durableDigest: replacement.durableDigest,
+          credentialIdentityDigest: replacement.credentialIdentityDigest,
+          credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
+          sessionAttached: replacement.sessionAttached,
+          liveSocketResumed: replacement.liveSocketResumed,
+          durableReconstructedWhileNoLive: replacement.durableReconstructedWhileNoLive,
           connectionPresent: replacement.connectionPresent,
           identityPresent: replacement.identityPresent,
           presenceAddressCount: replacement.presenceAddressCount,
@@ -1082,6 +1150,10 @@ async function subjectRun(): Promise<void> {
       chatId,
       salt,
     });
+    const originalCredentialIdentityDigest = await credentialIdentityDigest(
+      subject.backend.credentials,
+      salt,
+    );
 
     if (!textPeer || !documentPeer) throw new Error("the peer process returned no identity proof");
     const subjectIdentityHash = hashIdentity(salt, subject.identity);
@@ -1121,6 +1193,7 @@ async function subjectRun(): Promise<void> {
     const replacementProcess = await runPeerProcess({
       mode: "replacement",
       identityHashSalt: salt,
+      originalCredentialIdentityDigest,
       timeoutMs: 120_000,
     });
     const replacement = replacementProcess.replacement;
@@ -1178,6 +1251,11 @@ async function subjectRun(): Promise<void> {
         distinctPid: true,
         durableDigestEqual: true,
         durableDigest: replacement.durableDigest,
+        credentialIdentityDigest: replacement.credentialIdentityDigest,
+        credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
+        sessionAttached: replacement.sessionAttached,
+        liveSocketResumed: replacement.liveSocketResumed,
+        durableReconstructedWhileNoLive: replacement.durableReconstructedWhileNoLive,
         connectionPresent: replacement.connectionPresent,
         identityPresent: replacement.identityPresent,
         presenceAddressCount: replacement.presenceAddressCount,

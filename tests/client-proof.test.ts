@@ -21,28 +21,37 @@ import {
   runPeerProcess,
   type PeerProcessResult,
 } from "./client-proof.ts";
-import { assertTeardownProofSummary, type TeardownProofSummary } from "./teardown-proof-summary.ts";
+import {
+  assertNativeTeardownObservation,
+  assertSyntheticTeardownControl,
+  type TeardownProofSummary,
+} from "./teardown-proof-summary.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-test("the teardown proof summary rejects every incomplete observation clause", () => {
+test("the synthetic teardown control is labelled and excluded from the native floor", () => {
   const complete: TeardownProofSummary = {
-    stopAttempts: 10,
-    totalStops: 11,
-    unqualifiedStops: 1,
+    kind: "synthetic_regression_control",
+    attemptBudget: 10,
+    qualifyingStops: 10,
+    totalStops: 10,
+    unqualifiedStops: 0,
     stopFailures: 0,
-    inFlightAtStop: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+    inFlightAtStop: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
     stopPendingWhileHeld: 10,
     syncAcceptances: 10,
     leaseHeldWhileDraining: 10,
     leaseFreeAfterStop: 10,
     challengeProduced: false,
+    countsTowardNativeFloor: false,
   };
-  assert.doesNotThrow(() => assertTeardownProofSummary(complete));
+  assert.doesNotThrow(() => assertSyntheticTeardownControl(complete));
   for (const incomplete of [
-    { ...complete, stopAttempts: 9 },
-    { ...complete, totalStops: 10 },
-    { ...complete, unqualifiedStops: 0 },
+    { ...complete, kind: "native_observation" as const },
+    { ...complete, countsTowardNativeFloor: true },
+    { ...complete, qualifyingStops: 9 },
+    { ...complete, totalStops: 9 },
+    { ...complete, unqualifiedStops: 1 },
     { ...complete, inFlightAtStop: complete.inFlightAtStop.map(() => 0) },
     { ...complete, stopFailures: 1 },
     { ...complete, stopPendingWhileHeld: 9 },
@@ -51,7 +60,59 @@ test("the teardown proof summary rejects every incomplete observation clause", (
     { ...complete, leaseFreeAfterStop: 9 },
     { ...complete, challengeProduced: true },
   ])
-    assert.throws(() => assertTeardownProofSummary(incomplete));
+    assert.throws(() => assertSyntheticTeardownControl(incomplete));
+});
+
+test("the native teardown observation reports a fixed-budget shortfall without faking success", () => {
+  const observed: TeardownProofSummary = {
+    kind: "native_observation",
+    attemptBudget: 20,
+    qualifyingStops: 2,
+    totalStops: 20,
+    unqualifiedStops: 18,
+    stopFailures: 0,
+    inFlightAtStop: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    stopPendingWhileHeld: 2,
+    syncAcceptances: 2,
+    leaseHeldWhileDraining: 2,
+    leaseFreeAfterStop: 2,
+    challengeProduced: false,
+    countsTowardNativeFloor: true,
+    leaseLossGuard: {
+      lossKind: "renewal_lost",
+      rejectionObserved: true,
+      mirrorRevisionBefore: 0,
+      mirrorRevisionAfter: 0,
+      mirrorUnchanged: true,
+    },
+  };
+  assert.equal(assertNativeTeardownObservation(observed), false);
+  assert.equal(
+    assertNativeTeardownObservation({
+      ...observed,
+      qualifyingStops: 10,
+      unqualifiedStops: 10,
+      inFlightAtStop: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      stopPendingWhileHeld: 10,
+      syncAcceptances: 10,
+      leaseHeldWhileDraining: 10,
+      leaseFreeAfterStop: 10,
+    }),
+    true,
+  );
+  for (const incomplete of [
+    { ...observed, countsTowardNativeFloor: false },
+    { ...observed, leaseLossGuard: undefined },
+    {
+      ...observed,
+      leaseLossGuard: { ...observed.leaseLossGuard!, rejectionObserved: false },
+    },
+    {
+      ...observed,
+      leaseLossGuard: { ...observed.leaseLossGuard!, mirrorRevisionAfter: 1 },
+    },
+  ])
+    assert.throws(() => assertNativeTeardownObservation(incomplete));
 });
 
 test("resume is derived from observed challenge_live events", () => {

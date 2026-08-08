@@ -135,6 +135,11 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/matrix/*/evidence/durableDigest/groups", field("digest")],
   ["/matrix/*/evidence/durableDigest/orderedIds", field("digest")],
   ["/matrix/*/evidence/durableDigest/media", field("digest")],
+  ["/matrix/*/evidence/credentialIdentityDigest", field("digest")],
+  ["/matrix/*/evidence/credentialIdentityMatchesOriginal", field("boolean")],
+  ["/matrix/*/evidence/sessionAttached", field("boolean")],
+  ["/matrix/*/evidence/liveSocketResumed", field("boolean")],
+  ["/matrix/*/evidence/durableReconstructedWhileNoLive", field("boolean")],
   ["/matrix/*/evidence/connectionPresent", field("boolean")],
   ["/matrix/*/evidence/identityPresent", field("boolean")],
   ["/matrix/*/evidence/presenceAddressCount", field("count")],
@@ -264,6 +269,11 @@ export interface ClientProofSummary {
       readonly orderedIds: string;
       readonly media: string;
     };
+    readonly credentialIdentityDigest: string;
+    readonly credentialIdentityMatchesOriginal: true;
+    readonly sessionAttached: true;
+    readonly liveSocketResumed: false;
+    readonly durableReconstructedWhileNoLive: true;
     readonly connectionPresent: false;
     readonly identityPresent: false;
     readonly presenceAddressCount: number;
@@ -396,7 +406,11 @@ function requireObservedStore(
     summary.paging.skippedAcrossBoundary !== 0 ||
     summary.paging.orderedIdDigest !== summary.paging.oracleOrderedIdDigest ||
     summary.replacement.distinctPid !== true ||
-    summary.replacement.durableDigestEqual !== true
+    summary.replacement.durableDigestEqual !== true ||
+    summary.replacement.credentialIdentityMatchesOriginal !== true ||
+    summary.replacement.sessionAttached !== true ||
+    summary.replacement.liveSocketResumed !== false ||
+    summary.replacement.durableReconstructedWhileNoLive !== true
   ) {
     throw new Error("refusing receipt: one or more required observations are missing");
   }
@@ -521,6 +535,11 @@ function baseReceipt(
           distinctPid: summary.replacement.distinctPid,
           durableDigestEqual: summary.replacement.durableDigestEqual,
           durableDigest: summary.replacement.durableDigest,
+          credentialIdentityDigest: summary.replacement.credentialIdentityDigest,
+          credentialIdentityMatchesOriginal: summary.replacement.credentialIdentityMatchesOriginal,
+          sessionAttached: summary.replacement.sessionAttached,
+          liveSocketResumed: summary.replacement.liveSocketResumed,
+          durableReconstructedWhileNoLive: summary.replacement.durableReconstructedWhileNoLive,
         },
       },
       {

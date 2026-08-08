@@ -169,6 +169,11 @@ function completeStore(): ClientProofObservationStore {
           orderedIds: "a".repeat(64),
           media: "b".repeat(64),
         },
+        credentialIdentityDigest: "c".repeat(64),
+        credentialIdentityMatchesOriginal: true,
+        sessionAttached: true,
+        liveSocketResumed: false,
+        durableReconstructedWhileNoLive: true,
         connectionPresent: false,
         identityPresent: false,
         presenceAddressCount: 130,
@@ -303,6 +308,24 @@ test("the receipt writer refuses dishonest provenance and missing observations",
           summary: {
             ...store.summary!,
             paging: { ...store.summary!.paging, pageCount: 1 },
+          },
+        },
+        current,
+      ),
+    /required observations are missing/,
+  );
+  assert.throws(
+    () =>
+      buildClientProofReceipt(
+        {
+          ...store,
+          summary: {
+            ...store.summary!,
+            replacement: {
+              ...store.summary!.replacement,
+              // @ts-expect-error Deliberately malformed receipt fixture.
+              credentialIdentityMatchesOriginal: false,
+            },
           },
         },
         current,
