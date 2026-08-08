@@ -41,6 +41,32 @@ export const ROUND_CEILING = 4;
 
 export type Verdict = "observed" | "not_observed" | "failed";
 
+/**
+ * Trap and red-probe identifiers, as closed sets.
+ *
+ * These are enums rather than free-form strings, and not to dodge the leak
+ * scanner. They are a fixed vocabulary: a run that invents an id is a run whose
+ * harness changed, and the receipt should refuse the unrecognized label rather
+ * than record it. That several of these hyphenated slugs also stop tripping the
+ * ≥32-character key pattern is a consequence of typing them correctly, not the
+ * reason for doing it.
+ */
+export const TRAP_IDS = [
+  "empty-glob-exits-zero-with-no-tests",
+  "empty-glob-still-exits-zero-under-coverage-floor",
+  "suite-glob-is-non-recursive",
+] as const;
+
+export const RED_PROBE_IDS = [
+  "coverage-gate-at-a-raised-floor",
+  "test-runner-reports-a-planted-failure",
+  "coverage-comparator-has-direction",
+  "coverage-comparator-refuses-an-empty-corpus",
+] as const;
+
+export type TrapId = (typeof TRAP_IDS)[number];
+export type RedProbeId = (typeof RED_PROBE_IDS)[number];
+
 export interface FinalGatesRunStart {
   readonly captureSite: "final-gates-proof-run-start";
   readonly gitHead: string;
@@ -128,7 +154,7 @@ export interface SuiteObservation {
 }
 
 export interface TrapObservation {
-  readonly id: string;
+  readonly id: TrapId;
   readonly verdict: Verdict;
   readonly exitCode: number;
   readonly observedCount: number;
@@ -136,7 +162,7 @@ export interface TrapObservation {
 }
 
 export interface RedProbeObservation {
-  readonly id: string;
+  readonly id: RedProbeId;
   readonly verdict: Verdict;
   readonly greenExit: number;
   readonly redExit: number;
@@ -311,14 +337,14 @@ const RECEIPT_SCHEMA = new Map<string, ReceiptFieldSchema>([
   ["/suite/perFileTotalEqualsPlan", field("boolean")],
   ["/suite/verdict", field("enum", ["observed", "not_observed", "failed"])],
 
-  ["/traps/*/id", field("free_form")],
+  ["/traps/*/id", field("enum", [...TRAP_IDS])],
   ["/traps/*/verdict", field("enum", ["observed", "not_observed", "failed"])],
   ["/traps/*/captureSite", field("enum", ["child-process-exit-and-output"])],
   ["/traps/*/exitCode", field("count")],
   ["/traps/*/observedCount", field("count")],
   ["/traps/*/controlCount", field("count")],
 
-  ["/redProbes/*/id", field("free_form")],
+  ["/redProbes/*/id", field("enum", [...RED_PROBE_IDS])],
   ["/redProbes/*/verdict", field("enum", ["observed", "not_observed", "failed"])],
   ["/redProbes/*/captureSite", field("enum", ["gate-rerun-with-planted-defect"])],
   ["/redProbes/*/greenExit", field("count")],
@@ -411,6 +437,37 @@ export function captureFinalGatesRunStart(root: string): FinalGatesRunStart {
     treeClean: git(root, ["status", "--porcelain", "--untracked-files=all"]).length === 0,
     startedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Free-form pointers whose value trips a leak pattern.
+ *
+ * The scanner returns a count. A count sends the next reader hunting; this
+ * names the field, which is the difference between a refusal that is actionable
+ * and one that gets worked around.
+ */
+export function flaggedFinalGatesFields(receipt: unknown): readonly string[] {
+  const flagged: string[] = [];
+  const walk = (value: unknown, pointer = ""): void => {
+    if (Array.isArray(value)) {
+      value.forEach((entry, i) => walk(entry, `${pointer}/${i}`));
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const [key, entry] of Object.entries(value)) walk(entry, `${pointer}/${key}`);
+      return;
+    }
+    const schema = RECEIPT_SCHEMA.get(pointer.replace(/\/\d+(?=\/|$)/gu, "/*"));
+    if (schema?.type !== "free_form" || typeof value !== "string") return;
+    const solo = scanSchemaDrivenReceipt(
+      { probe: value },
+      [],
+      new Map([["/probe", field("free_form")]]),
+    );
+    if (solo.patternHits > 0) flagged.push(`${pointer} (${solo.patternHits})`);
+  };
+  walk(receipt);
+  return flagged;
 }
 
 export function scanFinalGatesReceipt(
@@ -855,6 +912,10 @@ export function buildFinalGatesReceipt(
       `refusing unsanitized receipt: ${JSON.stringify(finalScan)}${
         finalScan.schemaUnknownFields > 0
           ? `; unschema'd: ${unknownFinalGatesFields(receipt).join(", ")}`
+          : ""
+      }${
+        finalScan.patternHits > 0
+          ? `; pattern hits at: ${flaggedFinalGatesFields(receipt).join(", ")}`
           : ""
       }`,
     );

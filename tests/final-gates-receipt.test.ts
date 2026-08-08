@@ -106,16 +106,22 @@ const store = (
     verdict: "observed",
   },
   traps: [
-    { id: "empty-glob", verdict: "observed", exitCode: 0, observedCount: 0, controlCount: 569 },
     {
-      id: "empty-glob-coverage",
+      id: "empty-glob-exits-zero-with-no-tests",
+      verdict: "observed",
+      exitCode: 0,
+      observedCount: 0,
+      controlCount: 569,
+    },
+    {
+      id: "empty-glob-still-exits-zero-under-coverage-floor",
       verdict: "observed",
       exitCode: 0,
       observedCount: 0,
       controlCount: 94,
     },
     {
-      id: "non-recursive-glob",
+      id: "suite-glob-is-non-recursive",
       verdict: "observed",
       exitCode: 0,
       observedCount: 39,
@@ -123,9 +129,9 @@ const store = (
     },
   ],
   redProbes: [
-    { id: "coverage-floor", verdict: "observed", greenExit: 0, redExit: 1 },
-    { id: "planted-failure", verdict: "observed", greenExit: 0, redExit: 1 },
-    { id: "comparator-direction", verdict: "observed", greenExit: 0, redExit: 9 },
+    { id: "coverage-gate-at-a-raised-floor", verdict: "observed", greenExit: 0, redExit: 1 },
+    { id: "test-runner-reports-a-planted-failure", verdict: "observed", greenExit: 0, redExit: 1 },
+    { id: "coverage-comparator-has-direction", verdict: "observed", greenExit: 0, redExit: 9 },
   ],
   staticGates: { check: 0, checkDocs: 0, checkDupes: 0, checkUnused: 0, proofPack: 0 },
   duplicationHundredthsOfPercent: 7,
@@ -463,7 +469,13 @@ test("a trap or red probe that never went red is a refusal", () => {
       validateFinalGatesStore(
         store({
           traps: [
-            { id: "x", verdict: "failed", exitCode: 1, observedCount: 0, controlCount: 0 },
+            {
+              id: "suite-glob-is-non-recursive",
+              verdict: "failed",
+              exitCode: 1,
+              observedCount: 0,
+              controlCount: 0,
+            },
             ...store().traps,
           ],
         }),
