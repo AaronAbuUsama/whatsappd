@@ -61,6 +61,7 @@
     "proof:teardown": "node --experimental-strip-types tests/teardown-proof.ts",
     "proof:pack": "pnpm build && node --experimental-strip-types tests/packed-imports.ts",
     "proof:release": "node --experimental-strip-types tests/release-candidate-proof.ts",
+    "proof:final-gates": "node --experimental-strip-types tests/final-gates-proof.ts",
     "prepublishOnly": "vp run build",
     "prepare": "vp config"
   },
