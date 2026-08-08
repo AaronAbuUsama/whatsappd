@@ -1,0 +1,20 @@
+{
+  "mode": "pre",
+  "tag": "alpha",
+  "initialVersions": {
+    "whatsappd": "0.2.2"
+  },
+  "changesets": [
+    "calm-sessions-wait",
+    "fresh-media-settle",
+    "loud-moons-attend",
+    "lucky-aliases-travel",
+    "olive-donkeys-shake",
+    "olive-journals-open",
+    "olive-runtimes-persist",
+    "proud-channels-divide",
+    "spry-mirrors-agree",
+    "steady-frontiers-hold",
+    "tidy-pages-scroll"
+  ]
+}
