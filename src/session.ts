@@ -5,7 +5,7 @@
  * one awaited typed subscription plus `start`/`send`/`stop`. It makes only
  * timing decisions — never protocol ones.
  */
-import pino, { type Logger } from "pino";
+import pino, { type DestinationStream, type Logger } from "pino";
 import { assertE164 } from "./errors.ts";
 import { createPacer } from "./pacer.ts";
 import type { MetricEvent, MetricsHook } from "./model/metrics.ts";
@@ -42,11 +42,10 @@ const QR_REFRESH_MS = 20_000;
  * log through an object nobody here constructed. That was verified rather than
  * assumed: an error carrying all three serialized every one of them in full.
  *
- * The wildcards are one level deep by design — `*.text` and `err.data.*`
- * rather than a recursive sweep — because redaction that walks the whole tree
- * costs on every log call, including the ones that carry nothing sensitive.
- * The `err.*` entries are listed explicitly because that is the path that
- * actually leaked.
+ * Most paths stay explicit because a recursive sweep costs on every log call.
+ * Message envelopes are the exception: Baileys nests a property literally
+ * named `message` at varying depths. A value-aware formatter censors those
+ * envelopes while leaving an Error's diagnostic `message` intact.
  */
 export const REDACTED_PATHS = [
   // Message content, wherever it surfaces.
@@ -65,6 +64,7 @@ export const REDACTED_PATHS = [
   "*.remoteJid",
   "*.participant",
   "*.participantAlt",
+  "from",
   "node.username",
   "pnUser",
   "lidUser",
@@ -76,6 +76,12 @@ export const REDACTED_PATHS = [
   "handshake.serverHello.ephemeral",
   "handshake.serverHello.static",
   "handshake.serverHello.payload",
+  "attrs.id",
+  "recv.attrs.from",
+  "recv.attrs.id",
+  "recv.attrs.t",
+  "sent.id",
+  "messageIds",
   "err.data.to",
   "err.data.from",
   "err.data.jid",
@@ -102,6 +108,82 @@ export const REDACTED_PATHS = [
   "err.config.headers.authorization",
   "err.config.headers.cookie",
 ];
+
+const REDACTED = "[Redacted]";
+const MESSAGE_CONTENT_KEYS = new Set(["conversation", "extendedTextMessage", "text", "caption"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function carriesMessageContent(value: unknown): boolean {
+  return (
+    typeof value === "string" ||
+    (isRecord(value) && Object.keys(value).some((key) => MESSAGE_CONTENT_KEYS.has(key)))
+  );
+}
+
+function carriesSensitiveLogValue(value: string): boolean {
+  return (
+    /\d{7,}/u.test(value.replace(/[\s\-().+]/gu, "")) ||
+    /@(s\.whatsapp\.net|g\.us|lid|broadcast|newsletter)/u.test(value) ||
+    /[A-Za-z0-9+/_-]{32,}={0,2}/u.test(value) ||
+    /(?:[A-Za-z0-9+/_-]+={0,2},){2,}[A-Za-z0-9+/_-]+={0,2}/u.test(value) ||
+    value.includes(".proof-private")
+  );
+}
+
+function censorMessageFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(censorMessageFields);
+  if (value instanceof Error) {
+    const options =
+      value.cause === undefined ? undefined : { cause: censorMessageFields(value.cause) };
+    const cloned = new Error(value.message, options);
+    cloned.name = value.name;
+    cloned.stack = value.stack;
+    return Object.assign(cloned, censorMessageFields(Object.fromEntries(Object.entries(value))));
+  }
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => {
+      if (key === "message" && carriesMessageContent(nested)) {
+        return [key, REDACTED];
+      }
+      return [key, censorMessageFields(nested)];
+    }),
+  );
+}
+
+/**
+ * Build the logger owned by {@link createSession}.
+ *
+ * @internal Exported from this module so tests can assert on the exact logger
+ * factory rather than duplicating its pino configuration.
+ */
+export function createDefaultLogger(destination?: DestinationStream): Logger {
+  const options = {
+    level: process.env.WA_LOG_LEVEL ?? "warn",
+    redact: { paths: REDACTED_PATHS },
+    hooks: {
+      logMethod(args: unknown[], method: (...input: unknown[]) => void): void {
+        method.apply(
+          this,
+          args.map((arg) =>
+            typeof arg === "string" && carriesSensitiveLogValue(arg) ? REDACTED : arg,
+          ),
+        );
+      },
+    },
+    formatters: {
+      log(object: Record<string, unknown>): Record<string, unknown> {
+        return censorMessageFields(object) as Record<string, unknown>;
+      },
+    },
+  };
+  return destination ? pino(options, destination) : pino(options);
+}
 
 /** Configuration for {@link createSession}. */
 export interface SessionConfig {
@@ -335,9 +417,7 @@ export function createSession(config: SessionConfig): WhatsAppSession {
   const { store, auth } = config;
   // A library shouldn't spam stdout uninvited, but reconnect/fault warnings are
   // worth surfacing — default to `warn`, overridable via env or an explicit logger.
-  const logger =
-    config.logger ??
-    pino({ level: process.env.WA_LOG_LEVEL ?? "warn", redact: { paths: REDACTED_PATHS } });
+  const logger = config.logger ?? createDefaultLogger();
   const receiveStatusBroadcast = config.receiveStatusBroadcast ?? false;
   const pacer = createPacer(config.sendMinGapMs ?? 1000);
   // A thrown metrics hook must never break the connection.

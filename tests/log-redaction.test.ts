@@ -17,22 +17,29 @@
  * and only the output distinguishes those two cases.
  */
 import assert from "node:assert/strict";
-import pino from "pino";
 import { test } from "./_expect.ts";
-import { REDACTED_PATHS } from "../src/session.ts";
+import { createDefaultLogger } from "../src/session.ts";
 
 const TEXT = "meet me at the safehouse";
 const NUMBER = "15551230000";
 const SECRET = "super-secret-token";
 
-/** A logger configured exactly as `createSession` configures its default. */
-const captured = (): { logger: pino.Logger; written: () => string } => {
+/** The same logger factory used by `createSession`, captured byte-for-byte. */
+const captured = (): { logger: ReturnType<typeof createDefaultLogger>; written: () => string } => {
   const chunks: string[] = [];
-  const logger = pino({ level: "warn", redact: { paths: [...REDACTED_PATHS] } }, {
+  const logger = createDefaultLogger({
     write: (chunk: string) => chunks.push(chunk),
-  } as pino.DestinationStream);
+  });
   return { logger, written: () => chunks.join("") };
 };
+
+const assertKnownValueAbsent = (out: string, value: string): void => {
+  assert.ok(out.length > 0, "the logger wrote nothing — this test would otherwise pass vacuously");
+  assert.equal(knownValueHits(out, [value]), 0, `a held value reached the log: ${out}`);
+};
+
+const knownValueHits = (out: string, values: readonly string[]): number =>
+  values.filter((value) => out.includes(value)).length;
 
 test("an error carrying a payload does not put it in the log", () => {
   const { logger, written } = captured();
@@ -69,6 +76,47 @@ test("message fields are censored wherever they appear in a logged object", () =
   assert.ok(!out.includes(NUMBER), `the recipient reached the log: ${out}`);
   // Non-sensitive context is the reason to log at all, so it must survive.
   assert.ok(out.includes('"attempt":2'), `the surrounding context was lost: ${out}`);
+});
+
+test("nested message content is censored without hiding Error diagnostics", () => {
+  const { logger, written } = captured();
+  const shallowContent = "nested-message-content-canary";
+  const deepContent = "deep-message-content-canary";
+  const stringContent = "plain-message-body-canary";
+  const errorContent = "error-attached-message-content-canary";
+  const arrayContent = "array-message-content-canary";
+  const diagnostic = "connection reset by peer";
+  const error = Object.assign(new Error(diagnostic), {
+    node: { message: { conversation: errorContent } },
+  });
+
+  logger.warn(
+    {
+      node: { message: { conversation: shallowContent } },
+      wrapper: { node: { message: { extendedTextMessage: { text: deepContent } } } },
+      event: { message: stringContent },
+      events: [{ message: { caption: arrayContent } }],
+      diagnostic: { message: { code: 503 } },
+      err: error,
+    },
+    "decrypt failure",
+  );
+
+  const out = written();
+  assertKnownValueAbsent(out, shallowContent);
+  assertKnownValueAbsent(out, deepContent);
+  assertKnownValueAbsent(out, stringContent);
+  assertKnownValueAbsent(out, errorContent);
+  assertKnownValueAbsent(out, arrayContent);
+  assert.ok(out.includes(diagnostic), "the Error diagnostic was censored with message content");
+  assert.ok(out.includes('"code":503'), "a non-content message object was censored");
+
+  const planted = `${out}${JSON.stringify({ message: shallowContent })}`;
+  assert.equal(
+    knownValueHits(planted, [shallowContent]),
+    1,
+    "the known-value scanner missed deliberately planted content",
+  );
 });
 
 test("credentials are censored", () => {
@@ -133,4 +181,26 @@ test("baileys trace handshake and protocol fields are censored", () => {
   assert.ok(!out.includes(peerJid), `an address reached the log: ${out}`);
   assert.ok(!out.includes(NUMBER), `a phone number reached the log: ${out}`);
   assert.ok(out.includes("baileys trace control"), "the log diagnostic was lost");
+});
+
+test("baileys protocol-node address fields observed on ios are censored", () => {
+  const { logger, written } = captured();
+  const peerJid = "100000000000000@lid";
+  const stanzaId = "1234567890123456";
+
+  logger.warn(
+    {
+      from: peerJid,
+      attrs: { id: stanzaId },
+      recv: { attrs: { from: peerJid, id: stanzaId, t: stanzaId } },
+      sent: { id: stanzaId },
+      messageIds: [stanzaId],
+    },
+    `baileys protocol node control for ${peerJid}`,
+  );
+
+  const out = written();
+  assertKnownValueAbsent(out, peerJid);
+  assertKnownValueAbsent(out, stanzaId);
+  assert.ok(out.includes("[Redacted]"), "the sensitive log-line message was not censored");
 });

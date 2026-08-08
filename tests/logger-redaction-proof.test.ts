@@ -11,7 +11,11 @@ test("logger scan detects planted account values and rejects an empty log", () =
   const knownValues = ["100000000000000@lid", "120363042384062365@g.us", "proof-nonce-123456789"];
   const clean = [
     JSON.stringify({ level: 30, msg: "connection update" }),
-    JSON.stringify({ level: 40, err: { message: "control failure" }, msg: "metrics hook threw" }),
+    JSON.stringify({
+      level: 40,
+      err: { message: "failed to decrypt message" },
+      msg: "metrics hook threw",
+    }),
   ].join("\n");
 
   const report = scanLoggerOutput(clean, knownValues);
@@ -20,6 +24,7 @@ test("logger scan detects planted account values and rejects an empty log", () =
   assert.equal(report.lineCount, 2);
   assert.equal(report.lifecycleLinesObserved, 1);
   assert.equal(report.errLinesObserved, 1);
+  assert.equal(report.decryptFailureLinesObserved, 1);
   assert.equal(report.floorPassed, true);
 
   const planted = scanLoggerOutput(

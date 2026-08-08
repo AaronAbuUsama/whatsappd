@@ -21,6 +21,7 @@ export interface LoggerScanReport {
   readonly knownValueHits: number;
   readonly lifecycleLinesObserved: number;
   readonly errLinesObserved: number;
+  readonly decryptFailureLinesObserved: number;
   readonly floorPassed: boolean;
 }
 
@@ -53,6 +54,7 @@ export function scanLoggerOutput(raw: string, knownValues: readonly string[]): L
   let leakPatternHits = 0;
   let lifecycleLinesObserved = 0;
   let errLinesObserved = 0;
+  let decryptFailureLinesObserved = 0;
 
   for (const line of lines) {
     let parsed: unknown;
@@ -67,7 +69,18 @@ export function scanLoggerOutput(raw: string, knownValues: readonly string[]): L
       if (typeof record.msg === "string" && LIFECYCLE_MESSAGES.has(record.msg)) {
         lifecycleLinesObserved++;
       }
-      if (Object.hasOwn(record, "err")) errLinesObserved++;
+      if (Object.hasOwn(record, "err")) {
+        errLinesObserved++;
+        const err = record.err;
+        if (
+          err !== null &&
+          typeof err === "object" &&
+          !Array.isArray(err) &&
+          (err as Record<string, unknown>).message === "failed to decrypt message"
+        ) {
+          decryptFailureLinesObserved++;
+        }
+      }
     }
   }
 
@@ -80,6 +93,7 @@ export function scanLoggerOutput(raw: string, knownValues: readonly string[]): L
     knownValueHits,
     lifecycleLinesObserved,
     errLinesObserved,
+    decryptFailureLinesObserved,
     floorPassed: lines.length > 0 && lifecycleLinesObserved > 0 && errLinesObserved > 0,
   };
 }
@@ -133,13 +147,14 @@ async function runChild(profile: string): Promise<void> {
         store: credentials,
         auth: qrAuth(),
         metrics() {
-          throw Object.assign(new Error("logger redaction control"), {
+          throw Object.assign(new Error("failed to decrypt message"), {
             data: {
               remoteJid: groupId,
               participant: peerJid,
               participantAlt,
               text: nonce,
             },
+            node: { message: { conversation: nonce } },
           });
         },
       });
@@ -196,6 +211,10 @@ function runParent(profile: string): void {
   assert.equal(report.patternHits, 0, "the default logger emitted a receipt leak pattern");
   assert.equal(report.knownValueHits, 0, "the default logger emitted a held account value");
   assert.ok(report.floorPassed, "the default-logger proof did not meet its anti-skip floor");
+  assert.ok(
+    report.decryptFailureLinesObserved > 0,
+    "the default-logger proof did not exercise the decrypt-failure Error path",
+  );
 
   const planted = scanLoggerOutput(
     `${raw}\n${JSON.stringify({ planted: knownValues })}`,
@@ -214,6 +233,7 @@ function runParent(profile: string): void {
       lineCount: report.lineCount,
       lifecycleLinesObserved: report.lifecycleLinesObserved,
       errLinesObserved: report.errLinesObserved,
+      decryptFailureLinesObserved: report.decryptFailureLinesObserved,
       patternHits: report.patternHits,
       knownValueHits: report.knownValueHits,
       positiveControlDetectedAllKnownValues: true,

@@ -33,11 +33,11 @@ redaction policy, its own destinations, and its own compliance story, and
 silently rewriting its configuration would be a worse surprise than the one
 being fixed. The library defends the logger it owns.
 
-## The list is explicit, not recursive
+## Explicit paths, plus value-aware message envelopes
 
-`pino` can redact by wildcard at arbitrary depth. This list does not, because
-deep redaction is walked on every log call, including the overwhelming majority
-that carry nothing sensitive, and this library logs on a connection's hot path.
+Most redaction remains an explicit path list because a full recursive sweep is
+walked on every log call, including the overwhelming majority that carry
+nothing sensitive, and this library logs on a connection's hot path.
 
 The cost of that choice is that the list must name the shapes that matter, and
 naming them is fallible. A first version used only nested wildcards — `*.token`
@@ -47,6 +47,16 @@ top-level duplicates in the list exist because of that, and the tests assert on
 the bytes written rather than on the configuration, because a `redact` list can
 be present and still miss the path that carries the secret.
 
+Baileys message envelopes are the exception. A property literally named
+`message` can appear at more than one depth, so the default logger applies a
+value-aware formatter before serialization. It censors a string body and an
+object carrying message-content keys such as `conversation`,
+`extendedTextMessage`, `text`, or `caption`. It does not blanket-censor every
+`message`: a real `Error` still serializes its diagnostic `message` verbatim.
+This distinction is tested as a positive control, because restoring a generic
+`*.message` path would hide the leak but also blind operators to every error
+diagnostic.
+
 ## Consequences
 
 Anyone relying on the default logger to print a full error object for debugging
@@ -55,7 +65,7 @@ survive, which preserves the diagnostic value that made those two call sites
 worth having; the payload that a debugger might have wanted is the payload this
 decision exists to withhold. Passing an explicit `logger` opts out entirely.
 
-The list is a maintenance burden that grows when the wire format grows. That is
-accepted in exchange for not paying a deep tree-walk on every log call, and it
-is the reason the redaction has tests that fail loudly rather than a comment
-asking for care.
+The explicit list and the focused message-envelope walk are maintenance burdens
+that grow when the wire format grows. That is accepted in exchange for not
+walking every field recursively on every log call, and it is the reason the
+redaction has tests that fail loudly rather than a comment asking for care.
