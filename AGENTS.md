@@ -45,3 +45,25 @@ When asked to execute the issue DAG autonomously, follow
 `docs/agents/frontier-execution.md`. The durable GitHub graph, independent
 review loop, four-round ceiling, proof gate, and merge-frontier receipt are
 mandatory.
+
+### A harness must not manufacture the condition it claims to observe
+
+`tests/teardown-proof.ts` injected its own `conversation_sync` batch on every
+`online` event — with empty `chats`, `contacts` and `messages` — and then
+counted the resulting in-flight work as a qualifying stop. It reported 10 of 10.
+Native iOS managed 2 in 20. The number was real; it just measured the harness.
+
+When a proof needs a rare condition, the injected version is a regression
+control and must be labelled one. It never counts toward a floor stated in terms
+of native observation. If the native floor turns out to be unreachable, report
+the achieved count against the attempt budget and get the floor re-adjudicated.
+Do not quietly substitute the synthetic count, and do not retry until green.
+
+### A reviewer's suggested fix is a claim too
+
+Scrutiny correctly found that dropping `*.message` from the default redaction
+paths leaks nested message content, and suggested restoring it. Probing pino
+directly showed the restore also redacts every `err.message`, blinding operators
+to error diagnostics — which is why it had been removed. Both the finding and
+the removal were right; the suggested fix was not. Verify the remedy against the
+same evidence you used to verify the defect, or you trade one fault for another.
