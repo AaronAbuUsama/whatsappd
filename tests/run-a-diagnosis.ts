@@ -155,6 +155,18 @@ async function main(): Promise<void> {
       replacementComparison.stableProofStateEqual &&
       replacementComparison.collectionFloorsSatisfied &&
       accountCollectionsDrifted(replacementComparison);
+    const diagnostic = {
+      liveDriftComponentMatches: liveDrift.componentMatches,
+      liveDriftStableProofStateEqual: liveDrift.stableProofStateEqual,
+      liveDriftCollectionFloorsSatisfied: liveDrift.collectionFloorsSatisfied,
+      replacementComponentMatches: replacementComparison.componentMatches,
+      replacementStableProofStateEqual: replacementComparison.stableProofStateEqual,
+      replacementCollectionFloorsSatisfied: replacementComparison.collectionFloorsSatisfied,
+      credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
+      sessionAttached: replacement.sessionAttached,
+      liveSocketResumed: replacement.liveSocketResumed,
+      durableReconstructedWhileNoLive: replacement.durableReconstructedWhileNoLive,
+    };
     if (
       (!liveDriftSupportsHypothesis && !replacementSupportsHypothesis) ||
       !replacement.credentialIdentityMatchesOriginal ||
@@ -162,7 +174,9 @@ async function main(): Promise<void> {
       replacement.liveSocketResumed ||
       !replacement.durableReconstructedWhileNoLive
     )
-      throw new Error("the non-sending observation did not support the live-drift hypothesis");
+      throw new Error(
+        `the non-sending observation did not support the live-drift hypothesis: ${JSON.stringify(diagnostic)}`,
+      );
 
     const store = {
       runStart,
@@ -202,8 +216,7 @@ async function main(): Promise<void> {
       `${JSON.stringify({
         receipt: path.relative(root, receipt.file),
         noSendInvocations: 0,
-        liveDriftComponentMatches: liveDrift.componentMatches,
-        replacementComponentMatches: replacementComparison.componentMatches,
+        ...diagnostic,
         stableProofStateEqual: replacementComparison.stableProofStateEqual,
         collectionFloorsSatisfied: replacementComparison.collectionFloorsSatisfied,
         credentialIdentityMatchesOriginal: replacement.credentialIdentityMatchesOriginal,
