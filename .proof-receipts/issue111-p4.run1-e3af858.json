@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "issue": 111,
+  "scope": "Run A exact-head linked Client path",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "run-a-proof-run-start",
+    "gitHead": "e3af858c4b6b2539ba376f90c2299b69a262c686",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "treeClean": true,
+    "startedAt": "2026-08-08T12:50:20.792Z",
+    "finalizedAt": "2026-08-08T12:50:40.286Z",
+    "command": "pnpm proof:run-a < /dev/null",
+    "observationStoreSha256": "a01752a69ecab0da034acf6acd68125c037dd9321e079921f7ad48c01f194a27"
+  },
+  "matrix": [
+    {
+      "id": "resume-unattended",
+      "verdict": "observed",
+      "captureSite": "subject-runtime-events",
+      "evidence": {
+        "linkMode": "resumed",
+        "challengeEventCount": 0,
+        "challengeProduced": false,
+        "interactive": false,
+        "subjectPid": 49433
+      }
+    },
+    {
+      "id": "inbound-text",
+      "verdict": "observed",
+      "captureSite": "client-live-upsert",
+      "evidence": {
+        "observedVia": "live-upsert",
+        "nonceSha256": "9613ab171c818ec22e0da93d3b05d753b17f89ba627120e07a81395a76bda319",
+        "nonceLength": 32,
+        "chatsList": true,
+        "messagesGet": true,
+        "peerPid": 49592,
+        "peerLinkMode": "resumed"
+      }
+    },
+    {
+      "id": "inbound-document",
+      "verdict": "failed",
+      "captureSite": "run-stage-verdict",
+      "evidence": {
+        "stage": "inbound-document"
+      }
+    },
+    {
+      "id": "attachment-bytes",
+      "verdict": "not_observed",
+      "captureSite": "run-stage-verdict",
+      "evidence": {
+        "stage": "inbound-document"
+      }
+    },
+    {
+      "id": "outbound-durable-send",
+      "verdict": "not_observed",
+      "captureSite": "run-stage-verdict",
+      "evidence": {
+        "stage": "inbound-document"
+      }
+    },
+    {
+      "id": "saved-state",
+      "verdict": "not_observed",
+      "captureSite": "run-stage-verdict",
+      "evidence": {
+        "stage": "inbound-document"
+      }
+    },
+    {
+      "id": "process-replacement",
+      "verdict": "not_observed",
+      "captureSite": "run-stage-verdict",
+      "evidence": {
+        "stage": "inbound-document"
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "freeFormFields": 1,
+    "digestFields": 2,
+    "nonEmpty": true,
+    "floorPassed": true,
+    "knownValueControlCount": 4
+  }
+}
