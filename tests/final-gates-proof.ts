@@ -257,7 +257,15 @@ try {
     "--test",
     "tests/*.test.ts",
   ]);
-  const raisedFloorHundredths = Math.min(9990, comparison.aggregateHead.lines + 50);
+  // Node **truncates** a fractional coverage threshold: `--test-coverage-lines=96.74`
+  // is enforced as 96, and the suite's 96.24 clears it. Measured, not assumed —
+  // a floor computed as "measured + 0.5" therefore exits 0 and would have
+  // certified the gate inert. The raised floor must be the next whole integer
+  // above the measured value.
+  const raisedFloorHundredths = Math.min(
+    10_000,
+    (Math.floor(comparison.aggregateHead.lines / 100) + 1) * 100,
+  );
   const raisedFloor = await run(process.execPath, [
     ...COVERAGE_ARGS,
     `--test-coverage-lines=${raisedFloorHundredths / 100}`,
