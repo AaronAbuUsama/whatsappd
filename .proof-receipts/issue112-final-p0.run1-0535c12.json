@@ -1,0 +1,382 @@
+{
+  "schemaVersion": 1,
+  "issue": 112,
+  "scope": "0.3.0 final gates: publication side effects, regression floors, executed suite, artifact safety, review history",
+  "tier": "P0",
+  "verdict": "failed",
+  "provenance": {
+    "captureSite": "final-gates-proof-run-start",
+    "gitHead": "0535c1256ce12749b94a40a5ced171f1ee4f5d74",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "treeClean": true,
+    "startedAt": "2026-08-08T17:20:59.220Z",
+    "finalizedAt": "2026-08-08T17:22:35.027Z",
+    "command": "pnpm proof:final-gates",
+    "observationStoreSha256": "22ec6d4a8530e83781d08cbf7e7fe194c26c18a9061520dd82ea30c412ed8cb9"
+  },
+  "publication": {
+    "captureSite": "git-registry-and-workflow-queries",
+    "candidateTag": "v0.3.0",
+    "candidateTagPresentLocal": false,
+    "tagQuerySawKnownTag": true,
+    "candidateTagPresentRemote": false,
+    "remoteTagQuerySawKnownTag": true,
+    "remoteTagVerdict": "observed",
+    "registryCandidateStatus": 404,
+    "registryControlStatus": 200,
+    "registryVersionCount": 4,
+    "candidateInPackument": false,
+    "registryVerdict": "observed",
+    "npmViewDirectExit": 1,
+    "npmViewPipedExit": 0,
+    "npmViewControlDirectExit": 1,
+    "releaseWorkflowDiffLineCount": 0,
+    "workflowDiffQuerySawAKnownDifference": true,
+    "releaseRunsOnCandidateBranch": 0,
+    "releaseRunQuerySawAKnownRun": true,
+    "releaseRunVerdict": "observed",
+    "candidateBranchPresentOnRemote": false,
+    "remoteBranchQuerySawKnownBranch": true,
+    "remoteBranchVerdict": "observed"
+  },
+  "coverage": {
+    "captureSite": "lcov-base-and-head-in-one-session",
+    "baseRef": "origin/master",
+    "baseSha": "8bc8b44a6d0553775e058d586f1ff94f1c3c8873",
+    "headSha": "0535c1256ce12749b94a40a5ced171f1ee4f5d74",
+    "measuredInOneSession": true,
+    "baseFileCount": 34,
+    "headFileCount": 48,
+    "comparedFileCount": 34,
+    "newAtHeadCount": 14,
+    "removedAtHeadCount": 0,
+    "aggregateHeadLinesHundredths": 9624,
+    "aggregateHeadBranchesHundredths": 8835,
+    "aggregateHeadFunctionsHundredths": 9089,
+    "aggregateBaseLinesHundredths": 9584,
+    "aggregateBaseBranchesHundredths": 8690,
+    "aggregateBaseFunctionsHundredths": 8955,
+    "aggregateMeetsFloor": true,
+    "regressedFileCount": 4,
+    "denominatorOnlyFileCount": 1,
+    "realGateExit": 0,
+    "raisedFloorHundredths": 9700,
+    "raisedFloorExit": 1,
+    "selfTestBaseVsBaseRegressions": 0,
+    "selfTestInvertedRegressions": 16,
+    "selfTestEmptyCorpusRefused": true,
+    "verdict": "failed",
+    "floorLinesHundredths": 9400,
+    "floorBranchesHundredths": 8500,
+    "floorFunctionsHundredths": 8800,
+    "regressions": [
+      {
+        "path": "src/runtime/client.ts",
+        "metric": "lines",
+        "baseHundredths": 9969,
+        "headHundredths": 9964,
+        "baseUncovered": 4,
+        "headUncovered": 4
+      },
+      {
+        "path": "src/runtime/runtime.ts",
+        "metric": "lines",
+        "baseHundredths": 9928,
+        "headHundredths": 9893,
+        "baseUncovered": 7,
+        "headUncovered": 9
+      },
+      {
+        "path": "src/runtime/runtime.ts",
+        "metric": "branches",
+        "baseHundredths": 9528,
+        "headHundredths": 9213,
+        "baseUncovered": 10,
+        "headUncovered": 17
+      },
+      {
+        "path": "src/runtime/runtime.ts",
+        "metric": "functions",
+        "baseHundredths": 9242,
+        "headHundredths": 8873,
+        "baseUncovered": 5,
+        "headUncovered": 8
+      },
+      {
+        "path": "src/session.ts",
+        "metric": "lines",
+        "baseHundredths": 9229,
+        "headHundredths": 9124,
+        "baseUncovered": 54,
+        "headUncovered": 58
+      },
+      {
+        "path": "src/session.ts",
+        "metric": "functions",
+        "baseHundredths": 8043,
+        "headHundredths": 7917,
+        "baseUncovered": 9,
+        "headUncovered": 10
+      },
+      {
+        "path": "src/testing.ts",
+        "metric": "lines",
+        "baseHundredths": 9886,
+        "headHundredths": 9864,
+        "baseUncovered": 2,
+        "headUncovered": 3
+      },
+      {
+        "path": "src/testing.ts",
+        "metric": "functions",
+        "baseHundredths": 8750,
+        "headHundredths": 8636,
+        "baseUncovered": 2,
+        "headUncovered": 3
+      }
+    ]
+  },
+  "suite": {
+    "captureSite": "tap-artifact-and-per-file-runs",
+    "planPresent": true,
+    "planCount": 589,
+    "testsCount": 589,
+    "passCount": 589,
+    "failCount": 0,
+    "skippedCount": 0,
+    "todoCount": 0,
+    "onDiskTestFileCount": 40,
+    "perFileTotal": 589,
+    "perFileZeroCount": 0,
+    "perFileTotalEqualsPlan": true,
+    "verdict": "observed",
+    "planFloor": 421
+  },
+  "traps": [
+    {
+      "id": "empty-glob-exits-zero-with-no-tests",
+      "verdict": "observed",
+      "captureSite": "child-process-exit-and-output",
+      "exitCode": 0,
+      "observedCount": 0,
+      "controlCount": 589
+    },
+    {
+      "id": "empty-glob-still-exits-zero-under-coverage-floor",
+      "verdict": "observed",
+      "captureSite": "child-process-exit-and-output",
+      "exitCode": 0,
+      "observedCount": 0,
+      "controlCount": 94
+    },
+    {
+      "id": "suite-glob-is-non-recursive",
+      "verdict": "observed",
+      "captureSite": "child-process-exit-and-output",
+      "exitCode": 0,
+      "observedCount": 40,
+      "controlCount": 40
+    }
+  ],
+  "redProbes": [
+    {
+      "id": "coverage-gate-at-a-raised-floor",
+      "verdict": "observed",
+      "captureSite": "gate-rerun-with-planted-defect",
+      "greenExit": 0,
+      "redExit": 1
+    },
+    {
+      "id": "test-runner-reports-a-planted-failure",
+      "verdict": "observed",
+      "captureSite": "gate-rerun-with-planted-defect",
+      "greenExit": 0,
+      "redExit": 1
+    },
+    {
+      "id": "coverage-comparator-has-direction",
+      "verdict": "observed",
+      "captureSite": "gate-rerun-with-planted-defect",
+      "greenExit": 0,
+      "redExit": 16
+    },
+    {
+      "id": "coverage-comparator-refuses-an-empty-corpus",
+      "verdict": "observed",
+      "captureSite": "gate-rerun-with-planted-defect",
+      "greenExit": 0,
+      "redExit": 1
+    }
+  ],
+  "staticGates": {
+    "captureSite": "pnpm-script-exit-codes",
+    "check": 0,
+    "checkDocs": 0,
+    "checkDupes": 0,
+    "checkUnused": 0,
+    "proofPack": 0,
+    "duplicationHundredthsOfPercent": 7,
+    "duplicationCeilingHundredthsOfPercent": 30,
+    "cloneCount": 1,
+    "underDuplicationCeiling": true
+  },
+  "safety": {
+    "leakScan": {
+      "captureSite": "ripgrep-match-set-head-versus-base",
+      "corpusFileCount": 399,
+      "baseMatchValueCount": 6,
+      "headMatchValueCount": 7,
+      "newValueCount": 1,
+      "newValuesAllKnownSynthetic": true,
+      "hiddenFlagWithoutHits": 0,
+      "hiddenFlagWithHits": 1,
+      "hiddenFlagIsLoadBearing": true
+    },
+    "proofPrivate": {
+      "captureSite": "git-ls-files-and-check-ignore",
+      "trackedFileCount": 0,
+      "ignored": true,
+      "statusHitCount": 0,
+      "controlTrackedPathFileCount": 21
+    },
+    "profiles": [
+      {
+        "id": "android",
+        "verdict": "observed",
+        "directoryInode": 464236357,
+        "databaseInode": 464236382,
+        "databaseByteLength": 954368,
+        "fileCount": 27,
+        "credentialRowCount": 1,
+        "hasIdentity": true,
+        "hasAccount": true,
+        "hasNoiseKey": true,
+        "captureSite": "filesystem-inode-and-read-only-copy"
+      },
+      {
+        "id": "ios",
+        "verdict": "observed",
+        "directoryInode": 464236385,
+        "databaseInode": 464236660,
+        "databaseByteLength": 6397952,
+        "fileCount": 587,
+        "credentialRowCount": 1,
+        "hasIdentity": true,
+        "hasAccount": true,
+        "hasNoiseKey": true,
+        "captureSite": "filesystem-inode-and-read-only-copy"
+      }
+    ]
+  },
+  "process": {
+    "pullRequests": [
+      {
+        "number": 116,
+        "verdict": "observed",
+        "headCommit": "98c01c4",
+        "headClaimPresent": true,
+        "headClaimMatchesACommit": true,
+        "commitCount": 7,
+        "reviewCount": 0,
+        "commentCount": 7,
+        "distinctCommentAuthorCount": 1,
+        "captureSite": "github-pull-request-api"
+      },
+      {
+        "number": 120,
+        "verdict": "observed",
+        "headCommit": "21f3e84",
+        "headClaimPresent": true,
+        "headClaimMatchesACommit": true,
+        "commitCount": 4,
+        "reviewCount": 0,
+        "commentCount": 0,
+        "distinctCommentAuthorCount": 0,
+        "captureSite": "github-pull-request-api"
+      },
+      {
+        "number": 125,
+        "verdict": "observed",
+        "headCommit": "5d195df",
+        "headClaimPresent": true,
+        "headClaimMatchesACommit": false,
+        "commitCount": 6,
+        "reviewCount": 0,
+        "commentCount": 0,
+        "distinctCommentAuthorCount": 0,
+        "captureSite": "github-pull-request-api"
+      },
+      {
+        "number": 128,
+        "verdict": "observed",
+        "headCommit": "11a8e78",
+        "headClaimPresent": true,
+        "headClaimMatchesACommit": false,
+        "commitCount": 2,
+        "reviewCount": 0,
+        "commentCount": 0,
+        "distinctCommentAuthorCount": 0,
+        "captureSite": "github-pull-request-api"
+      },
+      {
+        "number": 129,
+        "verdict": "observed",
+        "headCommit": "0b56d48",
+        "headClaimPresent": true,
+        "headClaimMatchesACommit": true,
+        "commitCount": 1,
+        "reviewCount": 0,
+        "commentCount": 0,
+        "distinctCommentAuthorCount": 0,
+        "captureSite": "github-pull-request-api"
+      },
+      {
+        "number": 131,
+        "verdict": "observed",
+        "headCommit": "7f0c5de",
+        "headClaimPresent": false,
+        "headClaimMatchesACommit": false,
+        "commitCount": 3,
+        "reviewCount": 0,
+        "commentCount": 0,
+        "distinctCommentAuthorCount": 0,
+        "captureSite": "github-pull-request-api"
+      },
+      {
+        "number": 147,
+        "verdict": "observed",
+        "headCommit": "9a6edd0",
+        "headClaimPresent": false,
+        "headClaimMatchesACommit": false,
+        "commitCount": 2,
+        "reviewCount": 0,
+        "commentCount": 0,
+        "distinctCommentAuthorCount": 0,
+        "captureSite": "github-pull-request-api"
+      }
+    ],
+    "ledger": {
+      "captureSite": "defect-ledger-document",
+      "maxRoundsRecorded": 3,
+      "roundCeiling": 4,
+      "withinCeiling": true,
+      "replanRecorded": true,
+      "classHistoryDoesNotReset": true,
+      "reviewerSubstitutionRecorded": true,
+      "ownerConfirmationRecorded": true,
+      "independentGraderVerdict": "not_observed"
+    }
+  },
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "freeFormFields": 18,
+    "digestFields": 1,
+    "nonEmpty": true,
+    "floorPassed": true,
+    "knownValueControlCount": 8
+  }
+}
