@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 2,
+  "issue": 112,
+  "scope": "0.3.0 release candidate: version, tarball, and dual-Node packed consumer",
+  "tier": "P6",
+  "provenance": {
+    "captureSite": "release-candidate-proof-run-start",
+    "gitHead": "05e5377f4436e09638fe678da01d8ec2330f082f",
+    "sourceTreeHash": "e577088f4bbe4724e0d961997fad41e4ea7be96f",
+    "treeHash": "aacbcdb09f703e2042c088f8c59b910032caf947",
+    "treeClean": true,
+    "startedAt": "2026-08-08T21:20:28.393Z",
+    "finalizedAt": "2026-08-08T21:21:00.382Z",
+    "command": "pnpm proof:release",
+    "observationStoreSha256": "176bd6d1e9572790b378f4aecee5c8a70551e63228090a68d00e9c3add60bab7"
+  },
+  "version": {
+    "captureSite": "package-json-and-changeset-directory",
+    "packageVersion": "0.3.0-alpha.0",
+    "pendingChangesetCount": 11,
+    "consumedChangesetCount": 11,
+    "changesetMode": "pre",
+    "prereleaseTag": "alpha",
+    "initialVersion": "0.2.2",
+    "changelogSectionPresent": true,
+    "changelogSectionLineCount": 187,
+    "changesetFixedGroupCount": 0,
+    "changesetLinkedGroupCount": 0,
+    "expectedVersion": "0.3.0-alpha.0",
+    "matchesExpected": true
+  },
+  "tarball": {
+    "captureSite": "pnpm-pack-output",
+    "byteLength": 98355,
+    "ceilingBytes": 120000,
+    "underCeiling": true,
+    "sha256": "a4b51a61a9601213700bc0526a2c77c39cd6fc0d27d334b8f78fcb7b77cebf43",
+    "entryCount": 10,
+    "unexpectedEntryCount": 0,
+    "missingRequiredRootFileCount": 0,
+    "forbiddenPatternHitCount": 0,
+    "entries": [
+      {
+        "path": "CHANGELOG.md",
+        "byteLength": 16024
+      },
+      {
+        "path": "dist/index.d.mts",
+        "byteLength": 11165
+      },
+      {
+        "path": "dist/index.mjs",
+        "byteLength": 138006
+      },
+      {
+        "path": "dist/runtime-C5nwq53t.d.mts",
+        "byteLength": 63326
+      },
+      {
+        "path": "dist/runtime-CgbpQADz.mjs",
+        "byteLength": 118155
+      },
+      {
+        "path": "dist/testing.d.mts",
+        "byteLength": 3310
+      },
+      {
+        "path": "dist/testing.mjs",
+        "byteLength": 3365
+      },
+      {
+        "path": "LICENSE",
+        "byteLength": 1071
+      },
+      {
+        "path": "package.json",
+        "byteLength": 3854
+      },
+      {
+        "path": "README.md",
+        "byteLength": 8340
+      }
+    ]
+  },
+  "distIdentity": {
+    "captureSite": "packed-versus-fresh-build",
+    "fileCount": 6,
+    "packedMatchesFreshBuild": true,
+    "digests": [
+      {
+        "file": "dist/index.d.mts",
+        "sha256": "7297cfb9a4c23f2cccecd26993a1533c32e2503a2ffcf6f8e916ce98f96f359b"
+      },
+      {
+        "file": "dist/index.mjs",
+        "sha256": "546cd018f210400ce072680b81c4bd0f0bc6d2e531bc3c314fbd146a625f8fd7"
+      },
+      {
+        "file": "dist/runtime-C5nwq53t.d.mts",
+        "sha256": "f910bee39495423661a806fb722e17ad3fa5078aff5ef0164330c6b8aa63e8bf"
+      },
+      {
+        "file": "dist/runtime-CgbpQADz.mjs",
+        "sha256": "3acdfc224f360514c07b1a36a6ea4ebc6a2613891a006518c56cf8419f7aab78"
+      },
+      {
+        "file": "dist/testing.d.mts",
+        "sha256": "fccf4c0e928c59868acda2b92a7670ea0d00624b1b1076b5e4cad753149f21d7"
+      },
+      {
+        "file": "dist/testing.mjs",
+        "sha256": "6f71c1a863f013ef0adabe35c6b9b27abf1b754892791d995a46c1adbb43fb98"
+      }
+    ]
+  },
+  "leakScan": {
+    "captureSite": "extracted-tarball-corpus",
+    "filesScanned": 10,
+    "hiddenFilesInCorpus": 0,
+    "accountShapedHits": 0,
+    "allowlistedSyntheticHits": 2,
+    "privatePathHits": 0,
+    "plantedControlHits": 1,
+    "plantedControlHiddenFileHits": 1
+  },
+  "nodeMatrix": [
+    {
+      "id": "node22",
+      "verdict": "observed",
+      "captureSite": "packed-consumer-child-stdout",
+      "observedVersion": "v22.22.2",
+      "observedMajor": 22,
+      "writePid": 47253,
+      "readPid": 47411,
+      "distinctPids": true,
+      "durableDigestEqual": true,
+      "deterministicDigest": "4765f50c4b300a490977bc2dffd046a3b1228b379b68bbfdc481fa280aef0de2",
+      "pageMessageCount": 2,
+      "mediaDigest": "74d87cbca08a9e0c0d87454899639a794d5d4808a6a65f612bd7e601da6a5ecf",
+      "liveConnectionObserved": true,
+      "liveIdentityObserved": true,
+      "livePresenceObserved": true,
+      "connectionPresent": false,
+      "identityPresent": false,
+      "presenceRestored": false
+    },
+    {
+      "id": "node24",
+      "verdict": "observed",
+      "captureSite": "packed-consumer-child-stdout",
+      "observedVersion": "v24.18.0",
+      "observedMajor": 24,
+      "writePid": 47446,
+      "readPid": 47502,
+      "distinctPids": true,
+      "durableDigestEqual": true,
+      "deterministicDigest": "4765f50c4b300a490977bc2dffd046a3b1228b379b68bbfdc481fa280aef0de2",
+      "pageMessageCount": 2,
+      "mediaDigest": "74d87cbca08a9e0c0d87454899639a794d5d4808a6a65f612bd7e601da6a5ecf",
+      "liveConnectionObserved": true,
+      "liveIdentityObserved": true,
+      "livePresenceObserved": true,
+      "connectionPresent": false,
+      "identityPresent": false,
+      "presenceRestored": false
+    }
+  ],
+  "crossVersion": {
+    "captureSite": "node-matrix-comparison",
+    "legCount": 2,
+    "distinctMajorCount": 2,
+    "deterministicDigestsEqual": true
+  },
+  "releaseSideEffects": {
+    "captureSite": "local-git-tag-listing",
+    "localReleaseTagCount": 2,
+    "candidateTag": "v0.3.0-alpha.0",
+    "candidateTagPresent": false,
+    "tagListingSawKnownTag": true
+  },
+  "sanitization": {
+    "captureSite": "receipt-writer-in-memory",
+    "schemaUnknownFields": 0,
+    "schemaInvalidFields": 0,
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "freeFormFields": 23,
+    "digestFields": 12,
+    "nonEmpty": true,
+    "floorPassed": true,
+    "knownValueControlCount": 4
+  }
+}
