@@ -36,10 +36,12 @@ jobs:
       - name: Publish to npm (skip if this version is already published)
         run: |
           VERSION="$(node -p "require('./package.json').version")"
+          DIST_TAG="${VERSION#*-}"
+          if [ "$DIST_TAG" = "$VERSION" ]; then DIST_TAG=latest; else DIST_TAG="${DIST_TAG%%.*}"; fi
           if ( cd "$RUNNER_TEMP" && npm view "whatsappd@$VERSION" version ) >/dev/null 2>&1; then
             echo "whatsappd@$VERSION is already on npm — skipping publish."
           else
             pnpm pack --pack-destination "$RUNNER_TEMP"
             cd "$RUNNER_TEMP"
-            npm publish "whatsappd-$VERSION.tgz" --provenance --access public
+            npm publish "whatsappd-$VERSION.tgz" --tag "$DIST_TAG" --provenance --access public
           fi
