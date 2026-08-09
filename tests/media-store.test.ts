@@ -125,6 +125,40 @@ test("file media removes unpublished state when its source fails", async () => {
   }
 });
 
+test("file media removes a canonical object when publication durability fails", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-publication-failure-"));
+  const originalOpen = fs.promises.open;
+  fs.promises.open = (async (...args: Parameters<typeof originalOpen>) => {
+    const handle = await originalOpen(...args);
+    return {
+      write: (...writeArgs: Parameters<typeof handle.write>) => handle.write(...writeArgs),
+      async sync() {
+        if (String(args[0]).endsWith(".bin")) throw new Error("canonical sync failed");
+        await handle.sync();
+      },
+      close: () => handle.close(),
+    } as Awaited<ReturnType<typeof originalOpen>>;
+  }) as typeof originalOpen;
+  syncBuiltinESMExports();
+
+  const store = fileMediaStore({ directory });
+  const bytes = Uint8Array.from([1, 2, 3]);
+  const expected = await write(memoryMediaStore(), bytes, "personal");
+  try {
+    await assert.rejects(write(store, bytes, "personal"), /canonical sync failed/);
+    assert.equal(await store.open({ accountId: "personal", ref: expected.ref }), null);
+    const entries = await readdir(path.join(directory, ".whatsappd-media"), { recursive: true });
+    assert.equal(
+      entries.some((entry) => entry.endsWith(".tmp") || entry.endsWith(".bin")),
+      false,
+    );
+  } finally {
+    fs.promises.open = originalOpen;
+    syncBuiltinESMExports();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("file media syncs created directories and the canonical publication before returning", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-sync-"));
   const originalOpen = fs.promises.open;

@@ -298,18 +298,33 @@ void test("every Session side effect has an awaited Client command and typing st
   };
 
   try {
-    const generatedA = await client.messages.send.text(CHAT, "one");
+    const generatedA = await client.messages.send.text(CHAT, "one", {
+      quote: ref,
+      mentions: ["mentioned@s.whatsapp.net"],
+    });
     const generatedB = await client.messages.send.text(CHAT, "two");
     assert.notEqual(generatedA.idempotencyKey, generatedB.idempotencyKey);
     await client.operations.wait(generatedA.id);
     await client.operations.wait(generatedB.id);
     await finish(client.messages.send.image(CHAT, Buffer.from("image"), { caption: "image" }));
-    await finish(client.messages.send.video(CHAT, Buffer.from("video"), { gifPlayback: true }));
-    await finish(client.messages.send.audio(CHAT, oggOpusMono(), { ptt: true }));
+    await finish(
+      client.messages.send.video(CHAT, Buffer.from("video"), {
+        caption: "video",
+        gifPlayback: true,
+      }),
+    );
+    await finish(
+      client.messages.send.audio(CHAT, oggOpusMono(), {
+        ptt: true,
+        seconds: 3,
+        mimetype: "audio/ogg; codecs=opus",
+      }),
+    );
     await finish(
       client.messages.send.document(CHAT, Buffer.from("document"), {
         fileName: "proof.txt",
         mimetype: "text/plain",
+        caption: "document",
       }),
     );
     await finish(client.messages.send.sticker(CHAT, Buffer.from("sticker")));
@@ -360,14 +375,36 @@ void test("every Session side effect has an awaited Client command and typing st
         options,
       })),
       [
-        { to: CHAT, content: { text: "one" }, options: undefined },
-        { to: CHAT, content: { text: "two" }, options: undefined },
-        { to: CHAT, content: { image: "stream", caption: "image" }, options: undefined },
-        { to: CHAT, content: { video: "stream", gifPlayback: true }, options: undefined },
-        { to: CHAT, content: { audio: "stream", ptt: true }, options: undefined },
         {
           to: CHAT,
-          content: { document: "stream", fileName: "proof.txt", mimetype: "text/plain" },
+          content: { text: "one" },
+          options: { quote: ref, mentions: ["mentioned@s.whatsapp.net"] },
+        },
+        { to: CHAT, content: { text: "two" }, options: undefined },
+        { to: CHAT, content: { image: "stream", caption: "image" }, options: undefined },
+        {
+          to: CHAT,
+          content: { video: "stream", caption: "video", gifPlayback: true },
+          options: undefined,
+        },
+        {
+          to: CHAT,
+          content: {
+            audio: "stream",
+            ptt: true,
+            seconds: 3,
+            mimetype: "audio/ogg; codecs=opus",
+          },
+          options: undefined,
+        },
+        {
+          to: CHAT,
+          content: {
+            document: "stream",
+            fileName: "proof.txt",
+            mimetype: "text/plain",
+            caption: "document",
+          },
           options: undefined,
         },
         { to: CHAT, content: { sticker: "stream" }, options: undefined },
