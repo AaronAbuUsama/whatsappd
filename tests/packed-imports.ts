@@ -285,6 +285,18 @@ try {
           );
           assert.equal(operation?.state.status, "succeeded");
           assert.equal(typeof operation.acknowledgedAt, "number");
+          assert.ok(operation.input.type === "send" && "image" in operation.input.content);
+          const media = await store.media.open({
+            accountId: ACCOUNT,
+            ref: operation.input.content.image.ref,
+          });
+          assert.ok(media);
+          const mediaHash = createHash("sha256");
+          for await (const chunk of media) mediaHash.update(chunk);
+          assert.equal(
+            mediaHash.digest("hex"),
+            createHash("sha256").update("packed outbound").digest("hex"),
+          );
           assert.deepEqual(result.counts, { chats: 2, contacts: 1, groups: 1, messages: 30 });
           assert.deepEqual(result.noLive, { connection: true, identity: true, presence: true });
           return {
@@ -360,12 +372,12 @@ try {
           assert.equal(finalPage.older, "exhausted");
           assert.equal(driver.commands.historyRequests.length, 0);
           await driver.emit({ type: "connection", status: { phase: "disconnected" } });
-          const operation = await client.messages.send.text(CHAT, "packed outbound", {
+          const operation = await client.messages.send.image(CHAT, Buffer.from("packed outbound"), {
             idempotencyKey: "packed-outbound",
           });
           assert.equal(operation.idempotencyKey, "packed-outbound");
           assert.equal(operation.state.status, "queued");
-          const repeated = await client.messages.send.text(CHAT, "packed outbound", {
+          const repeated = await client.messages.send.image(CHAT, Buffer.from("packed outbound"), {
             idempotencyKey: "packed-outbound",
           });
           assert.equal(repeated.id, operation.id);
@@ -395,7 +407,7 @@ try {
           assert.equal(queued?.state.status, "queued");
           await driver.emit({ type: "connection", status: { phase: "online" } });
           assert.equal((await client.operations.wait(queued.id)).state.status, "succeeded");
-          const repeated = await client.messages.send.text(CHAT, "packed outbound", {
+          const repeated = await client.messages.send.image(CHAT, Buffer.from("packed outbound"), {
             idempotencyKey: "packed-outbound",
           });
           assert.equal(repeated.id, queued.id);
