@@ -9,14 +9,16 @@
  *
  * @packageDocumentation
  */
+import { randomUUID } from "node:crypto";
 import { memoryStore } from "../stores/memory.ts";
 import { immutableMediaRef } from "./media.ts";
 import {
   OperationIdempotencyConflictError,
-  assertWhatsAppOperationInput,
   announceOperationChanges,
   operationSubscription,
   operationInputJson,
+  validatedOperationResult,
+  validatedOperationSubmission,
   type WhatsAppOperation,
   type WhatsAppOperationStore,
 } from "./operations.ts";
@@ -346,6 +348,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
     {
       readonly byId: Map<string, WhatsAppOperation>;
       readonly byKey: Map<string, string>;
+      nextSequence: number;
     }
   >();
   const listeners = new Map<
@@ -360,6 +363,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
     const created = {
       byId: new Map<string, WhatsAppOperation>(),
       byKey: new Map<string, string>(),
+      nextSequence: 1,
     };
     accounts.set(accountId, created);
     return created;
@@ -399,7 +403,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
     operationId: string,
     attemptId: string,
     expected: "claimed" | "executing",
-    state: (at: number) => WhatsAppOperation["state"],
+    state: (at: number, current: WhatsAppOperation) => WhatsAppOperation["state"],
   ): Promise<WhatsAppOperation | undefined> =>
     write(accountId, (held) => {
       const current = held.byId.get(operationId);
@@ -411,31 +415,36 @@ export function memoryOperationStore(): WhatsAppOperationStore {
       )
         return { result: undefined, changed: [] };
       const at = Date.now();
-      const completed = replace(held, current, state(at), at);
+      const completed = replace(held, current, state(at, current), at);
       return { result: completed, changed: [completed] };
     });
 
   return {
     submit(request) {
-      assertWhatsAppOperationInput(request.input);
-      return write(request.accountId, (held) => {
-        const existingId = held.byKey.get(request.idempotencyKey);
+      const submission = validatedOperationSubmission(request);
+      return write(submission.accountId, (held) => {
+        const existingId = held.byKey.get(submission.idempotencyKey);
         if (existingId) {
           const existing = held.byId.get(existingId)!;
-          if (operationInputJson(existing.input) !== operationInputJson(request.input))
-            throw new OperationIdempotencyConflictError(request.accountId, request.idempotencyKey);
+          if (operationInputJson(existing.input) !== operationInputJson(submission.input))
+            throw new OperationIdempotencyConflictError(
+              submission.accountId,
+              submission.idempotencyKey,
+            );
           return { result: existing, changed: [] };
         }
-        if (held.byId.has(request.id))
-          throw new Error(`operation id "${request.id}" already exists`);
+        if (held.byId.has(submission.id))
+          throw new Error(`operation id "${submission.id}" already exists`);
         const now = Date.now();
         const operation: WhatsAppOperation = {
-          ...copy(request),
+          ...submission,
           revision: 0,
+          sequence: held.nextSequence,
           state: { status: "queued" },
           submittedAt: now,
           updatedAt: now,
         };
+        held.nextSequence += 1;
         held.byId.set(operation.id, operation);
         held.byKey.set(operation.idempotencyKey, operation.id);
         return { result: operation, changed: [operation] };
@@ -450,11 +459,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
 
     async list(accountId) {
       await writes;
-      return copy(
-        [...account(accountId).byId.values()].sort(
-          (a, b) => a.submittedAt - b.submittedAt || a.id.localeCompare(b.id),
-        ),
-      );
+      return copy([...account(accountId).byId.values()].sort((a, b) => a.sequence - b.sequence));
     },
 
     claim(accountId, attemptId, ttlMs) {
@@ -481,7 +486,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
         }
         const queued = [...held.byId.values()]
           .filter((operation) => operation.state.status === "queued")
-          .sort((a, b) => a.submittedAt - b.submittedAt || a.id.localeCompare(b.id))[0];
+          .sort((a, b) => a.sequence - b.sequence)[0];
         if (!queued) return { result: undefined, changed };
         const claimed = replace(
           held,
@@ -530,9 +535,9 @@ export function memoryOperationStore(): WhatsAppOperationStore {
       complete(accountId, operationId, attemptId, "claimed", () => ({ status: "queued" })),
 
     succeed(accountId, operationId, attemptId, result) {
-      return complete(accountId, operationId, attemptId, "executing", (at) => ({
+      return complete(accountId, operationId, attemptId, "executing", (at, current) => ({
         status: "succeeded",
-        result: copy(result),
+        result: validatedOperationResult(current.input, result),
         completedAt: at,
       }));
     },
@@ -589,16 +594,44 @@ export function memoryOperationStore(): WhatsAppOperationStore {
  * message, kind, and byte content.
  */
 export function memoryMediaStore(): MediaStore {
-  const blobs = new Map<string, { readonly accountId: string; readonly bytes: Uint8Array }>();
+  const blobs = new Map<
+    string,
+    {
+      readonly accountId: string;
+      readonly bytes: Uint8Array;
+      readonly leases: Set<string>;
+      permanent: boolean;
+    }
+  >();
   return {
-    async put({ accountId, owner, kind, bytes }) {
+    async put({ accountId, owner, kind, bytes, temporary }) {
       const ref = immutableMediaRef({ accountId, owner, kind, bytes });
-      blobs.set(ref, { accountId, bytes: Uint8Array.from(bytes) });
-      return { ref, byteLength: bytes.byteLength };
+      const blob = blobs.get(ref) ?? {
+        accountId,
+        bytes: Uint8Array.from(bytes),
+        leases: new Set<string>(),
+        permanent: false,
+      };
+      const leaseId = temporary ? randomUUID() : undefined;
+      if (leaseId) blob.leases.add(leaseId);
+      else blob.permanent = true;
+      blobs.set(ref, blob);
+      return { ref, byteLength: bytes.byteLength, ...(leaseId && { leaseId }) };
     },
     async read({ accountId, ref }) {
       const blob = blobs.get(ref);
       return blob?.accountId === accountId ? Uint8Array.from(blob.bytes) : null;
+    },
+    async retain({ accountId, ref, leaseId }) {
+      const blob = blobs.get(ref);
+      if (!blob || blob.accountId !== accountId || !blob.leases.delete(leaseId))
+        throw new Error("media staging lease does not exist");
+      blob.permanent = true;
+    },
+    async discard({ accountId, ref, leaseId }) {
+      const blob = blobs.get(ref);
+      if (!blob || blob.accountId !== accountId || !blob.leases.delete(leaseId)) return;
+      if (!blob.permanent && blob.leases.size === 0) blobs.delete(ref);
     },
   };
 }

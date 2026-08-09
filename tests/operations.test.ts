@@ -345,6 +345,7 @@ void test("an abort after media commits still publishes its durable operation", 
   const backend = {
     ...memoryBackend(),
     media: {
+      ...media,
       async put(input: Parameters<typeof media.put>[0]) {
         const stored = await media.put(input);
         entered();
@@ -410,6 +411,47 @@ void test("committed receipts drive Client wait without a second store read", as
   }
 });
 
+void test("a failed media operation submission discards its staging lease", async () => {
+  const media = memoryMediaStore();
+  const operations = memoryOperationStore();
+  let stagedRef = "";
+  const backend = {
+    ...memoryBackend(),
+    media: {
+      ...media,
+      async put(input: Parameters<typeof media.put>[0]) {
+        const stored = await media.put(input);
+        stagedRef = stored.ref;
+        return stored;
+      },
+    },
+    operations: {
+      ...operations,
+      submit: async () => {
+        throw new Error("operation database unavailable");
+      },
+    },
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "failed-media-submit",
+    backend,
+    openSession: () => createTestWhatsAppSession().session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    await assert.rejects(
+      client.messages.send.image(CHAT, Buffer.from("discard me")),
+      /operation database unavailable/,
+    );
+    assert.equal(await media.read({ accountId: "failed-media-submit", ref: stagedRef }), null);
+    assert.deepEqual(await operations.list("failed-media-submit"), []);
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
 void test("failures are classified on the correct side of the WhatsApp boundary", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
@@ -442,6 +484,37 @@ void test("failures are classified on the correct side of the WhatsApp boundary"
       },
     });
     assert.equal((await client.operations.wait(missing.id)).state.status, "failed");
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("an unsafe Session result becomes unknown without entering durable state", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "unsafe-result",
+    backend,
+    openSession: () => ({
+      ...driver.session,
+      send: async () => new Error("secret result") as never,
+    }),
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  try {
+    const operation = await client.messages.send.text(CHAT, "unsafe result");
+    const completed = await client.operations.wait(operation.id);
+    assert.equal(completed.state.status, "outcome_unknown");
+    assert.equal("result" in completed.state, false);
+    assert.equal(
+      JSON.stringify(await backend.operations.get("unsafe-result", operation.id)).includes(
+        "secret result",
+      ),
+      false,
+    );
   } finally {
     await client.close();
     await runtime.stop();
@@ -513,6 +586,46 @@ void test("an empty executor does not poll when no recovery deadline exists", as
   }
 });
 
+void test("an executor failure during stop still publishes Runtime closure", async () => {
+  const operations = memoryOperationStore();
+  let entered!: () => void;
+  let reject!: (error: Error) => void;
+  const claiming = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocked = new Promise<never>((_resolve, rejectClaim) => {
+    reject = rejectClaim;
+  });
+  const backend = {
+    ...memoryBackend(),
+    operations: {
+      ...operations,
+      claim: async () => {
+        entered();
+        return blocked;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "stop-operation-failure",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  await claiming;
+  const stopping = runtime.stop();
+  reject(new Error("claim died while stopping"));
+  await assert.rejects(stopping, /claim died while stopping/);
+  try {
+    assert.equal(client.account.get().closed, true);
+  } finally {
+    await client.close();
+  }
+});
+
 void test("stopping after durable start never invokes the stale Session", async () => {
   const operations = memoryOperationStore();
   let entered!: () => void;
@@ -577,6 +690,7 @@ void test("disconnecting during media preparation requeues before the send bound
   const backend = {
     ...memoryBackend(),
     media: {
+      ...stored,
       put: (input: Parameters<typeof stored.put>[0]) => stored.put(input),
       async read(input: Parameters<typeof stored.read>[0]) {
         reads += 1;

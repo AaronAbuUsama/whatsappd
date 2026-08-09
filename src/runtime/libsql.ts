@@ -142,6 +142,18 @@ const migrations = [
         ON wa_operations (account_id, submitted_at, operation_id);
     `,
   },
+  {
+    version: 3,
+    sql: `
+      ALTER TABLE wa_operations ADD COLUMN sequence INTEGER;
+      UPDATE wa_operations
+        SET sequence = rowid,
+            operation_json = json_set(operation_json, '$.sequence', rowid)
+        WHERE sequence IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS wa_operation_sequence
+        ON wa_operations (account_id, sequence);
+    `,
+  },
 ] as const;
 
 async function migrate(client: Client): Promise<void> {

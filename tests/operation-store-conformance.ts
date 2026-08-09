@@ -163,7 +163,87 @@ export function operationStoreConformance(name: string, create: () => Promise<St
           }),
         TypeError,
       );
+      await assert.rejects(
+        async () =>
+          fixture.store.submit({
+            accountId: "personal",
+            id: "secret",
+            idempotencyKey: "secret",
+            input: {
+              version: 1,
+              type: "send",
+              chatId: "store-test@s.whatsapp.net",
+              content: { text: "safe", secretBytes: Buffer.from("SECRET") },
+            } as unknown as WhatsAppOperationInput,
+          }),
+        TypeError,
+      );
+      await assert.rejects(
+        async () =>
+          fixture.store.submit({
+            accountId: "personal",
+            id: "malformed",
+            idempotencyKey: "malformed",
+            input: {
+              version: 1,
+              type: "phone_history",
+              anchor: null,
+              count: "many",
+            } as unknown as WhatsAppOperationInput,
+          }),
+        TypeError,
+      );
       assert.deepEqual(await fixture.store.list("personal"), []);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  void test(`[${name}] claim publication exposes only final committed receipts`, async () => {
+    const fixture = await create();
+    try {
+      const submitted = await fixture.store.submit({
+        accountId: "personal",
+        id: "recovered",
+        idempotencyKey: "recovered",
+        input: input("recover"),
+      });
+      await fixture.store.claim("personal", "expired", 0);
+      const seen: string[] = [];
+      let offLate = (): void => {};
+      const offEarly = fixture.store.subscribe("personal", (operation) => {
+        seen.push(`early:${operation.state.status}`);
+        offLate = fixture.store.subscribe("personal", (late) => {
+          seen.push(`late:${late.state.status}`);
+        });
+      });
+      await fixture.store.claim("personal", "replacement", 1_000);
+      offEarly();
+      offLate();
+      assert.deepEqual(seen, ["early:claimed"]);
+      assert.equal((await fixture.store.get("personal", submitted.id))?.state.status, "claimed");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  void test(`[${name}] sequence, not wall-clock/hash order, owns the queue`, async () => {
+    const fixture = await create();
+    try {
+      const first = await fixture.store.submit({
+        accountId: "personal",
+        id: "z-last-by-id",
+        idempotencyKey: "first",
+        input: input("first"),
+      });
+      const second = await fixture.store.submit({
+        accountId: "personal",
+        id: "a-first-by-id",
+        idempotencyKey: "second",
+        input: input("second"),
+      });
+      assert.equal(second.sequence, first.sequence + 1);
+      assert.equal((await fixture.store.claim("personal", "ordered", 1_000))?.id, first.id);
     } finally {
       await fixture.close();
     }

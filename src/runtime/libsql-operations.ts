@@ -4,11 +4,13 @@ import { transact } from "./libsql-transaction.ts";
 import {
   OperationIdempotencyConflictError,
   announceOperationChanges,
-  assertWhatsAppOperationInput,
   operationSubscription,
   operationInputJson,
+  validatedOperationInput,
+  validatedOperationResult,
+  validatedOperationState,
+  validatedOperationSubmission,
   type WhatsAppOperation,
-  type WhatsAppOperationInput,
   type WhatsAppOperationState,
   type WhatsAppOperationStore,
 } from "./operations.ts";
@@ -34,22 +36,32 @@ const integer = (value: unknown, label: string): number => {
 
 function parseOperation(value: unknown): WhatsAppOperation {
   const held = record(value, "record");
-  const input = record(held.input, "input");
-  assertWhatsAppOperationInput(input);
-  const state = record(held.state, "state");
-  if (
-    !["queued", "claimed", "executing", "succeeded", "failed", "outcome_unknown"].includes(
-      String(state.status),
-    )
-  )
-    throw new Error("invalid libSQL operation state");
+  const extra = Object.keys(held).find(
+    (key) =>
+      ![
+        "accountId",
+        "id",
+        "idempotencyKey",
+        "revision",
+        "sequence",
+        "input",
+        "state",
+        "submittedAt",
+        "updatedAt",
+        "acknowledgedAt",
+      ].includes(key),
+  );
+  if (extra) throw new Error(`invalid libSQL operation record member ${extra}`);
+  const input = validatedOperationInput(held.input);
+  const state = validatedOperationState(held.state, input);
   return {
     accountId: text(held.accountId, "accountId"),
     id: text(held.id, "id"),
     idempotencyKey: text(held.idempotencyKey, "idempotencyKey"),
     revision: integer(held.revision, "revision"),
-    input: input as unknown as WhatsAppOperationInput,
-    state: state as unknown as WhatsAppOperationState,
+    sequence: integer(held.sequence, "sequence"),
+    input,
+    state,
     submittedAt: integer(held.submittedAt, "submittedAt"),
     updatedAt: integer(held.updatedAt, "updatedAt"),
     ...(held.acknowledgedAt !== undefined && {
@@ -63,7 +75,8 @@ const fromRow = (row: Row): WhatsAppOperation => {
   if (
     operation.accountId !== row.account_id ||
     operation.id !== row.operation_id ||
-    operation.idempotencyKey !== row.idempotency_key
+    operation.idempotencyKey !== row.idempotency_key ||
+    operation.sequence !== row.sequence
   )
     throw new Error("invalid libSQL operation identity");
   return operation;
@@ -80,7 +93,7 @@ const read = async (
   operationId: string,
 ): Promise<WhatsAppOperation | undefined> => {
   const result = await transaction.execute({
-    sql: `SELECT account_id, operation_id, idempotency_key, operation_json
+    sql: `SELECT account_id, operation_id, idempotency_key, sequence, operation_json
       FROM wa_operations WHERE account_id = ? AND operation_id = ?`,
     args: [accountId, operationId],
   });
@@ -128,37 +141,46 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
 
   return {
     submit(request) {
-      assertWhatsAppOperationInput(request.input);
-      return mutate(request.accountId, async (transaction) => {
+      const submission = validatedOperationSubmission(request);
+      return mutate(submission.accountId, async (transaction) => {
         const existing = await transaction.execute({
-          sql: `SELECT account_id, operation_id, idempotency_key, operation_json
+          sql: `SELECT account_id, operation_id, idempotency_key, sequence, operation_json
             FROM wa_operations WHERE account_id = ? AND idempotency_key = ?`,
-          args: [request.accountId, request.idempotencyKey],
+          args: [submission.accountId, submission.idempotencyKey],
         });
         if (existing.rows[0]) {
           const operation = fromRow(existing.rows[0]);
-          if (operationInputJson(operation.input) !== operationInputJson(request.input))
-            throw new OperationIdempotencyConflictError(request.accountId, request.idempotencyKey);
+          if (operationInputJson(operation.input) !== operationInputJson(submission.input))
+            throw new OperationIdempotencyConflictError(
+              submission.accountId,
+              submission.idempotencyKey,
+            );
           return { result: operation, changed: [] };
         }
         const at = await now(transaction);
+        const sequenceResult = await transaction.execute({
+          sql: "SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM wa_operations WHERE account_id = ?",
+          args: [submission.accountId],
+        });
+        const sequence = integer(sequenceResult.rows[0]?.sequence, "next operation sequence");
         const operation: WhatsAppOperation = {
-          ...request,
+          ...submission,
           revision: 0,
-          input: structuredClone(request.input),
+          sequence,
           state: { status: "queued" },
           submittedAt: at,
           updatedAt: at,
         };
         await transaction.execute({
           sql: `INSERT INTO wa_operations
-            (account_id, operation_id, idempotency_key, submitted_at, operation_json)
-            VALUES (?, ?, ?, ?, ?)`,
+            (account_id, operation_id, idempotency_key, submitted_at, sequence, operation_json)
+            VALUES (?, ?, ?, ?, ?, ?)`,
           args: [
-            request.accountId,
-            request.id,
-            request.idempotencyKey,
+            submission.accountId,
+            submission.id,
+            submission.idempotencyKey,
             at,
+            sequence,
             JSON.stringify(operation),
           ],
         });
@@ -172,8 +194,8 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
     list(accountId) {
       return transact(client, "read", async (transaction) => {
         const result = await transaction.execute({
-          sql: `SELECT account_id, operation_id, idempotency_key, operation_json
-            FROM wa_operations WHERE account_id = ? ORDER BY submitted_at, operation_id`,
+          sql: `SELECT account_id, operation_id, idempotency_key, sequence, operation_json
+            FROM wa_operations WHERE account_id = ? ORDER BY sequence`,
           args: [accountId],
         });
         return result.rows.map(fromRow);
@@ -184,8 +206,8 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
       return mutate(accountId, async (transaction) => {
         const at = await now(transaction);
         const result = await transaction.execute({
-          sql: `SELECT account_id, operation_id, idempotency_key, operation_json
-            FROM wa_operations WHERE account_id = ? ORDER BY submitted_at, operation_id`,
+          sql: `SELECT account_id, operation_id, idempotency_key, sequence, operation_json
+            FROM wa_operations WHERE account_id = ? ORDER BY sequence`,
           args: [accountId],
         });
         const operations = result.rows.map(fromRow);
@@ -230,8 +252,8 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
       return transact(client, "read", async (transaction) => {
         const at = await now(transaction);
         const result = await transaction.execute({
-          sql: `SELECT account_id, operation_id, idempotency_key, operation_json
-            FROM wa_operations WHERE account_id = ? ORDER BY submitted_at, operation_id`,
+          sql: `SELECT account_id, operation_id, idempotency_key, sequence, operation_json
+            FROM wa_operations WHERE account_id = ? ORDER BY sequence`,
           args: [accountId],
         });
         const expiries = result.rows.flatMap((row) => {
@@ -269,7 +291,11 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
         current.state.status === "executing" && current.state.attemptId === attemptId
           ? {
               ...current,
-              state: { status: "succeeded", result, completedAt: at },
+              state: {
+                status: "succeeded",
+                result: validatedOperationResult(current.input, result),
+                completedAt: at,
+              },
               updatedAt: at,
             }
           : undefined,

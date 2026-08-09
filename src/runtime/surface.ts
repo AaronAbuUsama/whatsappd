@@ -23,3 +23,21 @@ export function fanout<Listener>(
     }
   }
 }
+
+/** Deliver a committed batch against one registration snapshot. */
+export function fanoutBatch<Listener, Value>(
+  listeners: ReadonlySet<Listener>,
+  values: Iterable<Value>,
+  call: (listener: Listener, value: Value) => void,
+): void {
+  const receiving = Array.from(listeners);
+  for (const value of values)
+    for (const listener of receiving) {
+      if (!listeners.has(listener)) continue;
+      try {
+        call(listener, value);
+      } catch (error) {
+        surface(error);
+      }
+    }
+}

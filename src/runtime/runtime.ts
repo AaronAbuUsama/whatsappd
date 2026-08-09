@@ -611,7 +611,9 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       try {
         await release();
       } finally {
-        await operationsStopped;
+        const operationsOutcome = await settle(operationsStopped);
+        const operationsFailure = firstRejection([operationsOutcome]);
+        if (operationsFailure) failure ??= { error: operationsFailure.reason };
         // A watcher's stream is the only place a runtime that died on its own
         // can be seen; without this frame it simply goes quiet, for ever. Even a
         // release that failed halfway is published — leaving watchers suspended

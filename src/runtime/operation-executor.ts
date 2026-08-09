@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { WhatsAppSession } from "../session.ts";
 import type { WhatsAppBackend } from "./contracts.ts";
 import {
-  assertWhatsAppOperationInput,
   serializedOperationError,
+  validatedOperationInput,
+  validatedOperationResult,
   type DurableOutbound,
   type WhatsAppOperation,
   type WhatsAppOperationResult,
@@ -87,8 +88,7 @@ export function createOperationExecutor(config: {
 
     let invoke: () => Promise<WhatsAppOperationResult>;
     try {
-      const input = operation.input;
-      assertWhatsAppOperationInput(input);
+      const input = validatedOperationInput(operation.input);
       switch (input.type) {
         case "send": {
           const send = session.send?.bind(session);
@@ -145,12 +145,11 @@ export function createOperationExecutor(config: {
       return;
     }
     try {
-      await config.backend.operations.succeed(
-        config.accountId,
-        operation.id,
-        attemptId,
+      const result = validatedOperationResult(
+        validatedOperationInput(operation.input),
         await invoke(),
       );
+      await config.backend.operations.succeed(config.accountId, operation.id, attemptId, result);
     } catch (error) {
       const safe = serializedOperationError(error);
       await config.backend.operations.unknown(

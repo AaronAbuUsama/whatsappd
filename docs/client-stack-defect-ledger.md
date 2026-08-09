@@ -665,3 +665,35 @@ idempotent operation submission finishes. Abort still stops byte acquisition
 and pre-put staging. Finally, packed proof now uses three distinct processes:
 one submits offline, one resumes and executes exactly once, and one reconstructs
 the terminal receipt and Client state again.
+
+### Round 3 — `2926747`
+
+The prior classes were closed and the replacement proof held, but this round
+froze implementation for a deeper boundary reset. One atomic claim published an
+expired row's intermediate `queued` value and took a fresh membership snapshot
+for its later `claimed` value. Store publication now deduplicates each operation
+to its final committed receipt and fans the whole transaction through one
+registration snapshot.
+
+Queue order had also been inferred from millisecond time and an operation hash,
+so two causally ordered submissions in one clock tick could execute backwards.
+Operations now carry an account-scoped monotonic sequence allocated inside the
+same memory/SQL write and claims order only by it. libSQL migration 3 backfills
+existing rows and establishes the unique account/sequence index.
+
+Two safety boundaries were too shallow. Durable input validation had checked
+only `version` and `type`; it now projects every allowed member of every input,
+outbound, option and message-ref shape, rejects unknown members/non-JSON values,
+and validates decoded state. Session results are likewise projected to exactly
+`MessageRef`, `{ requestId }`, or `null`; a malformed post-boundary value becomes
+`outcome_unknown` rather than persisting an Error, stack or adapter-dependent
+JSON. Both stores enforce the result rule as well as the executor.
+
+Media cleanup was solved without inventing a seventh operation state. Temporary
+Media Store puts now own staging leases. Successful operation submission retains
+the object; failed submission discards that lease, deleting bytes only when no
+other lease or durable retention exists. The filesystem markers make this safe
+across independent store instances and preserve the existing process-crash
+orphan disposition for #72. Finally, Runtime shutdown settles a failing executor
+into its terminal failure and publishes `closed` before reporting it, so one
+late store rejection cannot leave every Client watcher open forever.

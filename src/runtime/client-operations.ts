@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { BinaryInput, MessageRef, SendOptions } from "../model/outbound.ts";
 import type { Unsubscribe } from "../subscription.ts";
 import type { MediaStore } from "./contracts.ts";
+import { surface } from "./surface.ts";
 import {
   operationIdFor,
   type DurableOutbound,
@@ -271,7 +272,7 @@ export function createClientOperationApis(config: {
     identity: ReturnType<typeof identityFor>,
     signal?: AbortSignal,
     mimetype?: string,
-  ): Promise<{ readonly ref: string }> => {
+  ): Promise<{ readonly ref: string; readonly leaseId: string }> => {
     const bytes = await bytesOf(input, signal);
     throwIfAborted(signal);
     const stored = await config.media.put({
@@ -280,10 +281,24 @@ export function createClientOperationApis(config: {
       kind,
       bytes,
       ...(mimetype !== undefined && { mimetype }),
+      temporary: true,
     });
-    // MediaStore has no delete seam: once put commits, the matching idempotent
-    // operation must be published even if the caller aborts in this window.
-    return { ref: stored.ref };
+    if (!stored.leaseId) throw new Error("MediaStore did not return a staging lease");
+    return { ref: stored.ref, leaseId: stored.leaseId };
+  };
+
+  const publishStaged = async (
+    staged: { readonly ref: string; readonly leaseId: string },
+    pending: Promise<WhatsAppOperation<MessageRef>>,
+  ): Promise<WhatsAppOperation<MessageRef>> => {
+    try {
+      const operation = await pending;
+      await config.media.retain({ accountId: config.accountId, ...staged }).catch(surface);
+      return operation;
+    } catch (error) {
+      await config.media.discard({ accountId: config.accountId, ...staged }).catch(surface);
+      throw error;
+    }
   };
 
   const send = (
@@ -313,65 +328,83 @@ export function createClientOperationApis(config: {
       async image(chatId, input, options) {
         const identity = identityFor(options);
         const image = await stage("image", input, identity, options?.signal);
-        return send(
-          chatId,
-          { image, ...(options?.caption !== undefined && { caption: options.caption }) },
-          options,
-          identity,
-          true,
+        return publishStaged(
+          image,
+          send(
+            chatId,
+            {
+              image: { ref: image.ref },
+              ...(options?.caption !== undefined && { caption: options.caption }),
+            },
+            options,
+            identity,
+            true,
+          ),
         );
       },
       async video(chatId, input, options) {
         const identity = identityFor(options);
         const video = await stage("video", input, identity, options?.signal);
-        return send(
-          chatId,
-          {
-            video,
-            ...(options?.caption !== undefined && { caption: options.caption }),
-            ...(options?.gifPlayback !== undefined && { gifPlayback: options.gifPlayback }),
-          },
-          options,
-          identity,
-          true,
+        return publishStaged(
+          video,
+          send(
+            chatId,
+            {
+              video: { ref: video.ref },
+              ...(options?.caption !== undefined && { caption: options.caption }),
+              ...(options?.gifPlayback !== undefined && { gifPlayback: options.gifPlayback }),
+            },
+            options,
+            identity,
+            true,
+          ),
         );
       },
       async audio(chatId, input, options) {
         const identity = identityFor(options);
         const audio = await stage("audio", input, identity, options?.signal, options?.mimetype);
-        return send(
-          chatId,
-          {
-            audio,
-            ...(options?.ptt !== undefined && { ptt: options.ptt }),
-            ...(options?.seconds !== undefined && { seconds: options.seconds }),
-            ...(options?.mimetype !== undefined && { mimetype: options.mimetype }),
-          },
-          options,
-          identity,
-          true,
+        return publishStaged(
+          audio,
+          send(
+            chatId,
+            {
+              audio: { ref: audio.ref },
+              ...(options?.ptt !== undefined && { ptt: options.ptt }),
+              ...(options?.seconds !== undefined && { seconds: options.seconds }),
+              ...(options?.mimetype !== undefined && { mimetype: options.mimetype }),
+            },
+            options,
+            identity,
+            true,
+          ),
         );
       },
       async document(chatId, input, options) {
         const identity = identityFor(options);
         const document = await stage("document", input, identity, options.signal, options.mimetype);
-        return send(
-          chatId,
-          {
-            document,
-            fileName: options.fileName,
-            mimetype: options.mimetype,
-            ...(options.caption !== undefined && { caption: options.caption }),
-          },
-          options,
-          identity,
-          true,
+        return publishStaged(
+          document,
+          send(
+            chatId,
+            {
+              document: { ref: document.ref },
+              fileName: options.fileName,
+              mimetype: options.mimetype,
+              ...(options.caption !== undefined && { caption: options.caption }),
+            },
+            options,
+            identity,
+            true,
+          ),
         );
       },
       async sticker(chatId, input, options) {
         const identity = identityFor(options);
         const sticker = await stage("sticker", input, identity, options?.signal);
-        return send(chatId, { sticker }, options, identity, true);
+        return publishStaged(
+          sticker,
+          send(chatId, { sticker: { ref: sticker.ref } }, options, identity, true),
+        );
       },
       location: (chatId, location, options) =>
         send(chatId, { location: structuredClone(location) }, options),

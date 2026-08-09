@@ -1562,6 +1562,7 @@ test("typed download and store failures reach the Client while later messages co
   const backend: WhatsAppBackend = {
     ...memoryBackend(),
     media: {
+      ...stored,
       async put(input) {
         if (input.owner.type === "message" && input.owner.message.id === "store-failed")
           throw new Error("disk unavailable");
@@ -1661,6 +1662,7 @@ test("failed structured acceptance publishes nothing and leaves the canonical me
   const backend: WhatsAppBackend = {
     ...memoryBackend(),
     media: {
+      ...media,
       async put(input) {
         const result = await media.put(input);
         storedRef = result.ref;
