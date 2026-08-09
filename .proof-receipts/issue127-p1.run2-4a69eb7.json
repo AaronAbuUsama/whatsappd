@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "issue": 127,
+  "scope": "Allowlist guard refusal verification with a recorded Session",
+  "tier": "P1",
+  "provenance": {
+    "captureSite": "client-proof-guard-run-start",
+    "gitHead": "4a69eb740069ff46963855ac85bed0133e597913",
+    "sourceTreeHash": "ba87a8792eacf1c00d8b089eb82dbcd2a8fe8fc7",
+    "treeClean": true,
+    "startedAt": "2026-08-09T13:09:58.096Z",
+    "finalizedAt": "2026-08-09T13:09:58.098Z",
+    "command": "pnpm proof:client:guard"
+  },
+  "matrix": [
+    {
+      "id": "allowlist-unlisted-target-refused",
+      "verdict": "observed",
+      "captureSite": "recorded-session-command-log",
+      "evidence": {
+        "targetSha256": "cc5fb3e2f0d4cc448193d103e5943fb67bdbe60df93132eb537141841a7c8d04",
+        "targetLength": 30,
+        "refusalReason": "target_not_allowlisted",
+        "sessionSendInvocations": 0
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "shared-history-proof-receipt-writer",
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "knownValueControlCount": 3,
+    "nonEmpty": true
+  }
+}

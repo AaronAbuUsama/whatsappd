@@ -6,7 +6,8 @@
     "tests/*.test.ts",
     "tests/e2e.ts",
     "tests/store-proof.ts",
-    "tests/history-proof.ts"
+    "tests/history-proof.ts",
+    "tests/send-guard-proof.ts"
   ],
   "project": ["src/**/*.ts", "examples/**/*.ts", "tests/**/*.ts"],
 

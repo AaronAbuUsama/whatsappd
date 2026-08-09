@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "issue": 127,
+  "scope": "Live Runtime and friendly Client read-path verification",
+  "tier": "P4",
+  "provenance": {
+    "captureSite": "client-proof-run-start",
+    "gitHead": "e784caa90e54b8253b6bc145696eaa25639a418f",
+    "sourceTreeHash": "d17bc271651f6398b3ed9bc55c1b34a1b1b3cb0a",
+    "treeClean": true,
+    "startedAt": "2026-08-09T13:16:04.701Z",
+    "finalizedAt": "2026-08-09T13:16:34.796Z",
+    "command": "pnpm proof:client < /dev/null"
+  },
+  "matrix": [
+    {
+      "id": "public-seams-compose",
+      "verdict": "observed",
+      "captureSite": "subject-run-composition",
+      "evidence": {
+        "composition": [
+          "fileMediaStore",
+          "libsqlBackend",
+          "createWhatsAppRuntime",
+          "createWhatsAppClient"
+        ],
+        "subjectImports": ["package-root", "runtime-client-public-factory"]
+      }
+    },
+    {
+      "id": "resume-unattended",
+      "verdict": "observed",
+      "captureSite": "subject-runtime-events",
+      "evidence": {
+        "interactive": false,
+        "linkMode": "resumed",
+        "challengeEventCount": 0,
+        "qrDisplayed": false,
+        "stdoutContainedChallenge": false
+      }
+    },
+    {
+      "id": "peer-process",
+      "verdict": "observed",
+      "captureSite": "peer-child-result",
+      "evidence": {
+        "subjectPid": 19041,
+        "peerPid": 19201,
+        "documentPeerPid": 20275,
+        "replacementPid": 21971,
+        "subjectAddressHash": "5d0ac1cf81027f2fba34c14598c59da3dfbf6e09852178a247effa55035dc73a",
+        "peerAddressHash": "0e2d7a3c968b90f7bb65db5a361b8617ec2247f287349aca18f41f1e28fb63b6",
+        "mode": "second-account-own-process",
+        "linkMode": "resumed",
+        "challengeEventCount": 0,
+        "qrDisplayed": false
+      }
+    },
+    {
+      "id": "inbound-text",
+      "verdict": "observed",
+      "captureSite": "client-live-upsert",
+      "evidence": {
+        "observedVia": "live-upsert",
+        "nonceSha256": "56674000ff080016610920f6d957a678691aeb548fef952911e24cc70ec922da",
+        "nonceLength": 32,
+        "chatsList": true,
+        "messagesGet": true
+      }
+    },
+    {
+      "id": "inbound-document",
+      "verdict": "observed",
+      "captureSite": "client-message-record",
+      "evidence": {
+        "kind": "document",
+        "mediaState": "stored",
+        "byteLength": 256,
+        "byteLengthMatches": true
+      }
+    },
+    {
+      "id": "attachment-bytes",
+      "verdict": "observed",
+      "captureSite": "client-media-read",
+      "evidence": {
+        "sentSha256": "1054b401dc64bd129d06a25519afaf06dfa92c6cfbc88ee49eeb9656127ffbb5",
+        "storedSha256": "1054b401dc64bd129d06a25519afaf06dfa92c6cfbc88ee49eeb9656127ffbb5",
+        "equal": true
+      }
+    },
+    {
+      "id": "stored-paging",
+      "verdict": "observed",
+      "captureSite": "client-stored-pages",
+      "evidence": {
+        "pageCount": 2,
+        "terminalOlder": "exhausted",
+        "retainedCount": 47
+      }
+    },
+    {
+      "id": "page-boundary",
+      "verdict": "observed",
+      "captureSite": "client-pages-then-store-oracle",
+      "evidence": {
+        "repeatedAcrossBoundary": 0,
+        "skippedAcrossBoundary": 0,
+        "orderedIdDigest": "850e029ddff400364d3908828c8bd52ec7fea4b1b8007a143da36640f3a78d99",
+        "oracleOrderedIdDigest": "850e029ddff400364d3908828c8bd52ec7fea4b1b8007a143da36640f3a78d99"
+      }
+    },
+    {
+      "id": "cold-process",
+      "verdict": "observed",
+      "captureSite": "replacement-child-result",
+      "evidence": {
+        "subjectPid": 19041,
+        "replacementPid": 21971,
+        "distinctPid": true,
+        "durableDigestEqual": true,
+        "durableDigest": {
+          "chats": "987fb4d9f5f8e4a36f789e1f590382ab088818662e11fe750ec3c23516e3572e",
+          "contacts": "c7909930ecad6ad5598f2c204cca4fe65592bf8b14abc7b281675aa72c41f784",
+          "groups": "15304595346a42fbd346391ac004089185b686a8dac4de55c9a91a656812d4c3",
+          "orderedIds": "850e029ddff400364d3908828c8bd52ec7fea4b1b8007a143da36640f3a78d99",
+          "media": "ab6eb4c103f89268ca9aaa7e6f867e92d33872931d4ea2cdf7a3ec00f4c865d7"
+        }
+      }
+    },
+    {
+      "id": "cold-no-live-state",
+      "verdict": "observed",
+      "captureSite": "replacement-client-factory",
+      "evidence": {
+        "connectionPresent": false,
+        "addressPresent": false,
+        "presenceAddressCount": 133,
+        "presenceObservationsRestored": 0,
+        "lastConnectedAtPresent": true,
+        "lastDisconnectedAtPresent": true
+      }
+    }
+  ],
+  "sanitization": {
+    "captureSite": "shared-history-proof-receipt-writer",
+    "patternHits": 0,
+    "knownValueHits": 0,
+    "knownValueControlCount": 3,
+    "nonEmpty": true
+  }
+}
