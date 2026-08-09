@@ -6,17 +6,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "./_expect.ts";
 import {
-  createInProcessWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   memoryMediaStore,
   AccountAlreadyClaimedError,
   StaleAccountClaimError,
-  type WhatsAppClient,
-  type WhatsAppSnapshot,
 } from "../src/index.ts";
 import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
+import type { RuntimeMirrorReader, WhatsAppSnapshot } from "../src/runtime/contracts.ts";
+import { createRuntimeMirrorReader } from "../src/runtime/runtime.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
 
@@ -46,7 +45,7 @@ dataStoreConformance("libSQL data", async () => {
   };
 });
 
-async function firstSnapshot(client: WhatsAppClient): Promise<WhatsAppSnapshot> {
+async function firstSnapshot(client: RuntimeMirrorReader): Promise<WhatsAppSnapshot> {
   const controller = new AbortController();
   const frames = client.watch({ signal: controller.signal })[Symbol.asyncIterator]();
   const first = await frames.next();
@@ -251,7 +250,7 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
       backend: replacementBackend,
       openSession: () => replacementSession.session,
     });
-    const replacementClient = createInProcessWhatsAppClient(replacementRuntime);
+    const replacementClient = createRuntimeMirrorReader(replacementRuntime);
 
     await replacementRuntime.start();
     expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);
@@ -381,7 +380,7 @@ test("new libSQL, file media, Runtime, and Client instances reconstruct image an
       backend: replacementBackend,
       openSession: () => replacementSession.session,
     });
-    const replacementClient = createInProcessWhatsAppClient(replacementRuntime);
+    const replacementClient = createRuntimeMirrorReader(replacementRuntime);
     await replacementRuntime.start();
 
     expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);

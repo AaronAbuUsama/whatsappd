@@ -356,7 +356,7 @@ export interface ClientAccountState {
    * an application that simply recreates is correct either way without having
    * to branch. `error` says why, and is absent when the stop was deliberate.
    *
-   * Calling {@link WhatsAppClientCore.close} does *not* set this: the
+   * Calling {@link WhatsAppClient.close} does *not* set this: the
    * application asked for that and does not need to be told.
    */
   readonly closed: boolean;
@@ -404,7 +404,7 @@ export interface ClientNamespace {
 }
 
 /** One account's synchronized application state. */
-export interface WhatsAppClientCore {
+export interface WhatsAppClient {
   readonly account: ClientNamespace & {
     get(): ClientAccountState;
   };
@@ -474,7 +474,7 @@ export interface WhatsAppClientCore {
      * a render or an effect, or track `error` and back off.
      *
      * A no-op once this Client has stopped following, which covers both
-     * {@link WhatsAppClientCore.close} and a durable-follow failure. That is
+     * {@link WhatsAppClient.close} and a durable-follow failure. That is
      * **not** the same condition as `account.get().closed`: a deliberate
      * Runtime `closed` frame leaves this Client following, so paging still
      * works against storage after Runtime closure — correct under ADR-0010,
@@ -512,7 +512,7 @@ export interface WhatsAppClientCore {
  * const off = client.chats.subscribe(() => render(client.chats.list()));
  * ```
  */
-export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<WhatsAppClientCore> {
+export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<WhatsAppClient> {
   const registered = clientSourceFor.get(runtime);
   if (!registered)
     throw new TypeError(
@@ -1071,7 +1071,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       return off;
     };
 
-  const client: WhatsAppClientCore = {
+  const client: WhatsAppClient = {
     account: {
       subscribe: subscribeTo("account"),
       get() {

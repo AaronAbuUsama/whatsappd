@@ -1,10 +1,10 @@
 # whatsappd
 
 The [SDK capability catalogue](docs/sdk-capabilities.md) lists what Baileys
-offers, what whatsappd exposes today, and the planned friendly Client API. It is
-a human-maintained planning guide, not a product authority or merge gate.
-Verification status is deliberately plain: automated tests exist, while live
-WhatsApp, browser React, and OpenTUI runs have not been performed.
+offers, what whatsappd exposes today, and what remains planned. It is a
+human-maintained guide, not a product authority or merge gate. Automated tests
+and the linked-account Client proof have been run; browser React and OpenTUI
+have not.
 
 A typed WhatsApp session engine for Node.js. It normalizes Baileys events,
 awaits application handlers in source order, and keeps credentials behind an
@@ -73,87 +73,82 @@ per-key files are migrated on first read. A later `clear()` removes every
 recognized old Baileys credential file—even one never read—from a replacement
 process while preserving other caller-owned entries.
 
-## Runtime, backend, and client
+## Quick start: local durable Client
 
-The runtime owns one account: it claims the account lease before WhatsApp is
-opened, durably accepts each WhatsApp change, and publishes what changed to
-clients only after that acceptance commits.
-
-```ts
-import {
-  createInProcessWhatsAppClient,
-  createSession,
-  createWhatsAppRuntime,
-  memoryBackend,
-  qrAuth,
-} from "whatsappd";
-
-const runtime = createWhatsAppRuntime({
-  accountId: "personal",
-  backend: memoryBackend(),
-  openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
-});
-
-// Returns once the account is being consumed; the session keeps running.
-await runtime.start();
-
-const client = createInProcessWhatsAppClient(runtime);
-
-for await (const frame of client.watch()) {
-  // The snapshot is account state, chat summaries, contacts, and groups - never
-  // a message window per chat.
-  if (frame.type === "snapshot") console.log(frame.snapshot.revision, frame.snapshot.chats);
-  if (frame.type === "patch") console.log(frame.patch.revision, frame.patch.upserts);
-}
-
-// One chat's stored messages, newest first, then scroll back through
-// `nextBefore`. This reads the backend only - it never asks WhatsApp for
-// anything.
-const page = await client.messages("15551234567@s.whatsapp.net", { limit: 25 });
-const older = page.nextBefore
-  ? await client.messages("15551234567@s.whatsapp.net", { before: page.nextBefore })
-  : undefined;
-
-// Releases the account lease, and reports a session that died on its own.
-await runtime.stop();
-```
-
-For a Current Mirror, credentials, and Account Leases that survive process
-replacement, install the optional libSQL client and inject the independent
-media capability explicitly:
+Install the optional libSQL peer with whatsappd. libSQL holds credentials,
+accepted source, and current structured state; the file media store holds
+attachment bytes.
 
 ```bash
 pnpm add whatsappd @libsql/client
 ```
 
 ```ts
+import { mkdir } from "node:fs/promises";
 import {
   createSession,
+  createWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   qrAuth,
 } from "whatsappd";
 
+const accountId = "main";
+await mkdir("./data", { recursive: true });
+const media = fileMediaStore({ directory: "./data/whatsapp-media" });
 const backend = libsqlBackend({
-  url: "file:./whatsapp.db",
-  accountId: "personal",
-  media: fileMediaStore({ directory: "./whatsapp-media" }),
+  url: "file:./data/whatsapp.db",
+  accountId,
+  media,
 });
 
 const runtime = createWhatsAppRuntime({
-  accountId: "personal",
+  accountId,
   backend,
   openSession: (credentials) => createSession({ store: credentials, auth: qrAuth() }),
 });
+
 await runtime.start();
+const client = await createWhatsAppClient(runtime);
 
-// A replacement backend opened on the same URL reconstructs the accepted
-// source, mirror, stored pages, and attachment bytes.
+console.log(client.account.get());
+console.log(client.chats.list());
+console.log(client.contacts.list());
+console.log(client.groups.list());
 
-await runtime.stop(); // releases the account; does not close a shared backend
-await backend.close(); // the application owns the libSQL client's lifetime
+const chat = client.chats.list()[0];
+let unsubscribe = () => {};
+if (chat) {
+  const render = () => console.log(client.messages.get(chat.chatId));
+  unsubscribe = client.messages.subscribe(render);
+  render();
+  client.messages.older(chat.chatId); // newest saved page; call again to go further back
+}
+
+// Keep the local worker alive until Ctrl-C, then close what the application owns.
+await new Promise<void>((resolve) => process.once("SIGINT", resolve));
+
+unsubscribe();
+await client.close();
+await runtime.stop();
+await backend.close();
 ```
+
+`createWhatsAppClient()` is awaited: resolving means the durable account,
+chats, contacts, and groups are already hydrated. Backend, Runtime, and Client
+have independent lifetimes. `client.close()` does not stop the Runtime, and
+`runtime.stop()` does not close the Backend; close them in Client → Runtime →
+Backend order as above.
+
+`client.messages.older(chatId)` reads one page already saved in the local
+mirror. It never contacts WhatsApp. `"exhausted"` therefore means “nothing older
+is saved locally,” not “the phone has no older history.” Asking the linked phone
+for history is a separate operation and is not hidden behind paging.
+
+The friendly Client does not yet expose pairing/unlink, sends and commands,
+React/OpenTUI bindings, or automatic history retrieval. Those land in later
+0.3/0.4 work; the lower-level Session remains available in the meantime.
 
 A local `file:` database is opened in WAL, so `whatsapp.db-wal` and
 `whatsapp.db-shm` sit beside it — move, copy, or delete the three together. WAL
@@ -170,20 +165,7 @@ media reference and its `stored` or typed `failed` state. Read bytes explicitly
 with `backend.media.read({ accountId, ref })`. The package does not invent a
 filesystem URL or browser delivery policy.
 
-A watch begins with the current snapshot and its revision, then delivers each
-change as a patch whose `fromRevision` is the revision it applies to; a gap
-replaces state with a fresh snapshot rather than applying over it. Replaying a
-message the mirror already holds produces no patch.
-
-`messages()` and `watch()` are independent data surfaces; the client does not
-maintain an application collection or deduplicate them for you. A consumer
-merges message records on `(chatId, messageId)`. A backdated message can arrive
-as a patch _and_ appear in the older page that now contains it, and that
-identity-based upsert leaves one message. The cursor itself prevents skips or
-duplicates _between stored pages_. An exhausted cursor means nothing older is
-**stored** — never that WhatsApp has no more.
-
-The friendly Client does that merge for you, per chat, and what it retains grows
+The Client merges saved pages and live changes for you, per chat, and what it retains grows
 with what the application **read**: reading a chat creates its entry, and from
 that moment that chat accumulates its live traffic whether or not anything pages
 it again. A chat never read retains nothing, and a live message for it is
