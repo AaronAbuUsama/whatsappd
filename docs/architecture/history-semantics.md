@@ -1,14 +1,11 @@
 # WhatsApp history semantics — what a linked device can honestly promise
 
-Status: proven on the live proof account, issue #18. Protocol-level facts are
-cited against Baileys 7.0.0-rc14 sources. This file is the single prose home
-for the live observations; every quantitative claim below names its backing
-receipt — `proofs/receipts/issue18-p4.run1-b06fa2f.json` (the 5-request
-matrix) or `proofs/receipts/issue18-p4.run2-ea53648.json` (the post-review
-confirmation run) — with one explicitly scoped exception: the issue #9
-initial-sync measurement, which predates the receipt discipline and is
-labeled indicative where it appears. Receipts are per-run and append-only; a receipt is
-evidence only for the git head it names (ADR-0017).
+Status: proven on the live account in issue #18 and reviewed in PR #51.
+Protocol-level facts are cited against Baileys 7.0.0-rc14 sources. This file is
+the single prose home for the live observations. Historical run artifacts
+remain available in issue/PR discussion and git history; they are not current
+source artifacts. The issue #9 initial-sync measurement predates the receipt
+discipline and is labelled indicative where it appears.
 
 ## What initial sync delivers (the linked-device cap)
 
@@ -140,26 +137,17 @@ request type, and a request-metadata diff against an official client.
 | Repeated requests                 | Re-submission is accepted and re-delivered (fresh receipt each time); no response to any                                                                                                                                                                                                                                                                                          |
 | Phone offline                     | Directly observed (airplane mode + Wi-Fi off): submission resolves identically to the online case with no delivery ack; the queued request's `peer_msg` ack arrived 4m16s later when the phone reconnected (22:06:57 → 22:11:13Z). The submission receipt therefore proves nothing about the phone; only the delivery ack does — and even confirmed delivery produced no response |
 
-Sanitized observations (opaque identity aliases, counts, digests) are
-committed as the per-run receipts named above; the raw observation stores
-stay private. The database-oracle cross-check (store SHA-256, counts,
-ordered-id digest, per-request correlation counts) is embedded in each P4
-receipt as supporting evidence per ADR-0017; the close/reopen integrity
-check (`snapshotRestarted`) exists in run 2 only — run 1 predates the writer
-that performs it. **No P2 rung is claimed**: the observation store is a
-disposable capture tool, and product durability has no store to prove until
+Sanitized observations (opaque identity aliases, counts, and digests) were
+reviewed with issue #18 and PR #51; raw observation stores remain private. The
+database-oracle cross-check covered the store digest, counts, ordered ids, and
+per-request correlation. **No P2 rung is claimed**: the observation store was a
+disposable capture tool, and product durability had no store to prove until
 issue #20 (see PR #51, "P2 disposition").
 
 Scenario provenance: the phone-offline row, count variation (50/25/10), and
 the DM/self-chat spread are run 1 (`run1-b06fa2f`); the embedded per-request
 delivery acks and the repeated-request-on-one-anchor row are run 2
 (`run2-ea53648`). Run 1 predates the ack-embedding receipt writer, so its
-delivery evidence is the operator-note timeline in the receipt plus the
-transport-log excerpt on PR #51. Both committed receipts match their
-historical originals (`git show f9a77cc:proofs/receipts/issue18-p4.json` for
-run 1) except for two sanitization transforms, declared in each file:
-operator notes passed through redaction, and chat/message identity hashes
-were replaced with opaque per-receipt aliases (the originals were unsalted
-hash prefixes, dictionary-confirmable against candidate phone numbers; the
-alias mapping is destroyed). Current and future runs salt identities per run
-at capture time.
+delivery evidence is the operator-note timeline in the historical receipt plus
+the transport-log excerpt on PR #51. Historical receipts remain in git history;
+current and future runs salt identities per run at capture time.

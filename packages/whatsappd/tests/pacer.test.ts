@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { createPacer } from "../src/pacer.ts";
 
 test("runs tasks in FIFO order even when queued concurrently", async () => {

@@ -8,7 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { mock } from "node:test";
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import type {
   AccountLeaseStore,
   ChatRecord,

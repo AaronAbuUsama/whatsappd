@@ -38,8 +38,8 @@ sqlite3 whatsapp.db \
 
 - **A previous deploy is still draining.** Two revisions overlap during a
   rolling restart. Expected; it resolves when the old pod exits.
-- **A local process is still attached.** Someone's `pnpm proof` or a debug
-  worker is holding the account against the same database.
+- **A local process is still attached.** A temporary live-account check or a
+  debug worker is holding the account against the same database.
 - **Two workers were configured for one account.** This is the misconfiguration
   the lease exists to catch. Fix the deployment, do not work around the lease.
 

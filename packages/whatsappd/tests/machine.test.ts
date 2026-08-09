@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import {
   backoffDelay,
   initialState,

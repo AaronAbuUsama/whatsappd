@@ -4,7 +4,7 @@
  * backend contracts. No harness, no fixtures, no sleeps.
  */
 import assert from "node:assert/strict";
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import {
   StaleAccountClaimError,
   type AccountLeaseStore,

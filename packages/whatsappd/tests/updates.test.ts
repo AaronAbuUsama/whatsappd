@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { proto } from "baileys";
 import { mapMessageUpdate, mapReaction, mapReceiptUpdate } from "../src/baileys/updates.ts";
 import { SELF } from "./fixtures.ts";

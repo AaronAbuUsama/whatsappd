@@ -152,7 +152,7 @@ function current<T>(observation: Observation<T> | undefined, from: Derivation): 
  *
  * @remarks
  * Declared here beside {@link ClientAccountState} rather than in
- * `contracts.ts`: `smoke/packed-consumer/index.ts` asserts the Client's types are
+ * `contracts.ts`: `packages/whatsappd/smoke/packed-consumer.ts` asserts the Client's types are
  * absent from the packed declarations, and `contracts.ts` is reachable from the
  * root entry while this module is not.
  */

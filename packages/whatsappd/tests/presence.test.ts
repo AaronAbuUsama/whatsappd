@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { mapPresenceUpdate } from "../src/baileys/presence.ts";
 
 test("maps Baileys presence updates into pure presence signals", () => {

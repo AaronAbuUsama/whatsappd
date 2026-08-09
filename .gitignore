@@ -8,7 +8,6 @@ dist
 .idea/
 .wa-auth/
 .proof-private/
-proofs/private/
 docs/.scratch/
 .artifacts/
 .pnpm-store/

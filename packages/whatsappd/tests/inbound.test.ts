@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { toInbound } from "../src/baileys/inbound.ts";
 import { baseMessage, realMessage, SELF } from "./fixtures.ts";
 

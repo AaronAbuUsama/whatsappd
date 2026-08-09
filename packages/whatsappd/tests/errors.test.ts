@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { DisconnectReason } from "baileys";
 import { assertE164, classifyDisconnect, isRetryable, PairingError } from "../src/index.ts";
 

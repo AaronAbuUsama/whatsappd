@@ -1,5 +1,5 @@
 import { proto, type BaileysEventMap } from "baileys";
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { toConversationSyncBatch } from "../src/baileys/history.ts";
 import { baseMessage, SELF } from "./fixtures.ts";
 

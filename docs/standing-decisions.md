@@ -11,7 +11,7 @@ what merged, and which PRs are open are derived from GitHub:
 pnpm state
 ```
 
-`tooling/checks/execution-state.ts` derives this from the `## Blocked by` edges
+`.github/scripts/execution-state.ts` derives this from the `## Blocked by` edges
 the issues already declare; no document duplicates that changing state.
 
 ## Where things live
@@ -104,49 +104,19 @@ Until the first prototype proves otherwise, UI language may say "no older saved
 messages" and "request sent"; it may not say "all history loaded", "no more
 WhatsApp messages", or report a delivered count tied to the request.
 
-## A linked test account is a one-time human cost
+## Linked test accounts live outside the repository
 
-Pairing a real WhatsApp device is the only step in the proof ladder a human has
-to perform, and it must be performed once rather than once per run.
+Two resumable profiles exist on this machine: an iPhone-backed peer and an
+Android-backed subject. Their credentials, databases, media, and send allowlist
+live under `~/Library/Application Support/whatsappd/proofs/`; none are repository
+artifacts. One profile belongs to one account and one process (ADR-0009), and is
+never deleted merely to rerun a check.
 
-`libsqlBackend()` persists credentials, and `createWhatsAppRuntime` hands that
-store straight to the session (`packages/whatsappd/src/runtime/runtime.ts:714`), so a Runtime whose
-database file survives the process resumes its link with no human present. The
-same is already true of `fileStore` at the Session layer, which is why
-`proofs/runners/proof.ts` re-runs without a second QR scan.
-
-Therefore every real-account proof:
-
-- keeps its database, media, and credentials in a durable **profile directory**
-  under the gitignored `proofs/private/`, and never deletes it between runs;
-- pairs only when that profile holds no credentials;
-- treats a rerun after a code change — which any head-bound receipt forces — as
-  a resume, not a re-pair.
-
-Two steps genuinely require an unlinked start: proving pairing itself, and
-proving unlink. Those run against a **separate, throwaway profile**, so the
-durable profile keeps its link. One WhatsApp account supports several linked
-devices, and each profile is one of them.
-
-Nothing about this weakens a proof. A resumed credential is the product
-behavior ADR-0005 and #109 exist to establish; requiring a human to re-scan is
-not a stronger claim, only a more expensive one.
-
-**Two profiles were linked on 2026-08-05, on two distinct numbers**, which makes
-the test peer a second real account rather than a self-send:
-
-| Profile   | Primary phone      | Role                                         |
-| --------- | ------------------ | -------------------------------------------- |
-| `ios`     | iPhone             | peer; the account behind the #18 P4 receipts |
-| `android` | Samsung Galaxy S25 | subject; also the #50 platform arm           |
-
-`android` is the subject for anything that publishes a receipt. Its mirror is
-small enough to assert against, and a proof whose fixtures are someone's actual
-correspondence is one nobody can safely publish. Each profile is one account and
-one process — ADR-0009 means two runtimes cannot share a database.
-
-The profiles are the only thing here a human has to recreate, and only if a
-machine is lost. `pnpm proof:profile <name>` establishes or resumes one.
+Real-account work is task-specific. Follow
+`docs/runbooks/development/real-account-testing.md`, keep raw observations in the
+external profile, write only sanitized evidence to ignored `.artifacts/` or a
+short-lived CI artifact, and delete the temporary program when the task closes.
+The repository carries no permanent live-account harness or receipt archive.
 
 ## Standing facts about the 0.3 Client
 

@@ -45,10 +45,9 @@ await test.emit({
 console.log(test.commands.sent);
 ```
 
-To drive a real account instead, `pnpm proof` prints a QR code, and
-`pnpm proof +15551234567` uses a pairing code. Credentials persist in
-`./.wa-auth` (gitignored), so later runs resume without scanning. That harness
-is opt-in and never runs in CI.
+Real-account work is task-specific and never runs in CI. Read
+`docs/runbooks/development/real-account-testing.md` before creating a temporary
+program: this machine holds real conversations and sends are allowlisted.
 
 ## Before you open a pull request
 
@@ -58,7 +57,7 @@ pnpm test
 pnpm check:docs    # every path and script name the agent docs cite still exists
 pnpm check:unused  # unused files, exports, and dependencies
 pnpm build
-pnpm proof:pack    # builds, packs, and inspects the tarball a consumer receives
+pnpm test:pack     # builds, packs, and inspects the tarball a consumer receives
 ```
 
 CI runs exactly these on Node 22 and 24.
@@ -88,10 +87,10 @@ CI needs none.
 ## Conventions
 
 **Naming.** Files are `kebab-case.ts` — `file-media.ts`, `store-conformance.ts`.
-Package tests live beside their package at
-`packages/<name>/tests/<subject>.test.ts`. Proof tests live in `proofs/tests/`,
-packed-consumer smoke in `smoke/`, and repository checks in `tooling/checks/`.
-`pnpm test` runs every `*.test.ts` in those owned locations.
+Package tests and packed-consumer checks live beside their package under
+`packages/<name>/tests/` and `packages/<name>/smoke/`. Repository-only scripts
+live in `.github/scripts/`. `pnpm test` runs every `*.test.ts` in those owned
+locations.
 
 Types and classes are `PascalCase`, values and functions `camelCase`, and
 capability constructors read as the thing they return — `fileStore()`,

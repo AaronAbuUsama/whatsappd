@@ -5,7 +5,7 @@
  * suffix strip and the LID pairing are proved directly rather than assumed by
  * the conversion tests, which supply the address by hand.
  */
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { selfAddress } from "../src/baileys/socket.ts";
 
 type Sock = Parameters<typeof selfAddress>[0];

@@ -7,17 +7,17 @@ Audit versions: whatsappd `0.2.2`; Baileys `7.0.0-rc14`.
 ## Verification status
 
 - Automated repository checks: **available**
-- Durable integration (P2): **run** — `proofs/receipts/issue16-p2.json`.
-- Durable operation replacement with streamed media (P2): **run** —
-  `proofs/receipts/issue108-p2.reset1-680a0f3.json`.
+- Durable integration (P2): **run** — reviewed with issue #16.
+- Durable operation replacement with streamed media (P2): **run** — reviewed
+  with issue #108.
 - Live WhatsApp account (P4), Session layer: **run** — `issue18-p4.run1-b06fa2f`
   and `issue18-p4.run2-ea53648`, exercised 2026-07-30. Both submitted on-demand
   history requests over a real linked account and observed delivery
   acknowledgements with zero correlated batches and zero correlated messages:
   the request is delivered and goes unanswered. That is #18's finding, and its
   open leads are #50.
-- Live WhatsApp account (P4), Runtime and friendly Client: **run** —
-  `proofs/receipts/issue127-p4.run3-a850134.json`, exercised 2026-08-09. The
+- Live WhatsApp account (P4), Runtime and friendly Client: **run** — reviewed
+  with issue #127, exercised 2026-08-09. The
   run composed `fileMediaStore + libsqlBackend -> Runtime ->
 createWhatsAppClient`, observed inbound text through both Client read seams,
   read exact document bytes through the Client-surfaced media ref, exhausted two
@@ -30,7 +30,9 @@ createWhatsAppClient`, observed inbound text through both Client read seams,
 Automated tests do not establish real-account or rendered behavior. A P4 run at
 one layer establishes nothing about another: the Session-layer history proof and
 the Runtime/friendly-Client read proof above are separate runs at separate
-layers. `not-run` means exactly that, not failed and not unsupported.
+layers. Historical evidence remains in the relevant issue, pull request, and
+git history rather than in a receipt archive. `not-run` means exactly that, not
+failed and not unsupported.
 
 ## Target Client shape
 

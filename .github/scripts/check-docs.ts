@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 /**
  * Proves the agent-facing docs still describe this repository.
  *
@@ -10,15 +12,15 @@
  *    an unattended agent reads first, and every route out of it is a bare
  *    relative path. A stale one sends the agent to read nothing and continue
  *    anyway — the quietest way this repository can lie.
- * 2. A doc names a `pnpm` script that no longer exists. The README's "Proof"
- *    block is the contract for how the repository is verified; a command that
- *    has been renamed makes the proof unrunnable exactly when someone is
+ * 2. A doc names a `pnpm` script that no longer exists. The README's
+ *    verification block is the contract for how the repository is checked; a
+ *    command that has been renamed makes verification unrunnable exactly when someone is
  *    following instructions rather than improvising.
  *
  * Deliberately not a link checker for prose: it resolves repository paths and
  * script names, which are the two things that go stale silently. External URLs
  * are left alone — they fail for reasons that have nothing to do with this
- * commit, and a proof that fails for unrelated reasons stops being read.
+ * commit, and a check that fails for unrelated reasons stops being read.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";

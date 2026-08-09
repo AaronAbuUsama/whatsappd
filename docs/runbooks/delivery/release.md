@@ -16,7 +16,7 @@
    git push origin master --tags
    ```
 
-3. **Watch the run.** It re-runs `check`, `test`, `build`, and `proof:pack` on
+3. **Watch the run.** It re-runs `check`, `test`, `build`, and `test:pack` on
    the publishing commit before publishing, then packs `dist/` and publishes
    with `--provenance`.
 
@@ -24,12 +24,12 @@
 gh run watch "$(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
-## Why `proof:pack` runs in the release, not just in CI
+## Why `test:pack` runs in the release, not just in CI
 
 `pnpm pack` archives whatever `dist/` already holds. Without a build inside the
-release job, the tarball reaching npm would be the one artifact the packed proof
-never inspected — the proof would guard pull requests and not releases (#119).
-It runs on the publishing commit, so the artifact is proven on the exact commit
+release job, the tarball reaching npm would be the one artifact the packed check
+never inspected — the check would guard pull requests and not releases (#119).
+It runs on the publishing commit, so the artifact is checked on the exact commit
 that publishes it.
 
 If you are tempted to skip it to get a release out faster: that is the failure

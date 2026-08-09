@@ -2,12 +2,12 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["proofs/runners/*.ts", "proofs/tests/*.test.ts", "tooling/checks/*.ts"],
-      "project": ["examples/**/*.ts", "proofs/**/*.ts", "smoke/**/*.ts", "tooling/**/*.ts"]
+      "entry": [".github/scripts/*.ts"],
+      "project": [".github/scripts/**/*.ts", "examples/**/*.ts"]
     },
     "packages/whatsappd": {
-      "entry": ["src/index.ts", "src/testing.ts", "tests/*.test.ts"],
-      "project": ["src/**/*.ts", "tests/**/*.ts"]
+      "entry": ["smoke/*.ts", "src/index.ts", "src/testing.ts", "tests/*.test.ts"],
+      "project": ["smoke/**/*.ts", "src/**/*.ts", "tests/**/*.ts"]
     }
   },
 

@@ -1,4 +1,4 @@
-import { expect, test } from "./test-harness.ts";
+import { expect, test } from "../../packages/whatsappd/tests/_expect.ts";
 import { classify, parseBlockers, type Node } from "./execution-state.ts";
 
 const node = (number: number, over: Partial<Node> = {}): Node => ({

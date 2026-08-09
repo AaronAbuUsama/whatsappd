@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { mapContactUpdates } from "../src/baileys/contacts.ts";
 
 test("maps Baileys contact upserts into pure contact updates", () => {
