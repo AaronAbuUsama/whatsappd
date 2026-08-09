@@ -15,7 +15,7 @@ Audit versions: whatsappd `0.2.2`; Baileys `7.0.0-rc14`.
   the request is delivered and goes unanswered. That is #18's finding, and its
   open leads are #50.
 - Live WhatsApp account (P4), Runtime and friendly Client: **run** —
-  `.proof-receipts/issue127-p4.run1-0317342.json`, exercised 2026-08-07. The
+  `.proof-receipts/issue127-p4.run2-e784caa.json`, exercised 2026-08-09. The
   run composed `fileMediaStore + libsqlBackend -> Runtime ->
   createWhatsAppClient`, observed inbound text through both Client read seams,
   read exact document bytes through the Client-surfaced media ref, exhausted two

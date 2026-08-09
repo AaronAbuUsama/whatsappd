@@ -50,10 +50,22 @@ export interface ProofRunStart {
 }
 
 export interface ProofReceiptScan {
+  readonly structuralHits: number;
   readonly patternHits: number;
   readonly knownValueHits: number;
   readonly receiptByteLength: number;
   readonly nonEmpty: boolean;
+}
+
+export interface ProofReceiptPolicy {
+  readonly fields: ReadonlySet<string>;
+  readonly arrays: ReadonlySet<string>;
+  readonly fixedStrings: ReadonlySet<string>;
+  readonly digests: ReadonlySet<string>;
+  readonly hashes: ReadonlySet<string>;
+  readonly dates: ReadonlySet<string>;
+  readonly numbers: ReadonlySet<string>;
+  readonly booleans: ReadonlySet<string>;
 }
 
 const git = (cwd: string, args: readonly string[]): string =>
@@ -73,13 +85,6 @@ export function captureProofRunStart(
   };
 }
 
-function stringLeaves(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (Array.isArray(value)) return value.flatMap(stringLeaves);
-  if (value && typeof value === "object") return Object.values(value).flatMap(stringLeaves);
-  return [];
-}
-
 function privatePatternHits(value: string): number {
   if (/^[a-f0-9]{40,64}$/u.test(value) || !Number.isNaN(Date.parse(value))) return 0;
   let hits = 0;
@@ -93,17 +98,67 @@ function privatePatternHits(value: string): number {
   return hits;
 }
 
+function scanStructure(
+  value: unknown,
+  policy: ProofReceiptPolicy,
+  field = "",
+): { readonly structuralHits: number; readonly patternHits: number } {
+  if (Array.isArray(value)) {
+    const ownHit = policy.arrays.has(field) ? 0 : 1;
+    return value.reduce(
+      (scan, entry) => {
+        const child = scanStructure(entry, policy, field);
+        return {
+          structuralHits: scan.structuralHits + child.structuralHits,
+          patternHits: scan.patternHits + child.patternHits,
+        };
+      },
+      { structuralHits: ownHit, patternHits: 0 },
+    );
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value).reduce(
+      (scan, [key, entry]) => {
+        const child = scanStructure(entry, policy, key);
+        return {
+          structuralHits:
+            scan.structuralHits + (policy.fields.has(key) ? 0 : 1) + child.structuralHits,
+          patternHits: scan.patternHits + child.patternHits,
+        };
+      },
+      { structuralHits: 0, patternHits: 0 },
+    );
+  }
+  if (typeof value === "string") {
+    const valid =
+      policy.fixedStrings.has(value) ||
+      (policy.digests.has(field) && /^[a-f0-9]{64}$/u.test(value)) ||
+      (policy.hashes.has(field) && /^[a-f0-9]{40}$/u.test(value)) ||
+      (policy.dates.has(field) &&
+        !Number.isNaN(Date.parse(value)) &&
+        new Date(value).toISOString() === value);
+    return { structuralHits: valid ? 0 : 1, patternHits: privatePatternHits(value) };
+  }
+  if (typeof value === "number") {
+    const valid =
+      policy.numbers.has(field) && Number.isSafeInteger(value) && value >= 0 && value <= 999_999;
+    return { structuralHits: valid ? 0 : 1, patternHits: 0 };
+  }
+  if (typeof value === "boolean") {
+    return { structuralHits: policy.booleans.has(field) ? 0 : 1, patternHits: 0 };
+  }
+  return { structuralHits: 1, patternHits: 0 };
+}
+
 export function scanProofReceipt(
   receipt: unknown,
   knownValues: readonly string[],
+  policy: ProofReceiptPolicy,
 ): ProofReceiptScan {
   const serialized = JSON.stringify(receipt);
-  const patternHits = stringLeaves(receipt).reduce(
-    (count, value) => count + privatePatternHits(value),
-    0,
-  );
+  const structure = scanStructure(receipt, policy);
   return {
-    patternHits,
+    ...structure,
     knownValueHits: knownValues.filter((value) => value && serialized.includes(value)).length,
     receiptByteLength: Buffer.byteLength(serialized),
     nonEmpty: serialized !== "{}" && serialized !== "null",
@@ -116,6 +171,7 @@ export function writeProofReceipt(options: {
   readonly runStart: ProofRunStart;
   readonly finalizedAt: string | undefined;
   readonly knownValues: readonly string[];
+  readonly policy: ProofReceiptPolicy;
   readonly receipt: Record<string, unknown>;
 }): { readonly file: string; readonly scan: ProofReceiptScan } {
   const { cwd, prefix, runStart, finalizedAt, knownValues } = options;
@@ -135,19 +191,25 @@ export function writeProofReceipt(options: {
     throw new Error("refusing receipt: known-value negative control is incomplete");
   }
 
-  const firstScan = scanProofReceipt(options.receipt, knownValues);
+  const firstScan = scanProofReceipt(options.receipt, knownValues, options.policy);
   const receipt = {
     ...options.receipt,
     sanitization: {
       captureSite: "shared-history-proof-receipt-writer",
+      structuralHits: firstScan.structuralHits,
       patternHits: firstScan.patternHits,
       knownValueHits: firstScan.knownValueHits,
       knownValueControlCount: knownValues.length,
       nonEmpty: firstScan.nonEmpty,
     },
   };
-  const scan = scanProofReceipt(receipt, knownValues);
-  if (scan.patternHits !== 0 || scan.knownValueHits !== 0 || !scan.nonEmpty) {
+  const scan = scanProofReceipt(receipt, knownValues, options.policy);
+  if (
+    scan.structuralHits !== 0 ||
+    scan.patternHits !== 0 ||
+    scan.knownValueHits !== 0 ||
+    !scan.nonEmpty
+  ) {
     throw new Error(`refusing unsanitized receipt: ${JSON.stringify(scan)}`);
   }
 

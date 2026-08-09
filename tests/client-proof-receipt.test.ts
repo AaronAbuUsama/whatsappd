@@ -3,6 +3,7 @@ import { test } from "./_expect.ts";
 import {
   buildClientGuardProofReceipt,
   buildClientProofReceipt,
+  CLIENT_RECEIPT_POLICY,
   type ClientGuardProofObservationStore,
   type ClientProofObservationStore,
 } from "./client-proof-receipt.ts";
@@ -103,11 +104,22 @@ test("the shared receipt scan catches native addresses and held private values",
       known,
     },
     [known],
+    CLIENT_RECEIPT_POLICY,
   );
   assert.equal(scan.patternHits >= 3, true);
   assert.equal(scan.knownValueHits, 1);
   assert.equal(scan.nonEmpty, true);
-  assert.equal(scanProofReceipt({}, []).nonEmpty, false);
+  assert.equal(scanProofReceipt({}, [], CLIENT_RECEIPT_POLICY).nonEmpty, false);
+});
+
+test("the shared receipt policy rejects short text, hex credentials, and numeric addresses", () => {
+  for (const receipt of [
+    { scope: "hello" },
+    { credential: "a".repeat(64) },
+    { subjectPid: 1_234_567 },
+  ]) {
+    assert.equal(scanProofReceipt(receipt, [], CLIENT_RECEIPT_POLICY).structuralHits > 0, true);
+  }
 });
 
 test("the Client receipt refuses incomplete proof observations", () => {
@@ -140,7 +152,7 @@ test("the Client receipt refuses incomplete proof observations", () => {
 test("the Client receipt transcribes the complete observed matrix without private values", () => {
   const store = completeStore();
   const receipt = buildClientProofReceipt(store);
-  const scan = scanProofReceipt(receipt, store.knownValues);
+  const scan = scanProofReceipt(receipt, store.knownValues, CLIENT_RECEIPT_POLICY);
   assert.equal(scan.patternHits, 0);
   assert.equal(scan.knownValueHits, 0);
   assert.deepEqual(
@@ -199,7 +211,10 @@ test("the guard receipt records refusal before any Session send", () => {
       evidence: store.guard,
     },
   ]);
-  assert.equal(scanProofReceipt(receipt, store.knownValues).knownValueHits, 0);
+  assert.equal(
+    scanProofReceipt(receipt, store.knownValues, CLIENT_RECEIPT_POLICY).knownValueHits,
+    0,
+  );
 });
 
 test("the guard receipt refuses a send invocation or a different refusal", () => {
