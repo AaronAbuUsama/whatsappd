@@ -17,7 +17,7 @@ const unsafeMessage = {
 const put = (store: MediaStore, bytes: Uint8Array, accountId = unsafeAccount) =>
   store.put({
     accountId,
-    message: unsafeMessage,
+    owner: { type: "message", message: unsafeMessage },
     kind: "document",
     bytes,
     mimetype: "application/octet-stream",

@@ -58,8 +58,12 @@ export { createWhatsAppClient } from "./runtime/client.ts";
 export type {
   ClientAccountState,
   ClientChatMessages,
+  ClientOperationOptions,
   ClientNamespace,
+  ClientSendOptions,
   ClientSubscribeOptions,
+  OptimisticMessage,
+  TerminalWhatsAppOperation,
   WhatsAppClient,
 } from "./runtime/client.ts";
 export {
@@ -67,7 +71,20 @@ export {
   memoryDataStore,
   memoryLeaseStore,
   memoryMediaStore,
+  memoryOperationStore,
 } from "./runtime/memory.ts";
+export { OperationIdempotencyConflictError } from "./runtime/operations.ts";
+export type {
+  DurableMediaInput,
+  DurableOutbound,
+  OperationMediaKind,
+  SerializedOperationError,
+  WhatsAppOperation,
+  WhatsAppOperationInput,
+  WhatsAppOperationResult,
+  WhatsAppOperationState,
+  WhatsAppOperationStore,
+} from "./runtime/operations.ts";
 export { libsqlBackend } from "./runtime/libsql.ts";
 export type { LibsqlBackend, LibsqlBackendOptions } from "./runtime/libsql.ts";
 export { fileMediaStore } from "./runtime/file-media.ts";

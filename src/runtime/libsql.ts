@@ -41,6 +41,8 @@ import {
   type CurrentMirrorMutation,
   type CurrentMirrorRecords,
 } from "./projection.ts";
+import { libsqlOperationStore } from "./libsql-operations.ts";
+import { transact } from "./libsql-transaction.ts";
 
 export interface LibsqlBackendOptions {
   readonly url: string;
@@ -124,6 +126,22 @@ const migrations = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS wa_operations (
+        account_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        submitted_at INTEGER NOT NULL,
+        operation_json TEXT NOT NULL,
+        PRIMARY KEY (account_id, operation_id),
+        UNIQUE (account_id, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS wa_operation_order
+        ON wa_operations (account_id, submitted_at, operation_id);
+    `,
+  },
 ] as const;
 
 async function migrate(client: Client): Promise<void> {
@@ -156,26 +174,6 @@ async function migrate(client: Client): Promise<void> {
   } finally {
     transaction.close();
   }
-}
-
-async function transact<T>(
-  client: LazyLibsqlClient,
-  mode: "read" | "write",
-  work: (transaction: Transaction) => Promise<T>,
-): Promise<T> {
-  return client.run(async (opened) => {
-    const transaction = await opened.transaction(mode);
-    try {
-      const result = await work(transaction);
-      await transaction.commit();
-      return result;
-    } catch (error) {
-      if (!transaction.closed) await transaction.rollback().catch(() => {});
-      throw error;
-    } finally {
-      transaction.close();
-    }
-  }, mode);
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -1531,6 +1529,7 @@ export function libsqlBackend(options: LibsqlBackendOptions): LibsqlBackend {
     data: libsqlDataStore(client),
     leases: libsqlLeaseStore(client),
     media: options.media,
+    operations: libsqlOperationStore(client),
     close,
     [Symbol.asyncDispose]: close,
   };

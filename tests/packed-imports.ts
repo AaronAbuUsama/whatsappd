@@ -81,7 +81,13 @@ try {
     "ClientAccountState",
     "ClientChatMessages",
     "ClientNamespace",
+    "ClientOperationOptions",
+    "ClientSendOptions",
     "ClientSubscribeOptions",
+    "OperationIdempotencyConflictError",
+    "OptimisticMessage",
+    "TerminalWhatsAppOperation",
+    "WhatsAppOperation",
     "WhatsAppClient",
     "createWhatsAppClient",
   ]) {
@@ -103,7 +109,15 @@ try {
   const friendlyClient = declarations.match(/interface WhatsAppClient \{([^]*?)\n\}/)?.[1];
   assert.ok(friendlyClient, "packed WhatsAppClient declaration was not found");
   assert.equal(/\bwatch\s*\(/.test(friendlyClient), false);
-  for (const member of ["account", "chats", "contacts", "groups", "messages", "close"]) {
+  for (const member of [
+    "account",
+    "chats",
+    "contacts",
+    "groups",
+    "messages",
+    "operations",
+    "close",
+  ]) {
     assert.match(friendlyClient, new RegExp(`\\b${member}\\b`));
   }
   // Naming known-published symbols was not enough, which is the correction
@@ -202,6 +216,8 @@ try {
       assert.equal(typeof root.memoryBackend, "function");
       assert.equal(typeof root.libsqlBackend, "function");
       assert.equal(typeof root.fileMediaStore, "function");
+      assert.equal(typeof root.memoryOperationStore, "function");
+      assert.equal(typeof root.OperationIdempotencyConflictError, "function");
       for (const removed of ["createChannelAdapter", "bindTools"]) {
         assert.equal(removed in root, false);
       }
@@ -285,7 +301,10 @@ try {
         const media = store.media;
         const stored = await media.put({
           accountId: ACCOUNT,
-          message: { id: "packed-media", chatId: CHAT, fromMe: false },
+          owner: {
+            type: "message",
+            message: { id: "packed-media", chatId: CHAT, fromMe: false },
+          },
           kind: "document",
           bytes: Uint8Array.from([1, 2, 3]),
         });
@@ -325,6 +344,18 @@ try {
           const finalPage = await page(client, 30);
           assert.equal(finalPage.older, "exhausted");
           assert.equal(driver.commands.historyRequests.length, 0);
+          const operation = await client.messages.send.text(CHAT, "packed outbound", {
+            idempotencyKey: "packed-outbound",
+          });
+          assert.equal(operation.idempotencyKey, "packed-outbound");
+          assert.equal((await client.operations.wait(operation.id)).state.status, "succeeded");
+          const repeated = await client.messages.send.text(CHAT, "packed outbound", {
+            idempotencyKey: "packed-outbound",
+          });
+          assert.equal(repeated.id, operation.id);
+          assert.equal(driver.commands.sent.length, 1);
+          await client.operations.acknowledge(operation.id);
+          assert.equal(client.messages.get(CHAT).outgoing.length, 0);
         } finally {
           await client.close();
           await runtime.stop();
@@ -359,9 +390,12 @@ try {
   assert.deepEqual(first.counts, second.counts);
   assert.deepEqual(second.noLive, { connection: true, identity: true, presence: true });
 
+  const issueAt = process.argv.indexOf("--issue");
+  const issue = issueAt === -1 ? 107 : Number(process.argv[issueAt + 1]);
+  assert.ok(Number.isSafeInteger(issue) && issue > 0, "--issue requires a positive integer");
   const receipt = {
     schemaVersion: 1,
-    issue: 107,
+    issue,
     tier: "P2",
     packedVersion: packageJson.version,
     firstProcessId: first.pid,

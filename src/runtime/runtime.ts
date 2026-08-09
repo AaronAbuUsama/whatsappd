@@ -35,6 +35,8 @@ import {
   type WhatsAppLiveFrame,
   type WhatsAppSnapshot,
 } from "./contracts.ts";
+import { createOperationExecutor, type OperationSession } from "./operation-executor.ts";
+import type { WhatsAppOperationStore } from "./operations.ts";
 
 const captureMessage = async (
   accountId: string,
@@ -67,7 +69,7 @@ const captureMessage = async (
       try {
         const stored = await mediaStore.put({
           accountId,
-          message: refOf(message),
+          owner: { type: "message", message: refOf(message) },
           kind: message.kind,
           bytes,
           ...(metadata.mimetype !== undefined && { mimetype: metadata.mimetype }),
@@ -120,7 +122,7 @@ const connectionInstant = (status: Status): "connected" | "disconnected" | undef
  * `start` and `stop` are optional so the deterministic test session — which has
  * no socket to open — is usable through the same runtime as the real one.
  */
-export interface RuntimeSession {
+export interface RuntimeSession extends OperationSession {
   subscribe(
     handlers: WhatsAppSessionHandlers,
     options?: { readonly signal?: AbortSignal },
@@ -227,6 +229,9 @@ export interface ClientRuntimeSource {
   read<T>(fn: (view: MirrorView) => Promise<T>): Promise<T>;
   identity(): WaIdentity | undefined;
   currentClaim(): ClientClaim | undefined;
+  readonly operations: WhatsAppOperationStore;
+  readonly media: WhatsAppBackend["media"];
+  setTyping(chatId: string, on: boolean): Promise<void>;
 }
 
 /**
@@ -390,6 +395,18 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   const handedTerminal = new Set<(frame: WhatsAppDurableFrame) => void>();
   let replaying = false;
 
+  const operationExecutor = createOperationExecutor({
+    accountId,
+    backend,
+    ttlMs: leaseTtlMs,
+    session: () => session,
+    stopped: () => stopped,
+    failed(error) {
+      failure ??= { error };
+      void halt().catch(() => {});
+    },
+  });
+
   /**
    * Hand the terminal frame to one subscriber that arrived after closure.
    *
@@ -491,6 +508,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // stopped being true. Only the instant each was observed at is durable, and
     // an instant restores as history rather than as current state (ADR-0020).
     connection: async (status) => {
+      operationExecutor.setOnline(isOnline(status));
       const claim = lease;
       // Connection truth is only ever this claim's; without one there is
       // nothing a client could treat as current.
@@ -611,10 +629,12 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
     // Latched before anything is awaited, so a startup that resumes after this
     // point sees it — including one that has not reached its first await yet.
     stopped = true;
+    const operationsStopped = operationExecutor.stop();
     return (stopping ??= (async () => {
       try {
         await release();
       } finally {
+        await operationsStopped;
         // A watcher's stream is the only place a runtime that died on its own
         // can be seen; without this frame it simply goes quiet, for ever. Even a
         // release that failed halfway is published — leaving watchers suspended
@@ -831,6 +851,14 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       }
     },
     currentClaim,
+    operations: backend.operations,
+    media: backend.media,
+    async setTyping(chatId, on) {
+      const opened = session;
+      if (!opened) throw new Error("the runtime has no live Session");
+      if (!opened.setTyping) throw new Error("the Session cannot set typing state");
+      await opened.setTyping(chatId, on);
+    },
   });
 
   return runtime;

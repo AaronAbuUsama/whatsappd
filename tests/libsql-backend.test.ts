@@ -821,7 +821,7 @@ test("a failed SQL record write rolls back source, projection, and revision toge
     const bytes = Uint8Array.from([9, 8, 7, 6]);
     const orphan = await media.put({
       accountId: ACCOUNT,
-      message: { id: "fail", chatId: CHAT, fromMe: false },
+      owner: { type: "message", message: { id: "fail", chatId: CHAT, fromMe: false } },
       kind: "image",
       bytes,
       mimetype: "image/png",

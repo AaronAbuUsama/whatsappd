@@ -67,6 +67,18 @@ Receipts distinguish queued, claimed, executing, succeeded, failed, and
 `outcome_unknown`; execution that may have reached WhatsApp is never retried
 under the same operation identity.
 
+When the key is omitted the Client generates one and returns it on the receipt;
+separate keyless calls remain separate operations. Reusing a key with the same
+canonical input returns the existing receipt, while different input is a
+conflict. Operation inputs carry an explicit version. New payload shapes extend
+an existing version only when old executors can still interpret them; new
+execution semantics require a new version and an explicit executor case.
+
+`wait()` and its `AbortSignal` control only the caller's wait after submission;
+they never cancel durable work. Terminal receipts remain until acknowledged.
+Typing is excluded from durable operations because replaying stale presence
+after restart is incorrect; it remains an awaited live Session command.
+
 `client.close()` releases all Client subscriptions ~~and opened conversations~~ but
 does not implicitly stop an application-owned Runtime or close an
 application-owned Backend. Each resource is closed by the layer that created

@@ -28,6 +28,7 @@ import type {
 import type { MessageRef } from "../model/outbound.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { WhatsAppEvent } from "../subscription.ts";
+import type { WhatsAppOperationStore } from "./operations.ts";
 
 /**
  * One durable timestamp derived from an ephemeral signal (ADR-0020).
@@ -557,11 +558,15 @@ export interface AccountLeaseStore {
   release(lease: AccountLease): Promise<boolean>;
 }
 
-/** Durable media bytes, keyed idempotently by account, message, kind, and content (ADR-0015). */
+export type MediaOwner =
+  | { readonly type: "message"; readonly message: MessageRef }
+  | { readonly type: "operation"; readonly operationId: string };
+
+/** Durable media bytes, keyed idempotently by account, owner, kind, and content (ADR-0015). */
 export interface MediaStore {
   put(input: {
     accountId: string;
-    message: MessageRef;
+    owner: MediaOwner;
     kind: "image" | "video" | "audio" | "document" | "sticker";
     bytes: Uint8Array;
     mimetype?: string;
@@ -584,6 +589,7 @@ export interface WhatsAppBackend {
   readonly data: WhatsAppDataStore;
   readonly leases: AccountLeaseStore;
   readonly media: MediaStore;
+  readonly operations: WhatsAppOperationStore;
 }
 
 /** Thrown when a second runtime tries to open an account another one holds. */

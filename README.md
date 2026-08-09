@@ -124,6 +124,13 @@ if (chat) {
   unsubscribe = client.messages.subscribe(render);
   render();
   client.messages.older(chat.chatId); // newest saved page; call again to go further back
+
+  const operation = await client.messages.send.text(chat.chatId, "hello", {
+    // Reuse this key when retrying the same application action.
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const completed = await client.operations.wait(operation.id);
+  console.log(completed.state);
 }
 
 // Keep the local worker alive until Ctrl-C, then close what the application owns.
@@ -146,9 +153,19 @@ mirror. It never contacts WhatsApp. `"exhausted"` therefore means “nothing old
 is saved locally,” not “the phone has no older history.” Asking the linked phone
 for history is a separate operation and is not hidden behind paging.
 
-The friendly Client does not yet expose pairing/unlink, sends and commands,
-React/OpenTUI bindings, or automatic history retrieval. Those land in later
-0.3/0.4 work; the lower-level Session remains available in the meantime.
+The Client exposes durable send, reaction, edit, revoke, mark-read, and
+phone-history commands under `client.messages`. Each returns an operation
+receipt immediately; `client.operations.wait(id)` awaits its terminal outcome,
+and `acknowledge(id)` removes the receipt from optimistic UI state. A supplied
+`idempotencyKey` makes an application retry resolve to the same operation when
+its normalized input is identical and reject when it is not. If omitted, a key
+is generated and returned on the receipt; two calls without a shared key are
+two commands.
+
+Typing is deliberately live rather than durable:
+`await client.messages.setTyping(chatId, true)` reaches only the current
+Session and is never replayed after a restart. Pairing/unlink, React/OpenTUI
+bindings, and automatic history policy remain later work.
 
 A local `file:` database is opened in WAL, so `whatsapp.db-wal` and
 `whatsapp.db-shm` sit beside it — move, copy, or delete the three together. WAL

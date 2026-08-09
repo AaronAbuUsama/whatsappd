@@ -11,6 +11,13 @@
  */
 import { memoryStore } from "../stores/memory.ts";
 import { immutableMediaRef } from "./media.ts";
+import {
+  OperationIdempotencyConflictError,
+  operationSubscription,
+  operationInputJson,
+  type WhatsAppOperation,
+  type WhatsAppOperationStore,
+} from "./operations.ts";
 import { projectCurrentMirror } from "./projection.ts";
 import {
   StaleAccountClaimError,
@@ -330,6 +337,231 @@ export function memoryLeaseStore(): AccountLeaseStore {
   };
 }
 
+/** In-process reference implementation of the durable operation state machine. */
+export function memoryOperationStore(): WhatsAppOperationStore {
+  const accounts = new Map<
+    string,
+    {
+      readonly byId: Map<string, WhatsAppOperation>;
+      readonly byKey: Map<string, string>;
+    }
+  >();
+  const listeners = new Map<string, Set<(operationId: string) => void>>();
+  let writes: Promise<void> = Promise.resolve();
+
+  const account = (accountId: string) => {
+    const held = accounts.get(accountId);
+    if (held) return held;
+    const created = {
+      byId: new Map<string, WhatsAppOperation>(),
+      byKey: new Map<string, string>(),
+    };
+    accounts.set(accountId, created);
+    return created;
+  };
+  const copy = <T>(value: T): T => structuredClone(value);
+  const serialize = <T>(work: () => T): Promise<T> => {
+    const result = writes.then(work);
+    writes = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  };
+  const announce = (accountId: string, changed: readonly string[]): void => {
+    for (const operationId of changed)
+      for (const listener of listeners.get(accountId) ?? []) listener(operationId);
+  };
+  const write = async <T>(
+    accountId: string,
+    work: (held: ReturnType<typeof account>) => { readonly result: T; readonly changed: string[] },
+  ): Promise<T> => {
+    const committed = await serialize(() => work(account(accountId)));
+    announce(accountId, committed.changed);
+    return copy(committed.result);
+  };
+  const replace = (
+    held: ReturnType<typeof account>,
+    current: WhatsAppOperation,
+    state: WhatsAppOperation["state"],
+    at: number,
+  ): WhatsAppOperation => {
+    const next = { ...current, state, revision: current.revision + 1, updatedAt: at };
+    held.byId.set(current.id, next);
+    return next;
+  };
+  const complete = (
+    accountId: string,
+    operationId: string,
+    attemptId: string,
+    expected: "claimed" | "executing",
+    state: (at: number) => WhatsAppOperation["state"],
+  ): Promise<WhatsAppOperation | undefined> =>
+    write(accountId, (held) => {
+      const current = held.byId.get(operationId);
+      if (
+        !current ||
+        !("attemptId" in current.state) ||
+        current.state.status !== expected ||
+        current.state.attemptId !== attemptId
+      )
+        return { result: undefined, changed: [] };
+      const at = Date.now();
+      return { result: replace(held, current, state(at), at), changed: [operationId] };
+    });
+
+  return {
+    submit(request) {
+      return write(request.accountId, (held) => {
+        const existingId = held.byKey.get(request.idempotencyKey);
+        if (existingId) {
+          const existing = held.byId.get(existingId)!;
+          if (operationInputJson(existing.input) !== operationInputJson(request.input))
+            throw new OperationIdempotencyConflictError(request.accountId, request.idempotencyKey);
+          return { result: existing, changed: [] };
+        }
+        if (held.byId.has(request.id))
+          throw new Error(`operation id "${request.id}" already exists`);
+        const now = Date.now();
+        const operation: WhatsAppOperation = {
+          ...copy(request),
+          revision: 0,
+          state: { status: "queued" },
+          submittedAt: now,
+          updatedAt: now,
+        };
+        held.byId.set(operation.id, operation);
+        held.byKey.set(operation.idempotencyKey, operation.id);
+        return { result: operation, changed: [operation.id] };
+      });
+    },
+
+    async get(accountId, operationId) {
+      await writes;
+      const operation = account(accountId).byId.get(operationId);
+      return operation && copy(operation);
+    },
+
+    async list(accountId) {
+      await writes;
+      return copy(
+        [...account(accountId).byId.values()].sort(
+          (a, b) => a.submittedAt - b.submittedAt || a.id.localeCompare(b.id),
+        ),
+      );
+    },
+
+    claim(accountId, attemptId, ttlMs) {
+      return write(accountId, (held) => {
+        const now = Date.now();
+        const changed: string[] = [];
+        for (const operation of held.byId.values()) {
+          if (operation.state.status === "claimed" && operation.state.expiresAt <= now) {
+            replace(held, operation, { status: "queued" }, now);
+            changed.push(operation.id);
+          } else if (operation.state.status === "executing" && operation.state.expiresAt <= now) {
+            replace(
+              held,
+              operation,
+              {
+                status: "outcome_unknown",
+                reason: "execution attempt expired after the WhatsApp boundary",
+                completedAt: now,
+              },
+              now,
+            );
+            changed.push(operation.id);
+          }
+        }
+        const queued = [...held.byId.values()]
+          .filter((operation) => operation.state.status === "queued")
+          .sort((a, b) => a.submittedAt - b.submittedAt || a.id.localeCompare(b.id))[0];
+        if (!queued) return { result: undefined, changed };
+        const claimed = replace(
+          held,
+          queued,
+          { status: "claimed", attemptId, expiresAt: now + ttlMs },
+          now,
+        );
+        changed.push(claimed.id);
+        return { result: claimed, changed };
+      });
+    },
+
+    start(accountId, operationId, attemptId, ttlMs) {
+      return write(accountId, (held) => {
+        const current = held.byId.get(operationId);
+        const now = Date.now();
+        if (
+          !current ||
+          current.state.status !== "claimed" ||
+          current.state.attemptId !== attemptId ||
+          current.state.expiresAt <= now
+        )
+          return { result: undefined, changed: [] };
+        const started = replace(
+          held,
+          current,
+          { status: "executing", attemptId, startedAt: now, expiresAt: now + ttlMs },
+          now,
+        );
+        return { result: started, changed: [operationId] };
+      });
+    },
+
+    succeed(accountId, operationId, attemptId, result) {
+      return complete(accountId, operationId, attemptId, "executing", (at) => ({
+        status: "succeeded",
+        result: copy(result),
+        completedAt: at,
+      }));
+    },
+
+    fail(accountId, operationId, attemptId, error) {
+      return complete(accountId, operationId, attemptId, "claimed", (at) => ({
+        status: "failed",
+        error: copy(error),
+        completedAt: at,
+      }));
+    },
+
+    unknown(accountId, operationId, attemptId, reason) {
+      return complete(accountId, operationId, attemptId, "executing", (at) => ({
+        status: "outcome_unknown",
+        reason,
+        completedAt: at,
+      }));
+    },
+
+    acknowledge(accountId, operationId) {
+      return write(accountId, (held) => {
+        const current = held.byId.get(operationId);
+        if (!current || current.acknowledgedAt !== undefined)
+          return { result: current, changed: [] };
+        if (
+          current.state.status !== "succeeded" &&
+          current.state.status !== "failed" &&
+          current.state.status !== "outcome_unknown"
+        )
+          return { result: current, changed: [] };
+        const now = Date.now();
+        const acknowledged = {
+          ...current,
+          revision: current.revision + 1,
+          acknowledgedAt: now,
+          updatedAt: now,
+        };
+        held.byId.set(operationId, acknowledged);
+        return { result: acknowledged, changed: [operationId] };
+      });
+    },
+
+    subscribe(accountId, listener) {
+      return operationSubscription(listeners, accountId, listener);
+    },
+  };
+}
+
 /**
  * An in-memory {@link MediaStore}.
  *
@@ -339,8 +571,8 @@ export function memoryLeaseStore(): AccountLeaseStore {
 export function memoryMediaStore(): MediaStore {
   const blobs = new Map<string, { readonly accountId: string; readonly bytes: Uint8Array }>();
   return {
-    async put({ accountId, message, kind, bytes }) {
-      const ref = immutableMediaRef({ accountId, message, kind, bytes });
+    async put({ accountId, owner, kind, bytes }) {
+      const ref = immutableMediaRef({ accountId, owner, kind, bytes });
       blobs.set(ref, { accountId, bytes: Uint8Array.from(bytes) });
       return { ref, byteLength: bytes.byteLength };
     },
@@ -366,5 +598,6 @@ export function memoryBackend(): WhatsAppBackend {
     data: memoryDataStore(),
     leases: memoryLeaseStore(),
     media: memoryMediaStore(),
+    operations: memoryOperationStore(),
   };
 }

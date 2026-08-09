@@ -23,6 +23,7 @@ import {
   memoryDataStore,
   memoryLeaseStore,
   memoryMediaStore,
+  memoryOperationStore,
 } from "../src/runtime/memory.ts";
 import {
   createRuntimeMirrorReader,
@@ -1188,6 +1189,7 @@ test("two accounts remain isolated in one backend", async () => {
     data,
     leases,
     media: memoryMediaStore(),
+    operations: memoryOperationStore(),
   });
   const alice = lane("alice", { backend: shared() });
   const bob = lane("bob", { backend: shared() });
@@ -1561,7 +1563,8 @@ test("typed download and store failures reach the Client while later messages co
     ...memoryBackend(),
     media: {
       async put(input) {
-        if (input.message.id === "store-failed") throw new Error("disk unavailable");
+        if (input.owner.type === "message" && input.owner.message.id === "store-failed")
+          throw new Error("disk unavailable");
         return stored.put(input);
       },
       read: (input) => stored.read(input),
@@ -1713,6 +1716,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
     credentials: memoryStore(),
     leases: fixedLeaseStore(1),
     media,
+    operations: memoryOperationStore(),
     data: {
       ...data,
       async accept(accountId, events, fencingToken) {
@@ -1728,6 +1732,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
     credentials: memoryStore(),
     leases: fixedLeaseStore(2),
     media,
+    operations: memoryOperationStore(),
     data,
   };
   const old = lane("personal", { backend: oldBackend });
