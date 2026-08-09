@@ -611,3 +611,11 @@ the repository. The README also opened `./data/whatsapp.db` without first
 creating `./data`, while the proof harness quietly created that prerequisite.
 The example now creates the directory itself, making the documented path match
 the fresh-consumer path it claims to teach.
+
+### Round 2 — `03f1b55`
+
+The acceptance lens was clean and executed the README setup in a fresh project.
+The standards lens confirmed the duplicate type/factory names were gone, but
+found one sentence inside `RuntimeMirrorReader` still calling that raw reader
+"the client." The noun is now `reader`; the low-level contract no longer teaches
+a second meaning for Client even in prose.

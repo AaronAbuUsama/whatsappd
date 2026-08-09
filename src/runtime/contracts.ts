@@ -750,7 +750,7 @@ export interface RuntimeMirrorReader {
    *
    * **Consumers apply both surfaces by record identity.** This method and the
    * message upserts on {@link RuntimeMirrorReader.watch} are independent reads; the
-   * client does not own or reconcile an application collection. Merge them on
+   * reader does not own or reconcile an application collection. Merge them on
    * `(chatId, messageId)` — the identity of {@link MessageRecord} — rather than
    * appending:
    *
