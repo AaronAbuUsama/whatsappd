@@ -61,9 +61,9 @@ interface CheckResult {
  * Never through a pipe. `npm pack` in this repository exits 0 through one, and
  * the mission's coverage gate was once piped into `tail`, which reports tail's
  * always-zero status — a gating command that ends in a bare pipe has stopped
- * gating. The child's environment is an explicit allowlist, never
- * `...process.env`: spreading it leaks `NODE_TEST_CONTEXT` into a child, which
- * is PR #94's false green (`AGENTS.md`).
+ * gating. The child's environment is an explicit allowlist; inheriting the
+ * whole parent environment leaks `NODE_TEST_CONTEXT` into a child, which is PR
+ * #94's false green (`AGENTS.md`).
  */
 function check(cwd: string): CheckResult {
   try {
