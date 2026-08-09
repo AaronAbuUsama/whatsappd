@@ -52,8 +52,16 @@ export type {
 export { isTerminal, isOnline, refOf } from "./model/index.ts";
 
 // ── Runtime, backends, and client ──
-export { createWhatsAppRuntime, createInProcessWhatsAppClient } from "./runtime/runtime.ts";
+export { createWhatsAppRuntime } from "./runtime/runtime.ts";
 export type { RuntimeSession, WhatsAppRuntime, WhatsAppRuntimeConfig } from "./runtime/runtime.ts";
+export { createWhatsAppClient } from "./runtime/client.ts";
+export type {
+  ClientAccountState,
+  ClientChatMessages,
+  ClientNamespace,
+  ClientSubscribeOptions,
+  WhatsAppClient,
+} from "./runtime/client.ts";
 export {
   memoryBackend,
   memoryDataStore,
@@ -87,22 +95,14 @@ export type {
   MessageRecord,
   MirrorAlias,
   MirrorRecord,
-  MirrorView,
   ObservedInstant,
   StoredMessageCursor,
   StoredMessagePage,
   StoredMessagePageOptions,
   WhatsAppBackend,
-  WhatsAppClient,
-  WhatsAppClientConnectionState,
-  WhatsAppClientFrame,
   WhatsAppDataEvent,
   WhatsAppDataStore,
   WhatsAppDurableEvent,
-  WhatsAppDurableFrame,
-  WhatsAppLiveFrame,
-  WhatsAppPatch,
-  WhatsAppSnapshot,
 } from "./runtime/contracts.ts";
 
 // ── Error model ──

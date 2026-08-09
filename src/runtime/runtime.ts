@@ -348,9 +348,8 @@ function deliver<Frame extends { readonly type: string }>(
  * });
  *
  * await runtime.start();
- * for await (const frame of createInProcessWhatsAppClient(runtime).watch()) {
- *   console.log(frame.type);
- * }
+ * const client = await createWhatsAppClient(runtime);
+ * console.log(client.chats.list());
  * ```
  */
 export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRuntime {

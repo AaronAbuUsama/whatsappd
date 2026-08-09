@@ -6,17 +6,16 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "./_expect.ts";
 import {
-  createInProcessWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
   memoryMediaStore,
   AccountAlreadyClaimedError,
   StaleAccountClaimError,
-  type WhatsAppClient,
-  type WhatsAppSnapshot,
 } from "../src/index.ts";
 import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
+import type { WhatsAppClient, WhatsAppSnapshot } from "../src/runtime/contracts.ts";
+import { createInProcessWhatsAppClient } from "../src/runtime/runtime.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
 

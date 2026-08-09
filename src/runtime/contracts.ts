@@ -213,7 +213,7 @@ export interface ContactRecord {
    * @remarks
    * A historical instant, never a live state (ADR-0020). It says an address was
    * there at a time, and says nothing about now — the live
-   * {@link WhatsAppClientFrame} presence frame is the only thing that does, and
+   * {@link WhatsAppLiveFrame} presence frame is the only thing that does, and
    * it expires.
    */
   readonly lastSeenAt?: number;
@@ -730,9 +730,6 @@ export type WhatsAppLiveFrame =
       readonly expiresAt: number;
     }
   | { readonly type: "connection"; readonly state: WhatsAppClientConnectionState };
-
-/** Every frame a runtime publishes, across both of its channels. */
-export type WhatsAppClientFrame = WhatsAppDurableFrame | WhatsAppLiveFrame;
 
 /** The backend-independent contract applications and React bindings consume. */
 export interface WhatsAppClient {

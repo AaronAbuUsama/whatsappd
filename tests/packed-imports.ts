@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -37,6 +37,7 @@ try {
       private: true,
       type: "module",
       dependencies: {
+        "@libsql/client": "0.15.15",
         whatsappd: `file:./${archive}`,
       },
     }),
@@ -45,7 +46,11 @@ try {
 
   const packageJson = JSON.parse(
     await readFile(path.join(consumer, "node_modules/whatsappd/package.json"), "utf8"),
-  ) as { readonly bin?: unknown; readonly exports: Record<string, unknown> };
+  ) as {
+    readonly version: string;
+    readonly bin?: unknown;
+    readonly exports: Record<string, unknown>;
+  };
   assert.equal(packageJson.bin, undefined);
   assert.deepEqual(Object.keys(packageJson.exports).sort(), [".", "./package.json", "./testing"]);
   const dist = path.join(consumer, "node_modules/whatsappd/dist");
@@ -65,6 +70,42 @@ try {
   // `docs/issue-71-postmortem.md` section 6, so the file has to prove it is
   // looking at real declarations first.
   assert.ok(declarations.length > 0, "no packed declarations were read");
+  const rootExports = declarations.match(/export \{([^]*?)\};/);
+  assert.ok(rootExports, "packed root export list was not found");
+  const exported = new Set(
+    [...rootExports[1].matchAll(/(?:^|,)\s*(?:type\s+)?([A-Za-z_$][\w$]*)/g)].map(
+      ([, name]) => name,
+    ),
+  );
+  for (const name of [
+    "ClientAccountState",
+    "ClientChatMessages",
+    "ClientNamespace",
+    "ClientSubscribeOptions",
+    "WhatsAppClient",
+    "createWhatsAppClient",
+  ]) {
+    assert.equal(exported.has(name), true, `${name} must be exported from the package root`);
+  }
+  for (const name of [
+    "MirrorView",
+    "WhatsAppClientConnectionState",
+    "WhatsAppClientCore",
+    "WhatsAppClientFrame",
+    "WhatsAppDurableFrame",
+    "WhatsAppLiveFrame",
+    "WhatsAppPatch",
+    "WhatsAppSnapshot",
+    "createInProcessWhatsAppClient",
+  ]) {
+    assert.equal(exported.has(name), false, `${name} must not be exported from the package root`);
+  }
+  const friendlyClient = declarations.match(/interface WhatsAppClient \{([^]*?)\n\}/)?.[1];
+  assert.ok(friendlyClient, "packed WhatsAppClient declaration was not found");
+  assert.equal(/\bwatch\s*\(/.test(friendlyClient), false);
+  for (const member of ["account", "chats", "contacts", "groups", "messages", "close"]) {
+    assert.match(friendlyClient, new RegExp(`\\b${member}\\b`));
+  }
   // Naming known-published symbols was not enough, which is the correction
   // #119 asked for: `createWhatsAppRuntime` and friends are in every recent
   // build, so they caught an *empty* `dist/` and not a *wrong* one — one built
@@ -118,17 +159,12 @@ try {
     "clientSourceFor",
     "ClientClaim",
     "currentClaim",
-    "createWhatsAppClient",
-    "WhatsAppClientCore",
-    "ClientAccountState",
-    "ClientChatMessages",
-    "ClientNamespace",
     "fanout",
   ]) {
     assert.equal(
-      new RegExp(`\\b${modulePrivate}\\b`).test(declarations),
+      exported.has(modulePrivate),
       false,
-      `${modulePrivate} must not reach the packed declarations`,
+      `${modulePrivate} must not be exported from the package root`,
     );
   }
   for (const retiredVocabulary of [
@@ -143,44 +179,209 @@ try {
     path.join(consumer, "verify.mjs"),
     `
       import assert from "node:assert/strict";
+      import { createHash } from "node:crypto";
+      import { createRequire } from "node:module";
+      import path from "node:path";
+      import { pathToFileURL } from "node:url";
       import * as root from "whatsappd";
-      import { createTestWhatsAppSession } from "whatsappd/testing";
+      import { createTestWhatsAppSession, textMessage } from "whatsappd/testing";
+
+      const ACCOUNT = "packed";
+      const CHAT = "packed-person@s.whatsapp.net";
+      const ROOM = "packed-room@g.us";
+      const AT = 1_700_000_000_000;
+      const DATA = path.resolve("data");
+      const version = createRequire(import.meta.url)("whatsappd/package.json").version;
 
       assert.equal(typeof root.createSession, "function");
       assert.equal(typeof createTestWhatsAppSession, "function");
       assert.equal(typeof root.memoryStore, "function");
       assert.equal(typeof root.createWhatsAppRuntime, "function");
-      assert.equal(typeof root.createInProcessWhatsAppClient, "function");
+      assert.equal(typeof root.createWhatsAppClient, "function");
+      assert.equal("createInProcessWhatsAppClient" in root, false);
       assert.equal(typeof root.memoryBackend, "function");
       assert.equal(typeof root.libsqlBackend, "function");
       assert.equal(typeof root.fileMediaStore, "function");
-      const media = root.fileMediaStore({ directory: "./media" });
-      const stored = await media.put({
-        accountId: "personal",
-        message: { id: "packed", chatId: "person@s.whatsapp.net", fromMe: false },
-        kind: "document",
-        bytes: Uint8Array.from([1, 2, 3]),
-      });
-      assert.deepEqual(
-        await media.read({ accountId: "personal", ref: stored.ref }),
-        Uint8Array.from([1, 2, 3]),
-      );
-      const backend = root.libsqlBackend({
-        url: "file:./not-opened.db",
-        accountId: "personal",
-        media: root.memoryMediaStore(),
-      });
-      assert.equal(typeof backend.close, "function");
-      await backend.close();
-      for (const removed of ["createChannelAdapter", "bindTools", "createWhatsAppClient"]) {
+      for (const removed of ["createChannelAdapter", "bindTools"]) {
         assert.equal(removed in root, false);
       }
       for (const subpath of ["adapters/eve", "channel", "sidecar", "stores/libsql", "stores/memory", "tools"]) {
         await assert.rejects(import(\`whatsappd/\${subpath}\`), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
       }
+
+      const backend = () => root.libsqlBackend({
+        url: pathToFileURL(path.join(DATA, "whatsapp.db")).href,
+        accountId: ACCOUNT,
+        media: root.fileMediaStore({ directory: path.join(DATA, "media") }),
+      });
+
+      const page = (client, expected) => new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("packed Client page did not land")), 5_000);
+        const off = client.messages.subscribe(() => {
+          const view = client.messages.get(CHAT);
+          if (view.older === "loading" || view.messages.length < expected) return;
+          clearTimeout(timeout);
+          off();
+          resolve(view);
+        });
+        client.messages.older(CHAT);
+      });
+
+      const durable = (client) => {
+        const value = {
+          account: client.account.get(),
+          chats: client.chats.list(),
+          contacts: client.contacts.list(),
+          groups: client.groups.list(),
+          messages: client.messages.get(CHAT),
+        };
+        return {
+          hash: createHash("sha256").update(JSON.stringify(value)).digest("hex"),
+          counts: {
+            chats: value.chats.length,
+            contacts: value.contacts.length,
+            groups: value.groups.length,
+            messages: value.messages.messages.length,
+          },
+          noLive: {
+            connection: value.account.connection === undefined,
+            identity: value.account.identity === undefined,
+            presence: client.contacts.presence(CHAT) === undefined,
+          },
+        };
+      };
+
+      const cold = async () => {
+        const store = backend();
+        const runtime = root.createWhatsAppRuntime({
+          accountId: ACCOUNT,
+          backend: store,
+          openSession: () => { throw new Error("cold reconstruction must not open a session"); },
+        });
+        const client = await root.createWhatsAppClient(runtime);
+        try {
+          await page(client, 25);
+          await page(client, 30);
+          const result = durable(client);
+          assert.deepEqual(result.counts, { chats: 2, contacts: 1, groups: 1, messages: 30 });
+          assert.deepEqual(result.noLive, { connection: true, identity: true, presence: true });
+          return result;
+        } finally {
+          await client.close();
+          await runtime.stop();
+          await store.close();
+        }
+      };
+
+      if (process.argv[2] === "write") {
+        const store = backend();
+        const driver = createTestWhatsAppSession();
+        const runtime = root.createWhatsAppRuntime({
+          accountId: ACCOUNT,
+          backend: store,
+          openSession: () => driver.session,
+        });
+        await runtime.start();
+        const media = store.media;
+        const stored = await media.put({
+          accountId: ACCOUNT,
+          message: { id: "packed-media", chatId: CHAT, fromMe: false },
+          kind: "document",
+          bytes: Uint8Array.from([1, 2, 3]),
+        });
+        assert.deepEqual(
+          await media.read({ accountId: ACCOUNT, ref: stored.ref }),
+          Uint8Array.from([1, 2, 3]),
+        );
+        await driver.emit({ type: "connection", status: { phase: "online" } });
+        await driver.emit({
+          type: "conversation_sync",
+          batch: {
+            context: { source: "initial_bootstrap", projection: { mode: "upsert" } },
+            chats: [
+              { id: CHAT, lastMessageAt: AT + 29 },
+              { id: ROOM, isGroup: true, subject: "Packed room", lastMessageAt: AT },
+            ],
+            contacts: [{ id: CHAT, nativeIds: [CHAT], displayName: "Packed contact" }],
+            messages: Array.from({ length: 30 }, (_, index) => ({
+              ...textMessage({
+                id: "packed-" + String(index).padStart(2, "0"),
+                chatId: CHAT,
+                text: "message " + index,
+                timestamp: AT + index,
+              }),
+              live: false,
+            })),
+          },
+        });
+        const client = await root.createWhatsAppClient(runtime);
+        try {
+          assert.equal(client.account.get().accountId, ACCOUNT);
+          assert.equal(client.chats.list().length, 2);
+          assert.equal(client.contacts.list().length, 1);
+          assert.equal(client.groups.list().length, 1);
+          assert.equal(client.messages.get(CHAT).messages.length, 0);
+          await page(client, 25);
+          const finalPage = await page(client, 30);
+          assert.equal(finalPage.older, "exhausted");
+          assert.equal(driver.commands.historyRequests.length, 0);
+        } finally {
+          await client.close();
+          await runtime.stop();
+          await store.close();
+        }
+      }
+
+      const result = await cold();
+      console.log(JSON.stringify({ pid: process.pid, version, ...result }));
     `,
   );
-  await execFile(process.execPath, ["verify.mjs"], { cwd: consumer });
+  await mkdir(path.join(consumer, "data"));
+  const childEnv = { PATH: process.env.PATH ?? "" };
+  const first = JSON.parse(
+    (await execFile(process.execPath, ["verify.mjs", "write"], { cwd: consumer, env: childEnv }))
+      .stdout,
+  ) as {
+    readonly pid: number;
+    readonly version: string;
+    readonly hash: string;
+    readonly counts: Record<string, number>;
+    readonly noLive: Record<string, boolean>;
+  };
+  const second = JSON.parse(
+    (await execFile(process.execPath, ["verify.mjs", "read"], { cwd: consumer, env: childEnv }))
+      .stdout,
+  ) as typeof first;
+  assert.notEqual(first.pid, second.pid, "packed replacement must run in a new process");
+  assert.equal(first.version, packageJson.version);
+  assert.equal(second.version, packageJson.version);
+  assert.equal(first.hash, second.hash, "packed replacement reconstructed different durable state");
+  assert.deepEqual(first.counts, second.counts);
+  assert.deepEqual(second.noLive, { connection: true, identity: true, presence: true });
+
+  const receipt = {
+    schemaVersion: 1,
+    issue: 107,
+    tier: "P2",
+    packedVersion: packageJson.version,
+    firstProcessId: first.pid,
+    secondProcessId: second.pid,
+    durableStateHash: first.hash,
+    counts: first.counts,
+    noLiveStateReconstructed: second.noLive,
+  };
+  const receiptAt = process.argv.indexOf("--receipt");
+  if (receiptAt !== -1) {
+    const destination = process.argv[receiptAt + 1];
+    assert.ok(destination, "--receipt requires a destination");
+    const { stdout: gitHead } = await execFile("git", ["rev-parse", "HEAD"], { cwd: root });
+    await writeFile(
+      path.resolve(root, destination),
+      JSON.stringify({ ...receipt, gitHead: gitHead.trim() }, undefined, 2) + "\n",
+      { flag: "wx" },
+    );
+  }
+  process.stdout.write(JSON.stringify(receipt) + "\n");
 } finally {
   await rm(consumer, { recursive: true, force: true });
 }
