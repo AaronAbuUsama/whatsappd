@@ -9,7 +9,7 @@
     "tests/history-proof.ts",
     "tests/send-guard-proof.ts"
   ],
-  "project": ["src/**/*.ts", "tests/**/*.ts"],
+  "project": ["src/**/*.ts", "examples/**/*.ts", "tests/**/*.ts"],
 
   "ignoreDependencies": ["@typescript/native-preview", "vite", "jscpd"],
 
