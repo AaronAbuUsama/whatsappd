@@ -45,6 +45,9 @@
     "pino": "^10.3.1",
     "zod": "^4.4.3"
   },
+  "devDependencies": {
+    "@libsql/client": "0.15.15"
+  },
   "peerDependencies": {
     "@libsql/client": "^0.15.0"
   },

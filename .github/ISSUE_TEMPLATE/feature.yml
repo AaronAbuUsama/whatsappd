@@ -7,8 +7,7 @@ body:
       value: |
         Every new issue starts at `needs-triage`. A request that survives triage
         becomes `ready-for-agent` only once its contract is specified well
-        enough that an unattended agent could not satisfy it the wrong way —
-        see `docs/agents/frontier-execution.md`.
+        enough that its acceptance criteria are unambiguous.
 
   - type: textarea
     id: problem
@@ -27,7 +26,7 @@ body:
       label: Proposed contract
       description: >
         What the new surface should guarantee, including what it does when it
-        fails. `docs/sdk-capabilities.md` lists what already exists and what is
+        fails. `docs/architecture/sdk-capabilities.md` lists what already exists and what is
         planned; `CONTEXT.md` carries the domain language to use here.
     validations:
       required: true

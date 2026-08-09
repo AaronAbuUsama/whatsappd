@@ -11,29 +11,23 @@ what merged, and which PRs are open are derived from GitHub:
 pnpm state
 ```
 
-This replaces `docs/EXECUTION-STATE.md`, which described the graph in prose and
-therefore disagreed with it. Its last edit left a diagram in which #106 had not
-merged, #119 was still open, and #127 — filed that morning as a new blocker of
-#107 — did not appear at all. Nothing linked to the file, so nothing failed
-when it drifted. `tests/execution-state.ts` re-derives all of it from the
-`## Blocked by` edges the issues already declare.
+`tooling/checks/execution-state.ts` derives this from the `## Blocked by` edges
+the issues already declare; no document duplicates that changing state.
 
 ## Where things live
 
-| Artifact                        | Location                                                                                 |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| Node state, blockers, frontier  | GitHub Issues, via `pnpm state`                                                          |
-| Accepted architecture decisions | `docs/adr/` — the filenames are the decisions                                            |
-| Shared domain language          | `CONTEXT.md`                                                                             |
-| Historical target architecture  | `docs/architecture/runtime-backends-and-headless-react.md`                               |
-| Published build specification   | GitHub issue #15                                                                         |
-| Capability planning guide       | `docs/sdk-capabilities.md`                                                               |
-| Client stack defect ledger      | `docs/client-stack-defect-ledger.md`                                                     |
-| Shipped product path            | `packages/whatsappd/src/session.ts`, `packages/whatsappd/src/runtime/`, and root exports |
+| Artifact                                         | Location                                      |
+| ------------------------------------------------ | --------------------------------------------- |
+| Node state, blockers, frontier                   | GitHub Issues, via `pnpm state`               |
+| Accepted architecture decisions                  | `docs/adr/` — the filenames are the decisions |
+| Shared domain language                           | `CONTEXT.md`                                  |
+| Internal architecture and capability guides      | `docs/architecture/`                          |
+| Development, delivery, and operations procedures | `docs/runbooks/`                              |
+| Published build specification                    | GitHub issue #15                              |
+| Shipped product path                             | `packages/whatsappd/src/`                     |
 
-The architecture document preserves the original target and proof boundaries.
-Accepted ADRs supersede it where implementation and owner decisions moved on.
-The capability guide summarizes the product surface without governing it.
+Architecture guides summarize the product surface without governing it;
+accepted ADRs and shipped code are authoritative.
 
 ## Decisions with no ADR
 
@@ -119,12 +113,12 @@ to perform, and it must be performed once rather than once per run.
 store straight to the session (`packages/whatsappd/src/runtime/runtime.ts:714`), so a Runtime whose
 database file survives the process resumes its link with no human present. The
 same is already true of `fileStore` at the Session layer, which is why
-`tests/proof.ts` re-runs without a second QR scan.
+`proofs/runners/proof.ts` re-runs without a second QR scan.
 
 Therefore every real-account proof:
 
 - keeps its database, media, and credentials in a durable **profile directory**
-  under the gitignored `.proof-private/`, and never deletes it between runs;
+  under the gitignored `proofs/private/`, and never deletes it between runs;
 - pairs only when that profile holds no credentials;
 - treats a rerun after a code change — which any head-bound receipt forces — as
   a resume, not a re-pair.
@@ -162,10 +156,6 @@ machine is lost. `pnpm proof:profile <name>` establishes or resumes one.
   concluded the handle was what created the layer's hazards, and the fourth —
   briefed to defend it — conceded the retired design stayed typeable under it.
   Anything that still names `conversation.*` is superseded text, not a contract.
-- `docs/issue-71-dx-contract-v2.md` is historical. Where it and
-  `packages/whatsappd/src/runtime/client.ts` on `master` disagree, the code wins.
-- `docs/client-stack-defect-ledger.md` spans the whole Client stack and does not
-  reset per PR. Its "Inherited obligation" lines bind later layers.
 - Client message retention is deliberately unbounded, with the reasoning and the
   measurements it waits on recorded in #121. The README states the growth
   plainly rather than going quiet about it.
@@ -184,7 +174,7 @@ machine is lost. `pnpm proof:profile <name>` establishes or resumes one.
 
 ## Resuming in a new session
 
-Read `CONTEXT.md`, this file, the relevant ADRs, and `docs/sdk-capabilities.md`.
+Read `CONTEXT.md`, this file, the relevant ADRs, and `docs/architecture/sdk-capabilities.md`.
 Then run `pnpm state` and open the frontier issue bodies. Do not reconstruct
 blockers from prose in any document, including this one — `## Blocked by` on the
 issue is the edge. `packages/whatsappd/src/runtime/` is real product code; reopening an accepted

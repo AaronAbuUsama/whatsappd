@@ -1,6 +1,6 @@
 <!--
 Pull requests are implementation and review surfaces, never work intake
-(`docs/agents/issue-tracker.md`). If this PR is the first place a problem is
+(`docs/runbooks/development/issue-tracker.md`). If this PR is the first place a problem is
 described, file the issue first.
 -->
 
@@ -15,8 +15,6 @@ Closes #
 <!--
 Why this diff can be understood, tested, reverted, and merged on its own. For a
 stack, name this PR's position, its exact base, and what merges before it.
-`docs/agents/frontier-execution.md` — "The reviewable unit is coherent before
-the PR opens".
 -->
 
 ## Proof
@@ -34,14 +32,6 @@ prevent.
 - [ ] Live `pnpm proof` run (only if this touches the wire; say so if skipped)
 
 Exact head proven: <!-- full SHA the above ran against -->
-
-## Review rounds
-
-<!--
-Round number, and for a repeated defect class the entry it maps to in
-`docs/client-stack-defect-ledger.md`. The four-round ceiling forces a replan,
-not another patch.
--->
 
 ## Changeset
 

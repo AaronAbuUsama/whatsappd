@@ -7,7 +7,7 @@ body:
       value: |
         Every new issue starts at `needs-triage` — the maintainer moves it to
         `ready-for-agent`, `ready-for-human`, or `needs-info` from there. See
-        `docs/agents/triage-labels.md`.
+        `docs/runbooks/development/triage-labels.md`.
 
         **Do not paste real WhatsApp data.** Phone numbers, message text, and
         credential files identify people who did not file this issue. Redact

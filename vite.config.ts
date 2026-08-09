@@ -102,7 +102,7 @@ export default defineConfig({
         // cover; a line limit there would push tests into being fewer and
         // vaguer. The `_expect.ts` helper keeps its leading underscore, which
         // is how it stays outside the `*.test.ts` glob.
-        files: ["tests/**"],
+        files: ["packages/*/tests/**", "proofs/**", "smoke/**", "tooling/**"],
         rules: {
           "max-lines": "off",
           complexity: "off",

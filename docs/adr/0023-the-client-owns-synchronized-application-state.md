@@ -5,7 +5,7 @@ status: accepted
 > Amended by #106's design decision of 2026-08-03: the opened-conversation
 > controller returned by `chats.open(chatId)` is retired unbuilt. Four
 > independent designs were produced for it; three concluded the handle was what
-> made `docs/issue-71-postmortem.md` §2's retired per-`open()` state _typeable_,
+> made the retired per-`open()` state and private watcher list _typeable_,
 > and the fourth — briefed to defend it — agreed. Message state is now a fifth
 > namespace read by chat id, with no handle, no `open()` and no per-chat
 > `close()`. Everything else below stands: the Client still owns hydration,

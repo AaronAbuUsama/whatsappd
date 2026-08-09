@@ -87,8 +87,8 @@ job — letting a transition address the affected chat by key rather than by
 scanning open conversations, which is how notification came to happen inside an
 iteration in the retired implementations — is done by the buffer being keyed
 state, and needs no controller. Its other effect was to create a per-`open()`
-call scope, which is exactly where `docs/issue-71-postmortem.md` §2's retired
-design puts conversation state and its private watcher list. With no `open()`
+call scope, which is exactly where the retired design puts conversation state
+and its private watcher list. With no `open()`
 there is no such scope, so that design stops being the cheaper path and becomes
 an unavailable one.
 

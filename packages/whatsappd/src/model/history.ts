@@ -28,7 +28,7 @@ export interface HistoryContact {
  *   appends).
  *
  * Measured slice depths, observed response rates, and device caveats live in
- * `docs/history-semantics.md`.
+ * `docs/architecture/history-semantics.md`.
  */
 export type ConversationSyncSource =
   | "initial_bootstrap"

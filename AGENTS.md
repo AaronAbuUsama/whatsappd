@@ -3,17 +3,17 @@
 ### Issue tracker
 
 Issues are tracked in GitHub Issues. Pull requests are not a triage request
-surface. See `docs/agents/issue-tracker.md`.
+surface. See `docs/runbooks/development/issue-tracker.md`.
 
 ### Triage labels
 
 Use the canonical `needs-triage`, `needs-info`, `ready-for-agent`,
-`ready-for-human`, and `wontfix` labels. See `docs/agents/triage-labels.md`.
+`ready-for-human`, and `wontfix` labels. See `docs/runbooks/development/triage-labels.md`.
 
 ### Domain docs
 
 This is a single-context repository. Read `CONTEXT.md` and relevant decisions
-under `docs/adr/` when present. See `docs/agents/domain.md`.
+under `docs/adr/` when present. See `docs/runbooks/development/domain.md`.
 
 ### Execution state
 
@@ -35,13 +35,6 @@ acting against the disposition is how a 30-second reconnect becomes a QR scan.
 Two of them, resumable with no human, holding real conversations with real
 people. Before writing anything that sends, reads their databases, or logs
 anything derived from them, read
-[`docs/runbooks/real-account-testing.md`](docs/runbooks/real-account-testing.md).
+[`docs/runbooks/development/real-account-testing.md`](docs/runbooks/development/real-account-testing.md).
 Sends are restricted to an allowlist; a message to the wrong chat id reaches a
 stranger from the owner's own number and cannot be recalled.
-
-### Unattended frontier execution
-
-When asked to execute the issue DAG autonomously, follow
-`docs/agents/frontier-execution.md`. The durable GitHub graph, independent
-review loop, four-round ceiling, proof gate, and merge-frontier receipt are
-mandatory.
