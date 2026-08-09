@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "issue": 108,
+  "tier": "P2",
+  "packedVersion": "0.2.2",
+  "firstProcessId": 80772,
+  "secondProcessId": 80777,
+  "submissionProcessId": 80727,
+  "durableStateHash": "ab4e7dd65f516e763e0200b8c6f89bafaea451bb5442e4f5c9ba648c4f562065",
+  "counts": {
+    "chats": 2,
+    "contacts": 1,
+    "groups": 1,
+    "messages": 30
+  },
+  "noLiveStateReconstructed": {
+    "connection": true,
+    "identity": true,
+    "presence": true
+  },
+  "operationProof": {
+    "idempotencyKey": "packed-outbound",
+    "status": "succeeded",
+    "acknowledged": true,
+    "revision": 4,
+    "writeExecutions": 1,
+    "resumedAfterProcessReplacement": true,
+    "reconstructedAfterExecution": true
+  },
+  "gitHead": "7da0b9a66ed6477695e2b6e294cb66810843c82f"
+}

@@ -18,6 +18,7 @@ import type { RuntimeMirrorReader, WhatsAppSnapshot } from "../src/runtime/contr
 import { createRuntimeMirrorReader } from "../src/runtime/runtime.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
+import { readMedia, writeMedia } from "./media-store-helpers.ts";
 
 const ACCOUNT = "personal";
 const CHAT = "person@s.whatsapp.net";
@@ -398,7 +399,7 @@ test("new libSQL, file media, Runtime, and Client instances reconstruct image an
       }
       assert.equal(message.media.state, "stored");
       assert.deepEqual(
-        await replacementMedia.read({ accountId: ACCOUNT, ref: message.media.ref }),
+        await readMedia(replacementMedia, { accountId: ACCOUNT, ref: message.media.ref }),
         message.kind === "image" ? imageBytes : voiceBytes,
       );
     }
@@ -819,9 +820,9 @@ test("a failed SQL record write rolls back source, projection, and revision toge
       BEFORE INSERT ON wa_messages WHEN NEW.message_id = 'fail'
       BEGIN SELECT RAISE(ABORT, 'injected record failure'); END`);
     const bytes = Uint8Array.from([9, 8, 7, 6]);
-    const orphan = await media.put({
+    const orphan = await writeMedia(media, {
       accountId: ACCOUNT,
-      message: { id: "fail", chatId: CHAT, fromMe: false },
+      owner: { type: "message", message: { id: "fail", chatId: CHAT, fromMe: false } },
       kind: "image",
       bytes,
       mimetype: "image/png",
@@ -863,7 +864,7 @@ test("a failed SQL record write rolls back source, projection, and revision toge
     expect(await backend.data.snapshot(ACCOUNT)).toEqual(beforeSnapshot);
     expect(await backend.data.accepted(ACCOUNT, 0)).toEqual(beforeSource);
     expect(await backend.data.messages(ACCOUNT, CHAT)).toEqual(beforePage);
-    assert.deepEqual(await media.read({ accountId: ACCOUNT, ref: orphan.ref }), bytes);
+    assert.deepEqual(await readMedia(media, { accountId: ACCOUNT, ref: orphan.ref }), bytes);
 
     const state = await oracle.execute({
       sql: "SELECT revision, source_seq FROM wa_accounts WHERE account_id = ?",

@@ -23,6 +23,7 @@ import {
   memoryDataStore,
   memoryLeaseStore,
   memoryMediaStore,
+  memoryOperationStore,
 } from "../src/runtime/memory.ts";
 import {
   createRuntimeMirrorReader,
@@ -34,6 +35,7 @@ import type { InboundMessage } from "../src/model/message.ts";
 import type { PresenceUpdate } from "../src/model/presence.ts";
 import { SubscriptionHandlerError } from "../src/subscription.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+import { readMedia } from "./media-store-helpers.ts";
 
 const PERSON = "person@s.whatsapp.net";
 const ROOM = "room@g.us";
@@ -888,7 +890,7 @@ test("an image is stored before one accepted state reaches the Client, page, and
   assert.equal(message.media.state, "stored");
   assert.equal(message.media.byteLength, bytes.byteLength);
   assert.deepEqual(
-    await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+    await readMedia(backend.media, { accountId: "personal", ref: message.media.ref }),
     Uint8Array.from(bytes),
   );
 
@@ -956,7 +958,7 @@ test("a voice note keeps its original audio bytes without a transcription depend
   assert.equal(message.media.state, "stored");
   assert.equal(message.media.ptt, true);
   assert.deepEqual(
-    await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+    await readMedia(backend.media, { accountId: "personal", ref: message.media.ref }),
     Uint8Array.from(bytes),
   );
 
@@ -985,7 +987,7 @@ test("video, document, and sticker bytes use the same durable media contract", a
     assert.equal(message?.kind, kind);
     assert.equal(message.media.state, "stored");
     assert.deepEqual(
-      await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+      await readMedia(backend.media, { accountId: "personal", ref: message.media.ref }),
       Uint8Array.from(bytes),
     );
   }
@@ -1188,6 +1190,7 @@ test("two accounts remain isolated in one backend", async () => {
     data,
     leases,
     media: memoryMediaStore(),
+    operations: memoryOperationStore(),
   });
   const alice = lane("alice", { backend: shared() });
   const bob = lane("bob", { backend: shared() });
@@ -1548,7 +1551,7 @@ test("a media edit captures bytes and replaces the Client-visible durable record
   assert.equal(message?.kind, "image");
   assert.equal(message.media.state, "stored");
   assert.deepEqual(
-    await backend.media.read({ accountId: "personal", ref: message.media.ref }),
+    await readMedia(backend.media, { accountId: "personal", ref: message.media.ref }),
     Uint8Array.from(Buffer.from("edited-image")),
   );
 
@@ -1560,11 +1563,13 @@ test("typed download and store failures reach the Client while later messages co
   const backend: WhatsAppBackend = {
     ...memoryBackend(),
     media: {
-      async put(input) {
-        if (input.message.id === "store-failed") throw new Error("disk unavailable");
-        return stored.put(input);
+      ...stored,
+      async write(input) {
+        if (input.owner.type === "message" && input.owner.message.id === "store-failed")
+          throw new Error("disk unavailable");
+        return stored.write(input);
       },
-      read: (input) => stored.read(input),
+      open: (input) => stored.open(input),
     },
   };
   const { driver, runtime, client } = lane("personal", { backend });
@@ -1640,11 +1645,11 @@ test("repeated media reuses its ref while changed edit bytes preserve the old ob
   assert.equal(edited.media.state, "stored");
   assert.notEqual(edited.media.ref, firstRef);
   assert.deepEqual(
-    await backend.media.read({ accountId: "personal", ref: firstRef }),
+    await readMedia(backend.media, { accountId: "personal", ref: firstRef }),
     Uint8Array.from(firstBytes),
   );
   assert.deepEqual(
-    await backend.media.read({ accountId: "personal", ref: edited.media.ref }),
+    await readMedia(backend.media, { accountId: "personal", ref: edited.media.ref }),
     Uint8Array.from(editedBytes),
   );
 
@@ -1658,12 +1663,13 @@ test("failed structured acceptance publishes nothing and leaves the canonical me
   const backend: WhatsAppBackend = {
     ...memoryBackend(),
     media: {
-      async put(input) {
-        const result = await media.put(input);
+      ...media,
+      async write(input) {
+        const result = await media.write(input);
         storedRef = result.ref;
         return result;
       },
-      read: (input) => media.read(input),
+      open: (input) => media.open(input),
     },
     data: {
       ...data,
@@ -1690,7 +1696,7 @@ test("failed structured acceptance publishes nothing and leaves the canonical me
   expect((await data.messages("personal", PERSON)).messages).toEqual([]);
   assert.ok(storedRef);
   assert.deepEqual(
-    await media.read({ accountId: "personal", ref: storedRef }),
+    await readMedia(media, { accountId: "personal", ref: storedRef }),
     Uint8Array.from(bytes),
   );
 
@@ -1713,6 +1719,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
     credentials: memoryStore(),
     leases: fixedLeaseStore(1),
     media,
+    operations: memoryOperationStore(),
     data: {
       ...data,
       async accept(accountId, events, fencingToken) {
@@ -1728,6 +1735,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
     credentials: memoryStore(),
     leases: fixedLeaseStore(2),
     media,
+    operations: memoryOperationStore(),
     data,
   };
   const old = lane("personal", { backend: oldBackend });
@@ -1747,7 +1755,7 @@ test("a stale holder cannot remove media already accepted by its replacement", a
   releaseOldAccept();
   await assert.rejects(staleWrite, SubscriptionHandlerError);
   assert.deepEqual(
-    await media.read({ accountId: "personal", ref: accepted.media.ref }),
+    await readMedia(media, { accountId: "personal", ref: accepted.media.ref }),
     Uint8Array.from(bytes),
   );
   assert.equal((await data.accepted("personal", 0)).length, 1);

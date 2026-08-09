@@ -117,19 +117,9 @@ console.log(client.chats.list());
 console.log(client.contacts.list());
 console.log(client.groups.list());
 
-const chat = client.chats.list()[0];
-let unsubscribe = () => {};
-if (chat) {
-  const render = () => console.log(client.messages.get(chat.chatId));
-  unsubscribe = client.messages.subscribe(render);
-  render();
-  client.messages.older(chat.chatId); // newest saved page; call again to go further back
-}
-
 // Keep the local worker alive until Ctrl-C, then close what the application owns.
 await new Promise<void>((resolve) => process.once("SIGINT", resolve));
 
-unsubscribe();
 await client.close();
 await runtime.stop();
 await backend.close();
@@ -146,9 +136,23 @@ mirror. It never contacts WhatsApp. `"exhausted"` therefore means “nothing old
 is saved locally,” not “the phone has no older history.” Asking the linked phone
 for history is a separate operation and is not hidden behind paging.
 
-The friendly Client does not yet expose pairing/unlink, sends and commands,
-React/OpenTUI bindings, or automatic history retrieval. Those land in later
-0.3/0.4 work; the lower-level Session remains available in the meantime.
+The Client exposes durable send, reaction, edit, revoke, mark-read, and
+phone-history commands under `client.messages`. Non-media commands return an
+operation receipt after submission. Attachment commands first finish publishing
+the complete byte stream to the Media Store, then submit and return their
+operation receipt. `client.operations.wait(id)` awaits its terminal outcome,
+and `acknowledge(id)` dismisses a terminal failure from optimistic UI state.
+A successful send remains optimistic until its authoritative message arrives,
+even if its receipt is acknowledged. A supplied
+`idempotencyKey` makes an application retry resolve to the same operation when
+its normalized input is identical and reject when it is not. If omitted, a key
+is generated and returned on the receipt; two calls without a shared key are
+two commands.
+
+Typing is deliberately live rather than durable:
+`await client.messages.setTyping(chatId, true)` reaches only the current
+Session and is never replayed after a restart. Pairing/unlink, React/OpenTUI
+bindings, and automatic history policy remain later work.
 
 A local `file:` database is opened in WAL, so `whatsapp.db-wal` and
 `whatsapp.db-shm` sit beside it — move, copy, or delete the three together. WAL
@@ -162,15 +166,24 @@ Images, videos, audio and voice notes, documents, and stickers are downloaded
 while the live WhatsApp handle is usable. `fileMediaStore()` writes their bytes
 as private immutable local objects; libSQL stores only the message's opaque
 media reference and its `stored` or typed `failed` state. Read bytes explicitly
-with `backend.media.read({ accountId, ref })`. The package does not invent a
-filesystem URL or browser delivery policy.
+with `await backend.media.open({ accountId, ref })`, which returns an
+`AsyncIterable<Uint8Array>` or `null`. The package does not invent a filesystem
+URL or browser delivery policy.
 
-The Client merges saved pages and live changes for you, per chat, and what it retains grows
-with what the application **read**: reading a chat creates its entry, and from
-that moment that chat accumulates its live traffic whether or not anything pages
-it again. A chat never read retains nothing, and a live message for it is
-dropped rather than buffered. There is no eviction policy yet, so a long-lived
-process that reads every chat retains every chat.
+Outbound attachments reach the injected media store before their durable
+operation is queued. A Buffer is snapshotted once at method invocation, then
+published in bounded chunks; this protects the durable value from caller
+mutation but temporarily holds one owned copy alongside the caller's Buffer.
+URL and `AsyncIterable<Uint8Array>` inputs stream incrementally without a full
+Client-side copy. A voice note (`ptt: true`) must already be Ogg Opus mono;
+whatsappd validates that bounded header but does not transcode arbitrary audio.
+
+The Client merges saved pages and live changes for you, per chat. The first read
+or durable send creates that chat's retained entry; from then on it accumulates
+live traffic whether or not anything pages it again. A chat neither read nor
+sent to retains nothing, and its live messages are dropped rather than buffered.
+There is no eviction policy yet, so a long-lived process that reads or sends to
+every chat retains every chat.
 
 Reconciling a stored page against the live stream leaves one visible transient.
 A page read returns the mirror's state at the moment it ran, which can be ahead
@@ -187,10 +200,11 @@ carries no messages. The chat empties rather than correcting in place, and the
 application pages it again — which is why a view that has gone empty is a signal
 to re-page rather than a chat with nothing in it.
 
-Credentials, WhatsApp data, the account lease, and media bytes are four separate
-capabilities. `memoryBackend()` groups in-memory implementations of all four;
-each one — `memoryDataStore()`, `memoryLeaseStore()`, `memoryMediaStore()` — can
-be replaced individually. Starting a second runtime for an account another one
+Credentials, WhatsApp data, durable operations, the account lease, and media
+bytes are five separate capabilities. `memoryBackend()` groups in-memory
+implementations of all five; each one — `memoryDataStore()`,
+`memoryOperationStore()`, `memoryLeaseStore()`, `memoryMediaStore()` — can be
+replaced individually. Starting a second runtime for an account another one
 holds rejects with `AccountAlreadyClaimedError` before any socket opens.
 
 The Current Mirror projects text and durable media messages, the chats they

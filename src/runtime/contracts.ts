@@ -28,6 +28,7 @@ import type {
 import type { MessageRef } from "../model/outbound.ts";
 import type { CredentialStore } from "../ports.ts";
 import type { WhatsAppEvent } from "../subscription.ts";
+import type { WhatsAppOperationStore } from "./operations.ts";
 
 /**
  * One durable timestamp derived from an ephemeral signal (ADR-0020).
@@ -557,17 +558,35 @@ export interface AccountLeaseStore {
   release(lease: AccountLease): Promise<boolean>;
 }
 
-/** Durable media bytes, keyed idempotently by account, message, kind, and content (ADR-0015). */
+export type MediaOwner =
+  | { readonly type: "message"; readonly message: MessageRef }
+  | { readonly type: "operation"; readonly operationId: string };
+
+/**
+ * Durable immutable media, keyed idempotently by account, owner, kind, and content.
+ *
+ * @remarks
+ * `write` consumes its source once with backpressure and must own each chunk
+ * before requesting the next one. It resolves only after the complete object is
+ * durably published. Failure before publication exposes no canonical object;
+ * uncertainty after immutable publication preserves the object because another
+ * writer may already reference it. `open` returns a fresh byte stream for a
+ * published ref, or `null` when that account cannot read it. See ADR-0015 and
+ * ADR-0032.
+ */
 export interface MediaStore {
-  put(input: {
-    accountId: string;
-    message: MessageRef;
-    kind: "image" | "video" | "audio" | "document" | "sticker";
-    bytes: Uint8Array;
-    mimetype?: string;
+  write(input: {
+    readonly accountId: string;
+    readonly owner: MediaOwner;
+    readonly kind: "image" | "video" | "audio" | "document" | "sticker";
+    readonly source: AsyncIterable<Uint8Array>;
+    readonly mimetype?: string;
   }): Promise<{ ref: string; byteLength: number }>;
 
-  read(input: { accountId: string; ref: string }): Promise<Uint8Array | null>;
+  open(input: {
+    readonly accountId: string;
+    readonly ref: string;
+  }): Promise<AsyncIterable<Uint8Array> | null>;
 }
 
 /**
@@ -584,6 +603,7 @@ export interface WhatsAppBackend {
   readonly data: WhatsAppDataStore;
   readonly leases: AccountLeaseStore;
   readonly media: MediaStore;
+  readonly operations: WhatsAppOperationStore;
 }
 
 /** Thrown when a second runtime tries to open an account another one holds. */

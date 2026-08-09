@@ -4,7 +4,7 @@
  */
 import type { InboundMessage } from "./message.ts";
 
-/** Bytes to send: an in-memory buffer, a URL Baileys fetches, or a byte stream. */
+/** Bytes to send: an in-memory Buffer, a fetched URL, or a caller-driven byte stream. */
 export type BinaryInput = Buffer | { url: string } | { stream: AsyncIterable<Uint8Array> };
 
 /**
@@ -24,7 +24,7 @@ export type Outbound =
   | { text: string }
   | { image: BinaryInput; caption?: string }
   | { video: BinaryInput; caption?: string; gifPlayback?: boolean }
-  /** `ptt: true` sends a voice note (mimetype defaults to ogg/opus). */
+  /** `ptt: true` requests voice-note treatment; callers must supply compatible bytes. */
   | { audio: BinaryInput; ptt?: boolean; seconds?: number; mimetype?: string }
   | { document: BinaryInput; fileName: string; mimetype: string; caption?: string }
   | { sticker: BinaryInput }

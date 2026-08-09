@@ -19,6 +19,7 @@
  *
  * @packageDocumentation
  */
+import type { MessageRef } from "../model/outbound.ts";
 import type { PresenceKind } from "../model/presence.ts";
 import type { Status, WaIdentity } from "../model/status.ts";
 import type { Unsubscribe } from "../subscription.ts";
@@ -28,20 +29,36 @@ import type {
   ContactRecord,
   GroupRecord,
   MessageRecord,
-  StoredMessageCursor,
-  StoredMessagePage,
   WhatsAppDurableFrame,
-  WhatsAppLiveFrame,
-  WhatsAppPatch,
-  WhatsAppSnapshot,
 } from "./contracts.ts";
+import type {
+  WhatsAppOperation,
+  WhatsAppOperationInput,
+  WhatsAppOperationState,
+} from "./operations.ts";
+import { createClientOperationApis, type OptimisticMessage } from "./client-operations.ts";
+import type { ClientSubscribeOptions, WhatsAppClient } from "./client-api.ts";
 import {
-  clientSourceFor,
-  fanout,
-  surface,
-  type ClientClaim,
-  type WhatsAppRuntime,
-} from "./runtime.ts";
+  ENDED,
+  NAMESPACES,
+  STARTED,
+  type Derivation,
+  type Namespace,
+  type Observation,
+  type PageLanding,
+  type Registration,
+  type Retained,
+  type Tx,
+} from "./client-internals.ts";
+
+export type {
+  ClientOperationOptions,
+  ClientSendOptions,
+  OptimisticMessage,
+  TerminalWhatsAppOperation,
+} from "./client-operations.ts";
+export type { ClientNamespace, ClientSubscribeOptions, WhatsAppClient } from "./client-api.ts";
+import { clientSourceFor, fanout, surface, type WhatsAppRuntime } from "./runtime.ts";
 
 /**
  * Order two WhatsApp identifiers by code unit.
@@ -84,13 +101,6 @@ function freeze<T>(value: T): T {
  */
 const own = <T>(value: T): T => freeze(structuredClone(value));
 
-/** One retained live observation and the claim that made it trustworthy. */
-interface Observation<T> {
-  readonly value: T;
-  readonly expiresAt: number;
-  readonly claim: ClientClaim;
-}
-
 /**
  * Everything outside committed state that a read derives an answer from.
  *
@@ -107,13 +117,6 @@ interface Observation<T> {
  * the Runtime or close the Client, both permitted by ADR-0029 rule 1, and both
  * change what a later listener in the same fanout would otherwise read.
  */
-interface Derivation {
-  readonly at: number;
-  readonly claim: ClientClaim | undefined;
-  readonly identity: WaIdentity | undefined;
-  /** Whether the Client is still following, and so still has live truth. */
-  readonly following: boolean;
-}
 
 /**
  * Whether a retained observation is still something to report.
@@ -145,20 +148,6 @@ function current<T>(observation: Observation<T> | undefined, from: Derivation): 
 }
 
 /**
- * The Client's domain namespaces — and the unit a transition marks affected.
- *
- * @remarks
- * The list defines the type, not the other way round. Annotating the array as
- * `readonly Namespace[]` would let a wider union type-check against a shorter
- * array, and the shorter array is what `replace()` iterates to mark everything
- * a fresh snapshot affected — so a namespace added to the union alone would
- * silently stop recovering after a dropped revision. Derived, it cannot happen.
- */
-const NAMESPACES = ["account", "chats", "contacts", "groups", "messages"] as const;
-
-type Namespace = (typeof NAMESPACES)[number];
-
-/**
  * One chat's retained messages, as the Client holds them.
  *
  * @remarks
@@ -180,6 +169,8 @@ export interface ClientChatMessages {
    * last row in store order — would not be the last row in this order.
    */
   readonly messages: readonly MessageRecord[];
+  /** Durable sends not yet replaced or acknowledged in authoritative state. */
+  readonly outgoing: readonly OptimisticMessage[];
   /**
    * Whether the local mirror can still go further back.
    *
@@ -190,133 +181,6 @@ export interface ClientChatMessages {
   readonly older: "stored" | "loading" | "exhausted";
   /** The last read that failed. Cleared by the next success. */
   readonly error?: unknown;
-}
-
-/**
- * One chat's retained messages as this Client actually stores them.
- *
- * @remarks
- * At module scope so {@link Tx} can name it, and because the entry object's
- * *identity* is what orders a page read against a revision gap: `replace()`
- * clears the map, so a page taken at the pre-gap revision finds a different
- * object — or none — and commits nothing. A number would have to say which
- * revision the page belonged to, and `StoredMessagePage.revision` is the
- * mirror's revision rather than a statement about the rows it returned
- * (`contracts.ts:337-343`).
- */
-interface Retained {
-  readonly chatId: string;
-  /** Keyed by messageId. Every value has been through {@link own}. */
-  readonly byId: Map<string, MessageRecord>;
-  /** Where the next older page starts. Absent before the first read AND at the end. */
-  before?: StoredMessageCursor;
-  /** Which of those two `before === undefined` means, plus whether a read is running. */
-  older: "stored" | "loading" | "exhausted";
-  /**
-   * The last read that failed, boxed and stored BY IDENTITY.
-   *
-   * @remarks
-   * Never `own()`ed. Ledger class C4 proves `structuredClone` throws
-   * `DOMException` on an error carrying a function, and that throw would happen
-   * inside `commit` — costing the whole transition for a failure already
-   * observed. Boxed rather than held bare, and spread into the view exactly as
-   * `closure` is, so a failure whose cause *is* `undefined` still reports the
-   * key.
-   */
-  failure?: { readonly error: unknown };
-  /**
-   * This chat's frozen view, dropped by the writer that changed THIS chat.
-   *
-   * @remarks
-   * Per chat rather than through `touch("messages")`, which is namespace-wide:
-   * clearing there would drop every chat's view on any messages transition and
-   * defeat the referential stability a `useSyncExternalStore` binding needs.
-   */
-  view?: ClientChatMessages;
-}
-
-/**
- * One subscription — a record, never the callback itself.
- *
- * @remarks
- * Registering one function twice owes two deliveries, and unsubscribing then
- * resubscribing it during a fanout owes both effects. A `Set` keyed by the
- * callback can express neither (ADR-0013).
- *
- * Every namespace's subscriptions share one set, tagged rather than separated,
- * and that is what makes rules 2 and 3 hold *between* namespaces as well as
- * within one. A transition commonly affects several — one conversation-sync
- * batch reaches chats, contacts and groups — and with a set each, membership
- * would be copied once per namespace: a listener reached early could then add a
- * listener to a namespace the same delivery had not got to yet, and that
- * listener would run inside the transition it was supposed to start after. One
- * set makes the copy delivery-wide by construction instead of by remembering to
- * take it in the right place.
- */
-interface Registration {
-  readonly namespace: Namespace;
-  readonly notify: () => void;
-}
-
-/**
- * What became of one chat's page read.
- *
- * @remarks
- * Every way a read can end is a member here, so ending one is a *total*
- * function rather than four call sites each remembering to leave the entry
- * somewhere sensible. Two defects came from it not being one: a `close()`
- * mid-read and a throw while applying a page each left a chat saying
- * `"loading"` for ever, describing a read nothing could finish and `older()`
- * would not restart.
- */
-type PageLanding =
-  | { readonly started: true; readonly ended?: undefined }
-  | { readonly ended: true; readonly started?: undefined }
-  | { readonly page: StoredMessagePage; readonly started?: undefined; readonly ended?: undefined }
-  | { readonly error: unknown; readonly started?: undefined; readonly ended?: undefined };
-
-/** A read has begun. */
-const STARTED: PageLanding = Object.freeze({ started: true });
-/** A read is over with no result, because this Client stopped following. */
-const ENDED: PageLanding = Object.freeze({ ended: true });
-
-/** How a transition mutates Client state. The only way anything here changes. */
-interface Tx {
-  /** Replace all durable state with a Snapshot Window's. */
-  replace(snapshot: WhatsAppSnapshot): void;
-  /** Apply one contiguous change: upserts, deletes, and the aliases between. */
-  apply(patch: WhatsAppPatch): void;
-  /** Retain one live observation under the claim it was made under. */
-  observe(frame: WhatsAppLiveFrame, claim: ClientClaim): void;
-  /**
-   * Move one chat's page read to whatever became of it.
-   *
-   * @remarks
-   * One member taking a total {@link PageLanding} rather than several, so a
-   * chat's paging state moves only here, and every path re-checks that the
-   * entry it was started against is still the entry the map holds.
-   */
-  page(entry: Retained, landing: PageLanding): void;
-  /**
-   * Stop following, and end every page read in flight with it.
-   *
-   * @remarks
-   * One writer rather than two lines to line up at each site, because they are
-   * one fact: once nothing follows, no page read can land, so a chat left
-   * saying `"loading"` describes a read that will never finish and that
-   * `older()` will not restart. `following = false` on its own is now greppable
-   * and wrong — class C10 applied rather than restated.
-   *
-   * Inside `commit` rather than beside it. Ending a read changes what
-   * `messages.get()` reports, so a reader that only re-reads when notified —
-   * `useSyncExternalStore`, the binding this namespace is shaped for — has to
-   * be told. Writing it beside `commit` corrected the value and delivered
-   * nothing, which left the spinner it exists to clear on exactly the consumers
-   * that cannot poll.
-   */
-  stopped(): void;
-  /** Record that the Runtime has stopped consuming this account. */
-  close(frame: Extract<WhatsAppDurableFrame, { type: "closed" }>): void;
 }
 
 /** One account's own state: what is durable, what is live, and what it links. */
@@ -370,129 +234,6 @@ export interface ClientAccountState {
   readonly error?: unknown;
 }
 
-/** Options every Client subscription accepts. */
-export interface ClientSubscribeOptions {
-  readonly signal?: AbortSignal;
-}
-
-/**
- * Observe one namespace.
- *
- * @remarks
- * The listener is called after every transition that changed this namespace,
- * with the transition fully committed. It takes no argument deliberately: it
- * reads whatever it needs from the Client, so it can never be handed a value
- * staler than the state a sibling listener would read.
- *
- * The contract is closed, and each clause is a primitive rather than an
- * ordering (ADR-0029):
- *
- * 1. listeners run after the transition is fully committed and may read any
- *    Client state, including re-entrantly;
- * 2. membership is snapshotted before delivery, so subscribing during one takes
- *    effect on the next transition;
- * 3. unsubscribing during a delivery takes effect immediately, including
- *    unsubscribing a *different* listener that has not been reached yet;
- * 4. a throwing listener is surfaced asynchronously, remains subscribed, and
- *    affects neither Client state nor its siblings;
- * 5. every listener in one delivery derives live state from one instant, so a
- *    deadline crossing mid-fanout cannot split one transition into two observed
- *    values.
- */
-export interface ClientNamespace {
-  subscribe(listener: () => void, options?: ClientSubscribeOptions): Unsubscribe;
-}
-
-/** One account's synchronized application state. */
-export interface WhatsAppClient {
-  readonly account: ClientNamespace & {
-    get(): ClientAccountState;
-  };
-  readonly chats: ClientNamespace & {
-    /** Newest activity first, then by identifier. */
-    list(): readonly ChatRecord[];
-  };
-  readonly contacts: ClientNamespace & {
-    /** By identifier. */
-    list(): readonly ContactRecord[];
-    /** The contact a native PN or LID address belongs to (ADR-0022). */
-    resolve(nativeId: string): ContactRecord | undefined;
-    /**
-     * What an address is doing right now, while the observation is current.
-     *
-     * @remarks
-     * Never `"unavailable"`: that is not an observation that decays but a
-     * statement that the address is gone, so its subject is removed at once.
-     */
-    presence(nativeId: string): PresenceKind | undefined;
-  };
-  readonly groups: ClientNamespace & {
-    /** By identifier. */
-    list(): readonly GroupRecord[];
-  };
-  /**
-   * One chat's saved messages, its live upserts, and how far back it can go.
-   *
-   * @remarks
-   * Nothing here is opened, owned or closed: a chat is read by id and extended
-   * backwards by id. The subscription is namespace-wide, like every other, so a
-   * listener watching one chat wakes when any chat changes — and re-reads an
-   * identical frozen view, which a React consumer bails out of without
-   * rendering.
-   */
-  readonly messages: ClientNamespace & {
-    /**
-     * What is held for one chat. Never touches storage.
-     *
-     * @remarks
-     * Creates an empty entry when none exists. That is a mutation on a read
-     * path, which is unusual here and permitted because it marks no namespace,
-     * notifies nobody and cannot split a delivery — and required, because a
-     * `useSyncExternalStore` binding on a chat nobody has paged must be handed
-     * a stable object or it re-renders for ever.
-     *
-     * From that moment the chat accumulates its live traffic, so what is
-     * retained grows with the chats an application has read rather than with
-     * the account's traffic. An eviction policy is #121.
-     */
-    get(chatId: string): ClientChatMessages;
-    /**
-     * Read one page further back than what is held.
-     *
-     * @remarks
-     * With nothing held that is the newest page, so this is also how a chat is
-     * first filled. Returns nothing: the result lands as an ordinary transition
-     * and the caller re-reads, exactly as {@link ClientNamespace.subscribe}
-     * already works. Single-flight per chat, and after a failure calling it
-     * again *is* the retry. The page size is the store default and is not a
-     * parameter — an application wanting a hundred calls this four times.
-     *
-     * Re-paging from inside a `messages` subscriber is a real hazard rather
-     * than a style preference: a failed read returns `older` to `"stored"` and
-     * wakes every listener, so "empty and `stored` implies page again" wired to
-     * the notification that a read just failed retries without bound. Page from
-     * a render or an effect, or track `error` and back off.
-     *
-     * A no-op once this Client has stopped following, which covers both
-     * {@link WhatsAppClient.close} and a durable-follow failure. That is
-     * **not** the same condition as `account.get().closed`: a deliberate
-     * Runtime `closed` frame leaves this Client following, so paging still
-     * works against storage after Runtime closure — correct under ADR-0010,
-     * because a stored page never contacts WhatsApp.
-     */
-    older(chatId: string): void;
-  };
-  /**
-   * Release this Client's subscriptions and stop following the Runtime.
-   *
-   * @remarks
-   * Idempotent, and joins. It does not stop an application-owned Runtime or
-   * close an application-owned Backend: each resource is closed by the layer
-   * that created it (ADR-0023).
-   */
-  close(): Promise<void>;
-}
-
 /**
  * Create one account's Client over the Runtime that owns it.
  *
@@ -528,6 +269,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   const groups = new Map<string, GroupRecord>();
   /** Each chat an application has read, and what is held for it. */
   const retained = new Map<string, Retained>();
+  const operations = new Map<string, WhatsAppOperation>();
   let connection: Observation<Status> | undefined;
   let closure: { readonly error?: unknown } | undefined;
 
@@ -724,6 +466,36 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     return fresh;
   };
 
+  const outgoingFor = (entry: Retained): readonly OptimisticMessage[] =>
+    Object.freeze(
+      [...operations.values()]
+        .filter(
+          (operation) =>
+            operation.input.type === "send" &&
+            operation.input.chatId === entry.chatId &&
+            !(
+              operation.acknowledgedAt !== undefined &&
+              (operation.state.status === "failed" || operation.state.status === "outcome_unknown")
+            ) &&
+            !(
+              operation.state.status === "succeeded" &&
+              typeof operation.state.result === "object" &&
+              operation.state.result !== null &&
+              "id" in operation.state.result &&
+              entry.byId.has(operation.state.result.id)
+            ),
+        )
+        .sort((a, b) => a.submittedAt - b.submittedAt || compareId(a.id, b.id))
+        .map((operation) =>
+          Object.freeze({
+            operationId: operation.id,
+            idempotencyKey: operation.idempotencyKey,
+            content: (operation.input as Extract<WhatsAppOperationInput, { type: "send" }>).content,
+            state: operation.state as WhatsAppOperationState<MessageRef>,
+          }),
+        ),
+    );
+
   /**
    * One chat's frozen view, rebuilt only when that chat changed.
    *
@@ -741,6 +513,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
           (a, b) => b.timestamp - a.timestamp || compareId(b.messageId, a.messageId),
         ),
       ),
+      outgoing: outgoingFor(entry),
       older: entry.older,
       // Spread rather than tested, so a read that failed with `undefined` still
       // reports the key — the same shape `closure` uses below.
@@ -758,6 +531,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
    */
   function commit(mutate: (tx: Tx) => void): void {
     const touched = new Set<Namespace>();
+    const changedOperations = new Set<string>();
     const touch = (namespace: Namespace): void => {
       touched.add(namespace);
       // Keyed rather than a branch per namespace, so adding one cannot leave
@@ -782,6 +556,16 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
      * being a mistake that can be made rather than one that is discouraged.
      */
     const put = {
+      operation: (operation: WhatsAppOperation): void => {
+        const held = own(operation);
+        operations.set(held.id, held);
+        changedOperations.add(held.id);
+        if (held.input.type === "send") {
+          const entry = entryFor(held.input.chatId);
+          entry.view = undefined;
+          touch("messages");
+        }
+      },
       account: (account: AccountRecord): void => {
         record = own(account);
         touch("account");
@@ -937,6 +721,12 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // from a revision this Client no longer has, behind a cursor pointing
       // into the middle of a mirror it no longer holds the front of.
       retained.clear();
+      for (const operation of operations.values())
+        if (
+          operation.input.type === "send" &&
+          (operation.acknowledgedAt === undefined || operation.state.status === "succeeded")
+        )
+          entryFor(operation.input.chatId);
       for (const namespace of NAMESPACES) touch(namespace);
     };
 
@@ -1012,6 +802,10 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         });
       },
 
+      operation(operation) {
+        put.operation(operation);
+      },
+
       page(entry, landing) {
         put.page(entry, landing);
       },
@@ -1026,7 +820,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       },
     });
 
-    if (touched.size === 0) return;
+    if (touched.size === 0 && changedOperations.size === 0) return;
     // One derivation basis for the whole delivery, sampled after the transition
     // is closed and restored afterwards, so a read outside any delivery samples
     // afresh as it always would.
@@ -1047,29 +841,57 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // or a listener reached under the first could still add or remove one
       // under the second.
       fanout(listeners, (listener) => {
-        if (touched.has(listener.namespace)) listener.notify();
+        if (
+          (listener.kind === "namespace" && touched.has(listener.namespace)) ||
+          (listener.kind === "operation" && changedOperations.has(listener.operationId))
+        )
+          listener.notify();
       });
     } finally {
       delivery = outer;
     }
   }
 
+  const register = (registration: Registration, options?: ClientSubscribeOptions): Unsubscribe => {
+    const signal = options?.signal;
+    if (signal?.aborted) return () => {};
+    const off = (): void => {
+      listeners.delete(registration);
+      releases.delete(off);
+      signal?.removeEventListener("abort", off);
+    };
+    listeners.add(registration);
+    releases.add(off);
+    signal?.addEventListener("abort", off, { once: true });
+    return off;
+  };
+
   const subscribeTo =
     (namespace: Namespace) =>
-    (listener: () => void, options?: ClientSubscribeOptions): Unsubscribe => {
-      const signal = options?.signal;
-      if (signal?.aborted) return () => {};
-      const registration: Registration = { namespace, notify: listener };
-      const off = (): void => {
-        listeners.delete(registration);
-        releases.delete(off);
-        signal?.removeEventListener("abort", off);
-      };
-      listeners.add(registration);
-      releases.add(off);
-      signal?.addEventListener("abort", off, { once: true });
-      return off;
-    };
+    (listener: () => void, options?: ClientSubscribeOptions): Unsubscribe =>
+      register({ kind: "namespace", namespace, notify: listener }, options);
+
+  const subscribeToOperation = (
+    operationId: string,
+    listener: () => void,
+    options?: ClientSubscribeOptions,
+  ): Unsubscribe => register({ kind: "operation", operationId, notify: listener }, options);
+
+  const retainOperation = (operation: WhatsAppOperation): void => {
+    const current = operations.get(operation.id);
+    if (current && current.revision >= operation.revision) return;
+    commit((tx) => tx.operation(operation));
+  };
+
+  const operationApis = createClientOperationApis({
+    accountId: runtime.accountId,
+    operations: source.operations,
+    media: source.media,
+    setTyping: (chatId, on) => source.setTyping(chatId, on),
+    get: (operationId) => operations.get(operationId),
+    retain: retainOperation,
+    subscribe: subscribeToOperation,
+  });
 
   const client: WhatsAppClient = {
     account: {
@@ -1137,6 +959,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     },
 
     messages: {
+      ...operationApis.messages,
       subscribe: subscribeTo("messages"),
       get: (chatId) => viewOf(entryFor(chatId)),
       older(chatId) {
@@ -1192,6 +1015,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       },
     },
 
+    operations: operationApis.operations,
+
     close: () => stop(),
   };
 
@@ -1201,6 +1026,31 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
 
   const follow = new AbortController();
   const frames = source.frames(follow.signal)[Symbol.asyncIterator]();
+
+  let operationsReady = false;
+  const pendingOperations = new Map<string, WhatsAppOperation>();
+  const offOperationChanges = source.operations.subscribe(runtime.accountId, (operation) => {
+    if (!operationsReady) {
+      const current = pendingOperations.get(operation.id);
+      if (!current || current.revision < operation.revision)
+        pendingOperations.set(operation.id, operation);
+      return;
+    }
+    retainOperation(operation);
+  });
+
+  try {
+    for (const operation of await source.operations.list(runtime.accountId))
+      retainOperation(operation);
+    operationsReady = true;
+    for (const operation of pendingOperations.values()) retainOperation(operation);
+    pendingOperations.clear();
+  } catch (error) {
+    offOperationChanges();
+    offLive();
+    follow.abort();
+    throw error;
+  }
 
   const consume = (frame: WhatsAppDurableFrame): void =>
     commit((tx) => {
@@ -1218,6 +1068,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // its subscription behind.
       follow.abort();
       offLive();
+      offOperationChanges();
       commit((tx) => tx.stopped());
       await pump;
       // Each registration is released rather than the set emptied, so the abort
@@ -1225,6 +1076,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // alone leaves that handler, and the whole closure behind it, attached to
       // a signal that may outlive this Client by a long way.
       for (const release of releases) release();
+      operationApis.close();
       listeners.clear();
     })());
 
@@ -1245,6 +1097,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       commit((tx) => tx.replace(snapshot));
     }
   } catch (error) {
+    offOperationChanges();
     offLive();
     follow.abort();
     throw error;

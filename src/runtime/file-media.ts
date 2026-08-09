@@ -1,9 +1,10 @@
 /** Durable local media bytes, separate from structured database state (ADR-0015). */
 import { randomUUID } from "node:crypto";
-import { chmod, link, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { chmod, link, mkdir, open as openFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { MediaStore } from "./contracts.ts";
-import { immutableMediaRef, mediaAccountDirectory, mediaObjectName } from "./media.ts";
+import { consumeImmutableMedia, mediaAccountDirectory, mediaObjectName } from "./media.ts";
 
 const NAMESPACE = ".whatsappd-media";
 
@@ -11,7 +12,7 @@ const hasCode = (error: unknown, code: string): boolean =>
   error instanceof Error && "code" in error && error.code === code;
 
 async function syncPath(path: string): Promise<void> {
-  const handle = await open(path, "r");
+  const handle = await openFile(path, "r");
   try {
     await handle.sync();
   } finally {
@@ -42,44 +43,72 @@ export interface FileMediaStoreOptions {
 
 export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore {
   const namespace = resolve(directory, NAMESPACE);
+  const paths = (accountId: string, ref: string) => {
+    const objectName = mediaObjectName(ref);
+    if (!objectName) return undefined;
+    const accountDirectory = join(namespace, mediaAccountDirectory(accountId));
+    const objectPath = join(accountDirectory, `${objectName}.bin`);
+    return { accountDirectory, objectName, objectPath };
+  };
 
   return {
-    async put(input) {
-      const bytes = Uint8Array.from(input.bytes);
-      const ref = immutableMediaRef({ ...input, bytes });
-      const objectName = mediaObjectName(ref);
-      if (!objectName) throw new Error("generated an invalid immutable media reference");
+    async write(input) {
       const accountDirectory = join(namespace, mediaAccountDirectory(input.accountId));
-      const objectPath = join(accountDirectory, `${objectName}.bin`);
       await ensurePrivateDirectory(namespace);
       await ensurePrivateDirectory(accountDirectory);
 
-      const temporary = join(accountDirectory, `${objectName}.${randomUUID()}.tmp`);
+      const temporary = join(accountDirectory, `${randomUUID()}.tmp`);
       try {
-        await writeFile(temporary, bytes, { flag: "wx", mode: 0o600, flush: true });
+        const handle = await openFile(temporary, "wx", 0o600);
+        let stored: Awaited<ReturnType<typeof consumeImmutableMedia>>;
+        try {
+          stored = await consumeImmutableMedia({
+            ...input,
+            consume: async (chunk) => {
+              let offset = 0;
+              while (offset < chunk.byteLength) {
+                const { bytesWritten } = await handle.write(chunk, offset);
+                if (bytesWritten === 0) throw new Error("media write made no progress");
+                offset += bytesWritten;
+              }
+            },
+          });
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+
+        const location = paths(input.accountId, stored.ref);
+        if (!location) throw new Error("generated an invalid immutable media reference");
+        const { objectPath } = location;
         try {
           await link(temporary, objectPath);
         } catch (error) {
           if (!hasCode(error, "EEXIST")) throw error;
-          const existing = await readFile(objectPath);
-          if (!existing.equals(Buffer.from(bytes)))
-            throw new Error(`existing immutable media object does not match ${ref}`);
+          const existing = await consumeImmutableMedia({
+            ...input,
+            source: createReadStream(objectPath),
+            consume: () => {},
+          });
+          if (existing.ref !== stored.ref || existing.byteLength !== stored.byteLength)
+            throw new Error(`existing immutable media object does not match ${stored.ref}`);
         }
         await chmod(objectPath, 0o600);
         await syncPath(objectPath);
+        return stored;
       } finally {
         await rm(temporary, { force: true });
         await syncPath(accountDirectory);
       }
-      return { ref, byteLength: bytes.byteLength };
     },
 
-    async read({ accountId, ref }) {
+    async open({ accountId, ref }) {
       const objectName = mediaObjectName(ref);
       if (!objectName) return null;
       const objectPath = join(namespace, mediaAccountDirectory(accountId), `${objectName}.bin`);
       try {
-        return Uint8Array.from(await readFile(objectPath));
+        if (!(await stat(objectPath)).isFile()) return null;
+        return createReadStream(objectPath);
       } catch (error) {
         if (hasCode(error, "ENOENT")) return null;
         throw error;

@@ -635,13 +635,18 @@ handle can still decrypt or request re-upload.
 
 ```ts
 export interface MediaStore {
-  put(input: {
-    accountId: string;
-    message: MessageRef;
-    kind: "image" | "video" | "audio" | "document" | "sticker";
-    bytes: Uint8Array;
-    mimetype?: string;
+  write(input: {
+    readonly accountId: string;
+    readonly owner: MediaOwner;
+    readonly kind: "image" | "video" | "audio" | "document" | "sticker";
+    readonly source: AsyncIterable<Uint8Array>;
+    readonly mimetype?: string;
   }): Promise<{ ref: string; byteLength: number }>;
+
+  open(input: {
+    readonly accountId: string;
+    readonly ref: string;
+  }): Promise<AsyncIterable<Uint8Array> | null>;
 }
 
 export type MediaRecord =
@@ -665,9 +670,10 @@ filesystem/blob implementation. Blob writes use idempotent account/message keys
 and orphan cleanup because blob storage and database transactions cannot be
 made one portable atomic operation.
 
-Voice-note transcription is a derived consumer loop over stored audio
-(`kind: "audio"` and `ptt: true`). A transcript is a separate artifact or
-observation; failure never removes or downgrades the stored raw audio.
+`ptt: true` accepts already-compatible Ogg Opus mono bytes after a bounded
+header check. Core does not transcode. Voice-note transcription remains a
+derived consumer loop; a transcript is a separate artifact or observation and
+failure never removes or downgrades the stored raw audio.
 
 ## Commands and optimistic reconciliation
 
