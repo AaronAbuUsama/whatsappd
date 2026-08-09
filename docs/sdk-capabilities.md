@@ -8,6 +8,8 @@ Audit versions: whatsappd `0.2.2`; Baileys `7.0.0-rc14`.
 
 - Automated repository checks: **available**
 - Durable integration (P2): **run** — `.proof-receipts/issue16-p2.json`.
+- Durable operation replacement with streamed media (P2): **run** —
+  `.proof-receipts/issue108-p2.reset1-680a0f3.json`.
 - Live WhatsApp account (P4), Session layer: **run** — `issue18-p4.run1-b06fa2f`
   and `issue18-p4.run2-ea53648`, exercised 2026-07-30. Both submitted on-demand
   history requests over a real linked account and observed delivery
@@ -42,11 +44,9 @@ client.messages.older(chatId); // one page further back; saved rows only, never 
 await client.close();
 ```
 
-The action surface — sends, reactions, mark-read, phone-history requests — is
-re-specified by #108 against this shape and is not settled here. Rows whose
-planned interface reads *Message action surface* are exactly those: the caller
-outcome is settled, the method that delivers it is not, and each row's planning
-note names the issue that owns it.
+The action surface — sends, reactions, mark-read, and phone-history requests —
+is implemented as durable operations under `client.messages`; receipts are
+read, awaited, acknowledged, and subscribed under `client.operations`.
 
 ### Namespaces
 
@@ -62,7 +62,10 @@ note names the issue that owns it.
 | `calls` | call events, reject, and call links |
 | `business` | profile, catalog, products, orders, labels, quick replies |
 | `operations` | durable side-effect receipts and outcomes |
-| `media` | authorized reads of injected durable media |
+
+Media is an injected Backend capability, not a Client namespace. Trusted code
+opens an opaque reference with `backend.media.open({ accountId, ref })`; browser
+authorization and URLs remain application-owned.
 
 ### Operation semantics
 
@@ -133,7 +136,7 @@ note names the issue that owns it.
 | `MSG-OUT-01` | outbound-messages | Send text. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message action surface | Durable commands #108; release: required for 0.3 |
 | `MSG-OUT-02` | outbound-messages | Send image with optional caption. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message action surface | Durable commands #108; media input is caller-owned; release: required for 0.3 |
 | `MSG-OUT-03` | outbound-messages | Send video or GIF. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message action surface | Durable commands #108; release: required for 0.3 |
-| `MSG-OUT-04` | outbound-messages | Send audio or voice note. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message action surface | Durable commands #108; release: required for 0.3 |
+| `MSG-OUT-04` | outbound-messages | Send audio or voice note. | available: `available-in-baileys` | implemented | Ordinary audio is streamed as supplied. `ptt: true` requires Ogg Opus mono and is structurally validated; core does not transcode. | `client.messages.send.audio` | Durable commands #108; cross-device playback still needs P4 evidence; release: required for 0.3 |
 | `MSG-OUT-05` | outbound-messages | Send document with filename and MIME type. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message action surface | Durable commands #108; release: required for 0.3 |
 | `MSG-OUT-06` | outbound-messages | Send sticker. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message action surface | Durable commands #108; release: required for 0.3 |
 | `MSG-OUT-07` | outbound-messages | Send static location. | available: `available-in-baileys` | implemented | Current whatsappd implements this capability. | Message action surface | Durable commands #108; release: required for 0.3 |
@@ -230,16 +233,16 @@ note names the issue that owns it.
 | `DATA-09` | durability | Delete/tombstone current chats, messages, groups, or contacts when WhatsApp semantics require it. | not-applicable: Upstream emits deletion/update families | partial | Current projection emits message revocation tombstones and deletes duplicate contacts during PN/LID consolidation; chat and group tombstones and general contact deletion are absent. | Transparent domain state | Message scope #70, required for 0.3; remaining chat/contact/group scopes #74/#75/#76, post-0.3 |
 | `DATA-10` | durability | Expose raw protocol nodes, app-state patches, retry plumbing, signal sessions, prekeys, socket mutexes, or crypto primitives. | available: `available-in-baileys` | internal | `intentionally-internal` | No Client namespace | Adapter internals; never promoted by catalogue coverage |
 | `MEDIA-01` | durability | Capture inbound image/video/audio/document/sticker bytes before publishing accepted state. | not-applicable: Baileys download/reupload is available | implemented | Current whatsappd implements this capability. | Transparent message media state | Injected Media Store; replacement gaps are explicit in the atomic claims |
-| `MEDIA-02` | durability | Read durable bytes later by opaque account-scoped reference. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | `client.media.read(ref)` or an authorized application URL | Media capability; shipped trusted read |
-| `MEDIA-03` | durability | Reuse immutable content-addressed media and preserve old bytes after edits. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Transparent | Media capability shipped; no file-backed edit/restart observation recorded |
+| `MEDIA-02` | durability | Read durable bytes later by opaque account-scoped reference. | not-applicable: n/a | implemented | The injected store opens an `AsyncIterable<Uint8Array>`; there is no Client media namespace or application URL policy. | `backend.media.open({ accountId, ref })` in trusted code | Streaming Media capability; shipped |
+| `MEDIA-03` | durability | Reuse immutable content-addressed media and preserve old bytes after edits. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Transparent | File-backed replacement reconstruction is recorded by the issue #108 P2 receipt |
 | `MEDIA-04` | durability | Record explicit download/store failure without blocking later messages. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Message attachment failure state | Data + media; shipped current boundary |
 | `MEDIA-05` | durability | Queue pending capture, resume after restart, and sweep crash-created orphans. | not-applicable: n/a | not-implemented | `deferred` | Message attachment lifecycle state | Durable media jobs #72, post-0.3 |
 | `MEDIA-06` | durability | Store attachment bytes inside libSQL. | not-applicable: n/a | application-owned | `application-owned`: whatsappd requires an injected Media Store rather than promising SQL blobs | No operation | Pair libSQL structured state with file/S3 media |
 | `MEDIA-07` | durability | Decide browser URL signing, authorization, range responses, caching, and download headers. | not-applicable: n/a | application-owned | `application-owned` | React receives application-safe media access, not filesystem refs | Browser delivery adapter/host policy; execution: #83; release: post-0.3 SDK boundary; host policy remains application-owned |
 | `MEDIA-08` | durability | Recover an expired upstream media reference before reading bytes. | available: `available-in-baileys` (`updateMediaMessage`, media-update event) | implemented | Current whatsappd implements this capability. | Transparent media read; failures remain explicit | Live worker plus injected media; live observation deferred |
 | `MEDIA-09` | durability | Derive a voice transcript without replacing or downgrading the retained PTT audio. | not-applicable: n/a application derivation | application-owned | `application-owned` (ADR-0015); whatsappd stores the raw source, not a transcript pipeline | A host may attach a separate artifact or observation | Transcription/model policy; failure cannot alter raw audio |
-| `OPS-01` | durability | Submit an idempotent account-scoped durable side effect and observe its result. | not-applicable: n/a product architecture | not-implemented | Current Session commands are immediate promises | `client.operations.get/subscribe`, typed namespace methods | Durable Operations Module #108, required for 0.3; lifecycle extension #109 |
-| `OPS-02` | durability | Distinguish queued, claimed, executing, succeeded, failed, and `outcome_unknown`. | not-applicable: n/a | not-implemented | No durable operation-state model exists | `WhatsAppOperation<T>`; `useOperation` | Durable Operations Module #108, required for 0.3 |
+| `OPS-01` | durability | Submit an idempotent account-scoped durable side effect and observe its result. | not-applicable: n/a product architecture | implemented | Typed Client commands persist an operation before Session execution; matching keys return the same receipt. | `client.operations.get/subscribe/wait/acknowledge`, typed `client.messages` methods | Durable Operations Module #108; lifecycle extension #109 |
+| `OPS-02` | durability | Distinguish queued, claimed, executing, succeeded, failed, and `outcome_unknown`. | not-applicable: n/a | implemented | Durable receipts model every state and fence stale attempts. | `WhatsAppOperation<T>`; later UI bindings may expose `useOperation` | Durable Operations Module #108 |
 | `OPS-03` | durability | Protect pairing challenges from ordinary snapshots and consume them once before expiry. | not-applicable: n/a | not-implemented | No protected challenge capability exists | `account.pair`, protected application route | Protected challenge capability #109, required for 0.3 |
 | `TEST-01` | durability | Construct a deterministic text message with correct sender semantics. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Test-only subpath | Shipped |
 | `TEST-02` | durability | Emit any normalized current session event through an awaited deterministic subscription. | not-applicable: n/a | implemented | Current whatsappd implements this capability. | Test-only driver | Shipped |

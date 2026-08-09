@@ -24,7 +24,7 @@ export type Outbound =
   | { text: string }
   | { image: BinaryInput; caption?: string }
   | { video: BinaryInput; caption?: string; gifPlayback?: boolean }
-  /** `ptt: true` sends a voice note (mimetype defaults to ogg/opus). */
+  /** `ptt: true` requires Ogg Opus mono bytes; whatsappd validates but does not transcode. */
   | { audio: BinaryInput; ptt?: boolean; seconds?: number; mimetype?: string }
   | { document: BinaryInput; fileName: string; mimetype: string; caption?: string }
   | { sticker: BinaryInput }

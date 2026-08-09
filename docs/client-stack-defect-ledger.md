@@ -659,10 +659,10 @@ idempotency key and invite a duplicate retry.
 
 Two boundary findings completed the replan. Unknown input versions/types are
 rejected by one shared validator before persistence and again before Session
-execution. An abort after `MediaStore.put()` committed could previously leave
-bytes with no operation; a completed put is now the point of no return, so the
-idempotent operation submission finishes. Abort still stops byte acquisition
-and pre-put staging. Finally, packed proof now uses three distinct processes:
+execution. An abort after a Media Store write committed could previously leave
+bytes with no operation; a completed write is now the point of no return, so
+the idempotent operation submission finishes. Abort still stops byte
+acquisition and unpublished staging. Finally, packed proof now uses three distinct processes:
 one submits offline, one resumes and executes exactly once, and one reconstructs
 the terminal receipt and Client state again.
 

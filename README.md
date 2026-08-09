@@ -164,8 +164,14 @@ Images, videos, audio and voice notes, documents, and stickers are downloaded
 while the live WhatsApp handle is usable. `fileMediaStore()` writes their bytes
 as private immutable local objects; libSQL stores only the message's opaque
 media reference and its `stored` or typed `failed` state. Read bytes explicitly
-with `backend.media.read({ accountId, ref })`. The package does not invent a
-filesystem URL or browser delivery policy.
+with `await backend.media.open({ accountId, ref })`, which returns an
+`AsyncIterable<Uint8Array>` or `null`. The package does not invent a filesystem
+URL or browser delivery policy.
+
+Outbound Buffer, URL, and `AsyncIterable<Uint8Array>` attachments are streamed
+into the injected media store before their durable operation is queued. A
+voice note (`ptt: true`) must already be Ogg Opus mono; whatsappd validates that
+bounded header but does not transcode arbitrary audio.
 
 The Client merges saved pages and live changes for you, per chat, and what it retains grows
 with what the application **read**: reading a chat creates its entry, and from
