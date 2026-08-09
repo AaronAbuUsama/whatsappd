@@ -300,17 +300,17 @@ console.log(test.commands.sent);
 `emit()` uses the real awaited subscription contract, needs neither WhatsApp nor
 sleeps, and records send, mark-read, and typing command inputs.
 
-## Proof
+## Verification
 
 ```bash
 pnpm test
 pnpm check
 pnpm build
-pnpm proof
+pnpm test:pack
 ```
 
-`pnpm proof` is the opt-in live-account harness. Unit tests and the deterministic
-driver do not contact WhatsApp.
+None of these commands contacts WhatsApp. Real-account checks are task-specific;
+contributors must follow `docs/runbooks/development/real-account-testing.md`.
 
 ## Working on whatsappd
 

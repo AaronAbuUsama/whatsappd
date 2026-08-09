@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 /**
  * Derives execution state from GitHub. Nothing here is written down anywhere.
  *

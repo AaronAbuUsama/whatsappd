@@ -18,7 +18,7 @@
  */
 import assert from "node:assert/strict";
 import pino from "pino";
-import { test } from "../../../tooling/checks/test-harness.ts";
+import { test } from "./_expect.ts";
 import { REDACTED_PATHS } from "../src/session.ts";
 
 const TEXT = "meet me at the safehouse";

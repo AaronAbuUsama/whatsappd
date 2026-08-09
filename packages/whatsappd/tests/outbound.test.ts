@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { generateWAMessage, type AnyMessageContent } from "baileys";
 import { toContent, refToKey, keyToRef, toOptions } from "../src/baileys/outbound.ts";
 import { toInbound } from "../src/baileys/inbound.ts";

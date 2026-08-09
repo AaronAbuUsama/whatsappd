@@ -8,8 +8,8 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
 const execFile = promisify(execFileCallback);
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const packageRoot = path.join(root, "packages/whatsappd");
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.resolve(packageRoot, "../..");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-packed-"));
 
 const digests = async (directory: string): Promise<Record<string, string>> =>

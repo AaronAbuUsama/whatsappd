@@ -30,7 +30,7 @@ jobs:
       # one artifact the packed proof never inspected — the proof would guard
       # pull requests and not releases (#119). It runs on the publishing commit,
       # so the artifact is proven on the exact commit that publishes it.
-      - run: pnpm proof:pack
+      - run: pnpm test:pack
       - name: Publish to npm (skip if this version is already published)
         run: |
           VERSION="$(node -p "require('./packages/whatsappd/package.json').version")"

@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { mapGroupMetadataUpdates, mapGroupParticipantsUpdate } from "../src/baileys/groups.ts";
 
 test("maps group metadata updates into pure group updates", () => {

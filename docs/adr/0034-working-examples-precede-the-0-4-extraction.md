@@ -15,24 +15,22 @@ consume the packed npm family and installed registry source, making them the
 permanent compatibility proof rather than disposable scaffolding. A public
 interface or registry item that no working example needed is not added.
 
-The workspace separates products from evidence and maintainer material:
+The workspace root names products and durable documentation only:
 
 ```text
 apps/docs
 packages/{whatsappd,react}
 examples/{web,opentui}
 registry/{web,opentui}
-proofs/{runners,support,tests,receipts,private}
-smoke/packed-consumer
-tooling/{checks,release}
 docs/{adr,architecture,runbooks,.scratch}
 ```
 
 `apps/docs` owns the public Diataxis MDX documentation and static Fumadocs
 site. Root `docs` remains internal maintainer documentation; temporary notes go
-only in the ignored `docs/.scratch`. Package tests live with their package,
-proof-private data stays ignored, and repository scripts no longer live in a
-flat package test directory.
+only in the ignored `docs/.scratch`. Tests and packed-consumer smoke live with
+their package. Repository-only scripts live under `.github/scripts`; generated
+evidence is ephemeral and ignored under `.artifacts`. Historical receipts and
+one-off proof harnesses are not source artifacts.
 
 ## Consequences
 

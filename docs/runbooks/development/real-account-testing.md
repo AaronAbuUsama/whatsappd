@@ -13,46 +13,38 @@ them.
 
 ## The profiles
 
-Each profile is one linked device: its own libSQL database, its own media root,
-its own credentials, under the gitignored `proofs/private/`.
+Each profile is one linked device: its own libSQL database, media root, and
+credentials. They live outside the repository at
+`~/Library/Application Support/whatsappd/proofs/`.
 
-| Profile   | Primary phone      | Role                                                                       |
-| --------- | ------------------ | -------------------------------------------------------------------------- |
-| `android` | Samsung Galaxy S25 | **Subject.** Small mirror. Use this for anything that publishes a receipt. |
-| `ios`     | iPhone             | **Peer.** Large mirror of real correspondence. Sends only.                 |
+| Profile   | Primary phone      | Role                                                         |
+| --------- | ------------------ | ------------------------------------------------------------ |
+| `android` | Samsung Galaxy S25 | **Subject.** Small mirror. Use this for bounded live checks. |
+| `ios`     | iPhone             | **Peer.** Large mirror of real correspondence. Sends only.   |
 
 They are separate accounts on separate numbers, and both are members of one
 shared group, so both direct messages and group behaviour can be exercised.
 
-`android` is the subject because its mirror is small enough to assert against,
-and because a proof whose fixtures are someone's actual message history is one
-nobody can safely publish a receipt for.
+`android` is the subject because its mirror is small enough to assert against.
 
 ## Bringing one online
 
-```bash
-pnpm proof:profile android
-```
+There is no permanent live-account harness in the repository. A task that needs
+a live check must supply a purpose-built program, accept the external profile
+path explicitly, and delete that program when the task is complete.
 
-The profile is already linked, so this resumes — no QR, no phone, a few seconds.
-It prints counts and exits. `pnpm proof:profile ios` does the same for the peer.
-
-Pairing happens only if a profile's database has no credentials, which on this
-machine means someone deleted it. `libsqlBackend()` persists credentials and
-`createWhatsAppRuntime` hands that store to the session
-(`packages/whatsappd/src/runtime/runtime.ts:714`), so the link survives with the database file.
-
-**Never delete a profile directory to "start clean".** That throws away the link
-and costs a human a QR scan. Proofs that need an unlinked start create their own
-throwaway profile — see #111's Run B.
+**Never delete a profile directory to "start clean".** That throws away the
+link and costs a human a QR scan. `libsqlBackend()` persists credentials, so a
+program pointed at the existing database resumes without pairing.
 
 One runtime owns one account (ADR-0009). Two processes against one profile is a
 lease conflict, not a shortcut; drive the peer as its own process.
 
 ## What may be messaged
 
-`proofs/runners/proof-profile.ts` is read-only. Send-capable proof runners must
-use the shared guard in `proofs/support/send-guard.ts`, which enforces this list.
+No current repository program sends from these accounts. Any temporary program
+that can send must enforce this list at its send seam rather than relying on an
+operator to remember it.
 
 Sends are permitted to exactly three destinations:
 
@@ -68,10 +60,10 @@ message reaches strangers.
 ### The allowlist is a file, not a sentence
 
 The sanctioned ids are real WhatsApp identifiers, so they are never committed.
-They live beside the profiles:
+It lives beside the external profiles:
 
 ```
-proofs/private/send-allowlist.json
+~/Library/Application Support/whatsappd/proofs/send-allowlist.json
 { "groups": ["<group id>"], "chats": ["<chat id>", "…"] }
 ```
 
@@ -86,14 +78,11 @@ happens.
 
 ## Redaction
 
-The profiles hold real account material. Nothing derived from them —
-no phone number, JID, group id, message body, media byte, credential, QR or
-pairing code — enters a command, a log, a commit, a GitHub comment or a receipt.
-Committed receipts carry hashes, counts and lengths only.
-
-`proofs/private/` is gitignored. Keep it that way; it is the
-only thing standing between a real account's credentials and a public
-repository.
+The profiles hold real account material. Nothing derived from them — no phone
+number, JID, group id, message body, media byte, credential, QR or pairing code
+— enters a command, log, commit, or GitHub comment. Temporary sanitized output
+belongs under ignored `.artifacts/` or in a short-lived CI artifact, never in
+source control.
 
 ## When something is wrong
 

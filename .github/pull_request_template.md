@@ -28,8 +28,8 @@ prevent.
 - [ ] `pnpm check`
 - [ ] `pnpm test`
 - [ ] `pnpm build`
-- [ ] `pnpm proof:pack`
-- [ ] Live `pnpm proof` run (only if this touches the wire; say so if skipped)
+- [ ] `pnpm test:pack`
+- [ ] Task-specific live-account check (only if this touches the wire; say so if skipped)
 
 Exact head proven: <!-- full SHA the above ran against -->
 

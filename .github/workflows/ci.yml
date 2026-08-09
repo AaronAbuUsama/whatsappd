@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: No inherited environment in spawned test processes
         run: |
-          if grep -rn '\.\.\.process\.env' packages/whatsappd/tests/ proofs/ tooling/ smoke/; then
+          if grep -rn '\.\.\.process\.env' packages/whatsappd/tests/ packages/whatsappd/smoke/ .github/scripts/; then
             echo "::error::A test spawns a child with the parent environment. Pass an explicit allowlist instead -- inheriting NODE_TEST_CONTEXT makes a nested 'node --test' skip every file and exit 0."
             exit 1
           fi
@@ -96,10 +96,10 @@ jobs:
             exit 1
           fi
           echo "packed ${bytes} bytes, under the 120000-byte ceiling"
-      # `pnpm pack` archives whatever `dist/` already holds, so this proof has
+      # `pnpm pack` archives whatever `dist/` already holds, so this check has
       # to build first or it inspects an artifact older than the change under
-      # test. The `proof:pack` script owns that build, which is why it does not
+      # test. The `test:pack` script owns that build, which is why it does not
       # depend on the step above -- and why the step above stays: a broken
-      # build should fail as a broken build, not as a packed-proof failure two
+      # build should fail as a broken build, not as a packed-check failure two
       # steps later.
-      - run: pnpm proof:pack
+      - run: pnpm test:pack

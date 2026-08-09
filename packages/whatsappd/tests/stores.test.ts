@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { conformsToStore } from "./store-conformance.ts";
 import { memoryStore } from "../src/stores/memory.ts";
 import { fileStore } from "../src/stores/file.ts";

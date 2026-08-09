@@ -1,4 +1,4 @@
-import { expect, test } from "../../../tooling/checks/test-harness.ts";
+import { expect, test } from "./_expect.ts";
 import { loadAuth } from "../src/baileys/auth-state.ts";
 import type { CredentialStore } from "../src/ports.ts";
 
