@@ -27,6 +27,16 @@ export default defineConfig({
     },
     overrides: [
       {
+        // These files are vendored from the shadcn registries. Keep the source
+        // intact so it can be updated with the registry CLI.
+        files: ["examples/*/src/components/ui/**", "examples/*/src/components/ai-elements/**"],
+        rules: {
+          "max-lines": "off",
+          complexity: "off",
+          "max-depth": "off",
+        },
+      },
+      {
         // The dependency direction, enforced rather than described. `model/`
         // is pure domain types, `runtime/` builds on the model, and
         // `baileys/` is the only layer that knows the wire protocol. The code

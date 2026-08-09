@@ -13,6 +13,11 @@
 
   "ignoreDependencies": ["@typescript/native-preview", "vite"],
 
+  "ignoreIssues": {
+    "examples/web/src/components/ai-elements/**": ["exports", "types"],
+    "examples/web/src/components/ui/**": ["exports", "types"]
+  },
+
   "ignoreExportsUsedInFile": true,
   "includeEntryExports": false
 }

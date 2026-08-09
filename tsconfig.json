@@ -16,5 +16,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
-  }
+  },
+  "include": [".github/scripts/**/*.ts", "packages/**/*.ts", "vite.config.ts"],
+  "exclude": ["examples/**"]
 }
