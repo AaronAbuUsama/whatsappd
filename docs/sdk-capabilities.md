@@ -254,11 +254,11 @@ authorization and URLs remain application-owned.
 
 ## Backend inventory
 
-| adapter | credentials | data | leases | commands | media | trustedWorker | browser | status |
+| adapter | credentials | data | leases | operations | media | trustedWorker | browser | status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Memory | yes | yes | yes | no | yes | yes | no durability claim | shipped |
+| Memory | yes | yes | yes | yes | yes | yes | no durability claim | shipped |
 | File credential store | yes | no | no | no | no | yes | no | shipped for the independently usable Session |
-| libSQL backend | yes | yes | yes | no | injected only | Node/application worker | no: credentials, leases, and writer access are trusted | shipped |
+| libSQL backend | yes | yes | yes | yes | injected only | Node/application worker | no: credentials, leases, and writer access are trusted | shipped |
 | Filesystem media | no | no | no | no | yes | Node/application worker | no direct path exposure | shipped |
 | Postgres structured adapter | target | target | target using database time | target | injected only | server/worker | no direct credential/writer access | `deferred`; post-0.3 #81 |
 | S3-compatible media | no | no | no | no | target, including immutable put/read | server/worker or scoped signer | only through application authorization and signed/proxied delivery | `deferred`; post-0.3 #82 |

@@ -332,6 +332,117 @@ void test("voice notes reject non-Ogg or non-mono audio before operation submiss
   }
 });
 
+void test("media sends own one metadata snapshot before staging awaits", async () => {
+  const stored = memoryMediaStore();
+  let entered!: () => void;
+  let release!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const backend = {
+    ...memoryBackend(),
+    media: {
+      ...stored,
+      async write(input: Parameters<typeof stored.write>[0]) {
+        entered();
+        await blocked;
+        return stored.write(input);
+      },
+    },
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "media-option-snapshot",
+    backend,
+    openSession: () => createTestWhatsAppSession().session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const quote = { id: "quoted", chatId: CHAT, fromMe: false };
+  const mentions = ["original@s.whatsapp.net"];
+  const options = {
+    ptt: false,
+    seconds: 1,
+    mimetype: "audio/mpeg",
+    quote,
+    mentions,
+  };
+  try {
+    const pending = client.messages.send.audio(CHAT, Buffer.from("ordinary audio"), options);
+    await writing;
+    options.ptt = true;
+    options.seconds = 99;
+    options.mimetype = "audio/ogg; codecs=opus";
+    quote.id = "mutated";
+    mentions[0] = "mutated@s.whatsapp.net";
+    release();
+
+    const operation = await pending;
+    assert.equal(operation.input.type, "send");
+    assert.ok("audio" in operation.input.content);
+    assert.deepEqual(operation.input, {
+      version: 1,
+      type: "send",
+      chatId: CHAT,
+      content: {
+        audio: { ref: operation.input.content.audio.ref },
+        ptt: false,
+        seconds: 1,
+        mimetype: "audio/mpeg",
+      },
+      options: {
+        quote: { id: "quoted", chatId: CHAT, fromMe: false },
+        mentions: ["original@s.whatsapp.net"],
+      },
+    });
+  } finally {
+    release();
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("Buffer attachments reach MediaStore in bounded chunks", async () => {
+  const chunkLengths: number[] = [];
+  const media = memoryMediaStore();
+  const backend = {
+    ...memoryBackend(),
+    media: {
+      ...media,
+      async write(input: Parameters<typeof media.write>[0]) {
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of input.source) {
+          chunkLengths.push(chunk.byteLength);
+          chunks.push(chunk);
+        }
+        return media.write({
+          ...input,
+          source: (async function* () {
+            yield* chunks;
+          })(),
+        });
+      },
+    },
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "bounded-buffer-source",
+    backend,
+    openSession: () => createTestWhatsAppSession().session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    await client.messages.send.image(CHAT, Buffer.alloc(256 * 1024 + 1));
+    assert.ok(chunkLengths.length > 1);
+    assert.ok(chunkLengths.every((length) => length <= 64 * 1024));
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
 void test("aborting wait does not cancel work once its durable row exists", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();

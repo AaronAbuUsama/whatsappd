@@ -179,10 +179,12 @@ const terminal = (
 const sendOptions = (options?: ClientSendOptions): SendOptions | undefined =>
   options?.quote !== undefined || options?.mentions !== undefined
     ? {
-        ...(options.quote !== undefined && { quote: options.quote }),
-        ...(options.mentions !== undefined && { mentions: options.mentions }),
+        ...(options.quote !== undefined && { quote: structuredClone(options.quote) }),
+        ...(options.mentions !== undefined && { mentions: [...options.mentions] }),
       }
     : undefined;
+
+const MEDIA_CHUNK_BYTES = 64 * 1024;
 
 const abortableSource = (
   source: AsyncIterable<Uint8Array>,
@@ -208,10 +210,11 @@ const sourceOf = async (
 ): Promise<AsyncIterable<Uint8Array>> => {
   throwIfAborted(signal);
   if (Buffer.isBuffer(input)) {
-    const bytes = Uint8Array.from(input);
     return (async function* () {
-      throwIfAborted(signal);
-      yield bytes;
+      for (let offset = 0; offset < input.byteLength; offset += MEDIA_CHUNK_BYTES) {
+        throwIfAborted(signal);
+        yield input.subarray(offset, Math.min(offset + MEDIA_CHUNK_BYTES, input.byteLength));
+      }
     })();
   }
   if ("url" in input) {
@@ -354,6 +357,11 @@ export function createClientOperationApis(config: {
     if (idempotencyKey.length === 0) throw new TypeError("idempotencyKey must not be empty");
     return { idempotencyKey, id: operationIdFor(config.accountId, idempotencyKey) };
   };
+  const prepareSend = (options?: ClientSendOptions) => ({
+    identity: identityFor(options),
+    signal: options?.signal,
+    options: sendOptions(options),
+  });
 
   const submit = async <Result extends WhatsAppOperationResult>(
     input: WhatsAppOperationInput,
@@ -408,112 +416,122 @@ export function createClientOperationApis(config: {
   const send = (
     chatId: string,
     content: DurableOutbound,
-    options: ClientSendOptions | undefined,
-    identity = identityFor(options),
+    prepared: ReturnType<typeof prepareSend>,
     mediaCommitted = false,
   ): Promise<WhatsAppOperation<MessageRef>> => {
-    const outboundOptions = sendOptions(options);
     return submit<MessageRef>(
       {
         version: 1,
         type: "send",
         chatId,
         content,
-        ...(outboundOptions && { options: outboundOptions }),
+        ...(prepared.options && { options: prepared.options }),
       },
-      identity,
-      mediaCommitted ? undefined : options?.signal,
+      prepared.identity,
+      mediaCommitted ? undefined : prepared.signal,
     );
   };
 
   const messages: ClientMessageActions = {
     send: {
-      text: (chatId, text, options) => send(chatId, { text }, options),
+      text: (chatId, text, options) => send(chatId, { text }, prepareSend(options)),
       async image(chatId, input, options) {
-        const identity = identityFor(options);
-        const image = await stage("image", input, identity, options?.signal);
+        const prepared = prepareSend(options);
+        const caption = options?.caption;
+        const image = await stage("image", input, prepared.identity, prepared.signal);
         return send(
           chatId,
           {
             image: { ref: image.ref },
-            ...(options?.caption !== undefined && { caption: options.caption }),
+            ...(caption !== undefined && { caption }),
           },
-          options,
-          identity,
+          prepared,
           true,
         );
       },
       async video(chatId, input, options) {
-        const identity = identityFor(options);
-        const video = await stage("video", input, identity, options?.signal);
+        const prepared = prepareSend(options);
+        const caption = options?.caption;
+        const gifPlayback = options?.gifPlayback;
+        const video = await stage("video", input, prepared.identity, prepared.signal);
         return send(
           chatId,
           {
             video: { ref: video.ref },
-            ...(options?.caption !== undefined && { caption: options.caption }),
-            ...(options?.gifPlayback !== undefined && { gifPlayback: options.gifPlayback }),
+            ...(caption !== undefined && { caption }),
+            ...(gifPlayback !== undefined && { gifPlayback }),
           },
-          options,
-          identity,
+          prepared,
           true,
         );
       },
       async audio(chatId, input, options) {
-        const identity = identityFor(options);
-        const source = await sourceOf(input, options?.signal);
+        const prepared = prepareSend(options);
+        const ptt = options?.ptt;
+        const seconds = options?.seconds;
+        const mimetype = options?.mimetype;
+        const source = await sourceOf(input, prepared.signal);
         const audio = await config.media.write({
           accountId: config.accountId,
-          owner: { type: "operation", operationId: identity.id },
+          owner: { type: "operation", operationId: prepared.identity.id },
           kind: "audio",
-          source: options?.ptt === true ? voiceNoteSource(source) : source,
-          ...(options?.mimetype !== undefined && { mimetype: options.mimetype }),
+          source: ptt === true ? voiceNoteSource(source) : source,
+          ...(mimetype !== undefined && { mimetype }),
         });
         return send(
           chatId,
           {
             audio: { ref: audio.ref },
-            ...(options?.ptt !== undefined && { ptt: options.ptt }),
-            ...(options?.seconds !== undefined && { seconds: options.seconds }),
-            ...(options?.mimetype !== undefined && { mimetype: options.mimetype }),
+            ...(ptt !== undefined && { ptt }),
+            ...(seconds !== undefined && { seconds }),
+            ...(mimetype !== undefined && { mimetype }),
           },
-          options,
-          identity,
+          prepared,
           true,
         );
       },
       async document(chatId, input, options) {
-        const identity = identityFor(options);
-        const document = await stage("document", input, identity, options.signal, options.mimetype);
+        const prepared = prepareSend(options);
+        const fileName = options.fileName;
+        const mimetype = options.mimetype;
+        const caption = options.caption;
+        const document = await stage(
+          "document",
+          input,
+          prepared.identity,
+          prepared.signal,
+          mimetype,
+        );
         return send(
           chatId,
           {
             document: { ref: document.ref },
-            fileName: options.fileName,
-            mimetype: options.mimetype,
-            ...(options.caption !== undefined && { caption: options.caption }),
+            fileName,
+            mimetype,
+            ...(caption !== undefined && { caption }),
           },
-          options,
-          identity,
+          prepared,
           true,
         );
       },
       async sticker(chatId, input, options) {
-        const identity = identityFor(options);
-        const sticker = await stage("sticker", input, identity, options?.signal);
-        return send(chatId, { sticker: { ref: sticker.ref } }, options, identity, true);
+        const prepared = prepareSend(options);
+        const sticker = await stage("sticker", input, prepared.identity, prepared.signal);
+        return send(chatId, { sticker: { ref: sticker.ref } }, prepared, true);
       },
       location: (chatId, location, options) =>
-        send(chatId, { location: structuredClone(location) }, options),
+        send(chatId, { location: structuredClone(location) }, prepareSend(options)),
       contacts: (chatId, contacts, options) =>
-        send(chatId, { contacts: structuredClone(contacts) }, options),
+        send(chatId, { contacts: structuredClone(contacts) }, prepareSend(options)),
     },
     react: (ref, emoji, options) =>
-      send(ref.chatId, { react: { to: structuredClone(ref), emoji } }, options),
+      send(ref.chatId, { react: { to: structuredClone(ref), emoji } }, prepareSend(options)),
     unreact: (ref, options) =>
-      send(ref.chatId, { react: { to: structuredClone(ref), emoji: "" } }, options),
+      send(ref.chatId, { react: { to: structuredClone(ref), emoji: "" } }, prepareSend(options)),
     edit: (ref, text, options) =>
-      send(ref.chatId, { edit: { target: structuredClone(ref), text } }, options),
-    revoke: (ref, options) => send(ref.chatId, { delete: structuredClone(ref) }, options),
+      send(ref.chatId, { edit: { target: structuredClone(ref), text } }, prepareSend(options)),
+    revoke: (ref, options) =>
+      send(ref.chatId, { delete: structuredClone(ref) }, prepareSend(options)),
     markRead(refs, options) {
       const identity = identityFor(options);
       return submit<null>(

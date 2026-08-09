@@ -137,8 +137,10 @@ is saved locally,” not “the phone has no older history.” Asking the linked
 for history is a separate operation and is not hidden behind paging.
 
 The Client exposes durable send, reaction, edit, revoke, mark-read, and
-phone-history commands under `client.messages`. Each returns an operation
-receipt immediately; `client.operations.wait(id)` awaits its terminal outcome,
+phone-history commands under `client.messages`. Non-media commands return an
+operation receipt after submission. Attachment commands first finish publishing
+the complete byte stream to the Media Store, then submit and return their
+operation receipt. `client.operations.wait(id)` awaits its terminal outcome,
 and `acknowledge(id)` dismisses a terminal failure from optimistic UI state.
 A successful send remains optimistic until its authoritative message arrives,
 even if its receipt is acknowledged. A supplied
@@ -195,10 +197,11 @@ carries no messages. The chat empties rather than correcting in place, and the
 application pages it again — which is why a view that has gone empty is a signal
 to re-page rather than a chat with nothing in it.
 
-Credentials, WhatsApp data, the account lease, and media bytes are four separate
-capabilities. `memoryBackend()` groups in-memory implementations of all four;
-each one — `memoryDataStore()`, `memoryLeaseStore()`, `memoryMediaStore()` — can
-be replaced individually. Starting a second runtime for an account another one
+Credentials, WhatsApp data, durable operations, the account lease, and media
+bytes are five separate capabilities. `memoryBackend()` groups in-memory
+implementations of all five; each one — `memoryDataStore()`,
+`memoryOperationStore()`, `memoryLeaseStore()`, `memoryMediaStore()` — can be
+replaced individually. Starting a second runtime for an account another one
 holds rejects with `AccountAlreadyClaimedError` before any socket opens.
 
 The Current Mirror projects text and durable media messages, the chats they

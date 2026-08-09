@@ -596,7 +596,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
  * An in-memory {@link MediaStore}.
  *
  * @returns A media store whose blobs are keyed idempotently by account,
- * message, kind, and byte content.
+ * owner, kind, and byte content.
  */
 export function memoryMediaStore(): MediaStore {
   const blobs = new Map<string, { readonly accountId: string; readonly bytes: Uint8Array }>();
