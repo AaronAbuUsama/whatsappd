@@ -33,11 +33,11 @@ jobs:
       - run: pnpm proof:pack
       - name: Publish to npm (skip if this version is already published)
         run: |
-          VERSION="$(node -p "require('./package.json').version")"
+          VERSION="$(node -p "require('./packages/whatsappd/package.json').version")"
           if ( cd "$RUNNER_TEMP" && npm view "whatsappd@$VERSION" version ) >/dev/null 2>&1; then
             echo "whatsappd@$VERSION is already on npm — skipping publish."
           else
-            pnpm pack --pack-destination "$RUNNER_TEMP"
+            pnpm --filter whatsappd pack --pack-destination "$RUNNER_TEMP"
             cd "$RUNNER_TEMP"
             npm publish "whatsappd-$VERSION.tgz" --provenance --access public
           fi

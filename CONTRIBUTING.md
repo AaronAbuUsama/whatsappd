@@ -67,7 +67,7 @@ CI runs exactly these on Node 22 and 24.
 The size and shape limits in `vite.config.ts` are set just above what the
 codebase already contains, so they bind the next file rather than demand a
 refactor of the current one. Where a file is over, the exception names it with
-its measured value instead of switching the rule off — `src/runtime/libsql.ts`
+its measured value instead of switching the rule off — `packages/whatsappd/src/runtime/libsql.ts`
 is capped at 1500 lines, not exempted. If your change needs a limit raised, say
 why in the PR; the number moving is the point at which someone decides.
 
@@ -105,8 +105,8 @@ the kind of thing review will ask you to change, so it is cheaper to check
 first. Decisions already settled live in `docs/adr/`; if your change argues with
 one, the ADR is the thing to change first.
 
-**Module boundaries.** `src/model/` is pure domain types and depends on nothing
-below it. `src/runtime/` builds on the model. `src/baileys/` is the only place
+**Module boundaries.** `packages/whatsappd/src/model/` is pure domain types and depends on nothing
+below it. `packages/whatsappd/src/runtime/` builds on the model. `packages/whatsappd/src/baileys/` is the only place
 that knows the wire protocol. The dependencies run one way — model, then
 runtime, then baileys — and lint enforces it.
 

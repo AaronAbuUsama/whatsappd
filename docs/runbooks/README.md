@@ -20,7 +20,7 @@ describe what the library does underneath it.
 ## The one thing to check first
 
 Whatever the symptom, get the fault reason before acting. Every disconnect is
-classified into a closed union in `src/errors.ts` and lands in one of three
+classified into a closed union in `packages/whatsappd/src/errors.ts` and lands in one of three
 dispositions, which decides the whole response:
 
 | Disposition  | What it means             | What to do               |

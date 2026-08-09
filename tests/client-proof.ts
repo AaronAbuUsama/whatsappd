@@ -30,10 +30,13 @@ import {
   type WhatsAppBackend,
   type WhatsAppRuntime,
   type WhatsAppSession,
-} from "../src/index.ts";
+} from "../packages/whatsappd/src/index.ts";
 // #107 moves this public factory to the package root. Until that surface cut,
 // this source-public Client factory is the one seam #127 is proving.
-import { createWhatsAppClient, type WhatsAppClient } from "../src/runtime/client.ts";
+import {
+  createWhatsAppClient,
+  type WhatsAppClient,
+} from "../packages/whatsappd/src/runtime/client.ts";
 import { DEFAULT_ALLOWLIST_PATH, guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
 import {
   captureClientProofRunStart,

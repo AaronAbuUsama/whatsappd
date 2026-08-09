@@ -12,11 +12,14 @@ import {
   memoryMediaStore,
   AccountAlreadyClaimedError,
   StaleAccountClaimError,
-} from "../src/index.ts";
-import type { InboundMessage, MediaHandle } from "../src/model/message.ts";
-import type { RuntimeMirrorReader, WhatsAppSnapshot } from "../src/runtime/contracts.ts";
-import { createRuntimeMirrorReader } from "../src/runtime/runtime.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+} from "../packages/whatsappd/src/index.ts";
+import type { InboundMessage, MediaHandle } from "../packages/whatsappd/src/model/message.ts";
+import type {
+  RuntimeMirrorReader,
+  WhatsAppSnapshot,
+} from "../packages/whatsappd/src/runtime/contracts.ts";
+import { createRuntimeMirrorReader } from "../packages/whatsappd/src/runtime/runtime.ts";
+import { createTestWhatsAppSession, textMessage } from "../packages/whatsappd/src/testing.ts";
 import { dataStoreConformance } from "./data-store-conformance.ts";
 import { readMedia, writeMedia } from "./media-store-helpers.ts";
 
@@ -26,7 +29,7 @@ const ROOM = "room@g.us";
 const AT = 1_700_000_000_000;
 
 dataStoreConformance("memory data", async () => ({
-  data: (await import("../src/runtime/memory.ts")).memoryDataStore(),
+  data: (await import("../packages/whatsappd/src/runtime/memory.ts")).memoryDataStore(),
   close: async () => {},
 }));
 

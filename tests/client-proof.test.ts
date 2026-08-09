@@ -11,8 +11,8 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MediaStore, MessageRecord } from "../src/index.ts";
-import type { WhatsAppClient } from "../src/runtime/client.ts";
+import type { MediaStore, MessageRecord } from "../packages/whatsappd/src/index.ts";
+import type { WhatsAppClient } from "../packages/whatsappd/src/runtime/client.ts";
 import { test } from "./_expect.ts";
 import {
   createLinkObservation,
@@ -427,16 +427,16 @@ function guardBypassesIn(source: string): readonly string[] {
 
 test("subject composition imports only the agreed public seams", async () => {
   const source = await readFile(path.join(here, "client-proof.ts"), "utf8");
-  assert.match(source, /from "\.\.\/src\/index\.ts"/);
-  assert.match(source, /from "\.\.\/src\/runtime\/client\.ts"/);
+  assert.match(source, /from "\.\.\/packages\/whatsappd\/src\/index\.ts"/);
+  assert.match(source, /from "\.\.\/packages\/whatsappd\/src\/runtime\/client\.ts"/);
   assert.equal(source.match(/guardedSender\(peer\.session\)\.send/g)?.length, 3);
   assert.equal(source.includes("peer.session.send("), false);
   for (const forbidden of [
-    "../src/stores/",
-    "../src/runtime/libsql.ts",
-    "../src/runtime/projection.ts",
-    "../src/baileys/",
-    "../src/session.ts",
+    "../packages/whatsappd/src/stores/",
+    "../packages/whatsappd/src/runtime/libsql.ts",
+    "../packages/whatsappd/src/runtime/projection.ts",
+    "../packages/whatsappd/src/baileys/",
+    "../packages/whatsappd/src/session.ts",
   ]) {
     assert.equal(source.includes(forbidden), false, `subject harness reached into ${forbidden}`);
   }

@@ -1,6 +1,10 @@
 import { expect, test } from "./_expect.ts";
 import { proto } from "baileys";
-import { mapMessageUpdate, mapReaction, mapReceiptUpdate } from "../src/baileys/updates.ts";
+import {
+  mapMessageUpdate,
+  mapReaction,
+  mapReceiptUpdate,
+} from "../packages/whatsappd/src/baileys/updates.ts";
 import { SELF } from "./fixtures.ts";
 
 const KEY = { remoteJid: "111@s.whatsapp.net", id: "MSG1", fromMe: true };

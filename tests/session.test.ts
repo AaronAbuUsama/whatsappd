@@ -1,12 +1,12 @@
 import type { BaileysEventMap } from "baileys";
 import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
-import { toMessagesUpsertEvents } from "../src/baileys/socket.ts";
-import { createSession } from "../src/session.ts";
-import { pairingAuth, qrAuth } from "../src/ports.ts";
-import { memoryStore } from "../src/stores/memory.ts";
+import { toMessagesUpsertEvents } from "../packages/whatsappd/src/baileys/socket.ts";
+import { createSession } from "../packages/whatsappd/src/session.ts";
+import { pairingAuth, qrAuth } from "../packages/whatsappd/src/ports.ts";
+import { memoryStore } from "../packages/whatsappd/src/stores/memory.ts";
 import { baseMessage, SELF } from "./fixtures.ts";
-import { textMessage } from "../src/testing.ts";
+import { textMessage } from "../packages/whatsappd/src/testing.ts";
 
 // createSession is inert until start() — it opens no socket — so the public
 // subscription wiring and command guards can be exercised without a phone.

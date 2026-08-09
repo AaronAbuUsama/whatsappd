@@ -23,7 +23,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTestWhatsAppSession, type TestWhatsAppSessionDriver } from "../src/testing.ts";
+import {
+  createTestWhatsAppSession,
+  type TestWhatsAppSessionDriver,
+} from "../packages/whatsappd/src/testing.ts";
 import {
   DEFAULT_ALLOWLIST_PATH,
   guardedSender,

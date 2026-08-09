@@ -49,7 +49,7 @@ changes no record and takes no revision.
 `unavailable` is the one presence kind that produces no instant, and excluding
 it is the difference between keeping history and destroying it. It does not say
 "present now"; it says the address is gone. WhatsApp does not send its own
-last-seen with it either — `src/baileys/presence.ts` stamps `at` with _receipt_
+last-seen with it either — `packages/whatsappd/src/baileys/presence.ts` stamps `at` with _receipt_
 time — and Baileys reports `unavailable` for a peer that has been offline for
 days, notably right after a presence subscription. Recording it would therefore
 date a week-old last-seen to this instant, and the monotonic advance would make

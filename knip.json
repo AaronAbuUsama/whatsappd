@@ -1,17 +1,24 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": [
-    "src/index.ts",
-    "src/testing.ts",
-    "tests/*.test.ts",
-    "tests/e2e.ts",
-    "tests/store-proof.ts",
-    "tests/history-proof.ts",
-    "tests/send-guard-proof.ts"
-  ],
-  "project": ["src/**/*.ts", "examples/**/*.ts", "tests/**/*.ts"],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "tests/*.test.ts",
+        "tests/e2e.ts",
+        "tests/store-proof.ts",
+        "tests/history-proof.ts",
+        "tests/send-guard-proof.ts"
+      ],
+      "project": ["examples/**/*.ts", "tests/**/*.ts"]
+    },
+    "packages/whatsappd": {
+      "entry": ["src/index.ts", "src/testing.ts"],
+      "project": ["src/**/*.ts"],
+      "ignoreDependencies": ["@libsql/client"]
+    }
+  },
 
-  "ignoreDependencies": ["@typescript/native-preview", "vite", "jscpd"],
+  "ignoreDependencies": ["@typescript/native-preview", "vite"],
 
   "ignoreExportsUsedInFile": true,
   "includeEntryExports": false

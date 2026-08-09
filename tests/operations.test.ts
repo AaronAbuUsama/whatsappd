@@ -4,15 +4,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { OperationIdempotencyConflictError } from "../src/runtime/operations.ts";
-import { memoryBackend, memoryMediaStore, memoryOperationStore } from "../src/runtime/memory.ts";
-import { libsqlBackend } from "../src/runtime/libsql.ts";
-import { createWhatsAppRuntime } from "../src/runtime/runtime.ts";
-import { createWhatsAppClient } from "../src/runtime/client.ts";
-import { fileMediaStore } from "../src/runtime/file-media.ts";
-import type { MediaStore } from "../src/runtime/contracts.ts";
-import type { Outbound } from "../src/model/outbound.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+import { OperationIdempotencyConflictError } from "../packages/whatsappd/src/runtime/operations.ts";
+import {
+  memoryBackend,
+  memoryMediaStore,
+  memoryOperationStore,
+} from "../packages/whatsappd/src/runtime/memory.ts";
+import { libsqlBackend } from "../packages/whatsappd/src/runtime/libsql.ts";
+import { createWhatsAppRuntime } from "../packages/whatsappd/src/runtime/runtime.ts";
+import { createWhatsAppClient } from "../packages/whatsappd/src/runtime/client.ts";
+import { fileMediaStore } from "../packages/whatsappd/src/runtime/file-media.ts";
+import type { MediaStore } from "../packages/whatsappd/src/runtime/contracts.ts";
+import type { Outbound } from "../packages/whatsappd/src/model/outbound.ts";
+import { createTestWhatsAppSession, textMessage } from "../packages/whatsappd/src/testing.ts";
 import { collectMedia, readMedia } from "./media-store-helpers.ts";
 import { operationStoreConformance } from "./operation-store-conformance.ts";
 

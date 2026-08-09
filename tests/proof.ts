@@ -13,7 +13,7 @@ import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { createSession, fileStore, pairingAuth, qrAuth } from "../src/index.ts";
+import { createSession, fileStore, pairingAuth, qrAuth } from "../packages/whatsappd/src/index.ts";
 import { replyToProofPing } from "./proof-handler.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));

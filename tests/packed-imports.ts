@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const execFile = promisify(execFileCallback);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const packageRoot = path.join(root, "packages/whatsappd");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-packed-"));
 
 const digests = async (directory: string): Promise<Record<string, string>> =>
@@ -27,7 +28,7 @@ const digests = async (directory: string): Promise<Record<string, string>> =>
   );
 
 try {
-  await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: root });
+  await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: packageRoot });
   const archive = (await readdir(consumer)).find((file) => file.endsWith(".tgz"));
   assert.ok(archive, "pnpm pack did not produce an archive");
 
@@ -143,11 +144,11 @@ try {
   // a stale file would then survive into both sides. Re-check on a `vp`
   // upgrade — C6 in `docs/client-stack-defect-ledger.md` owns that obligation.
   const packedDist = await digests(dist);
-  await rm(path.join(root, "dist"), { recursive: true, force: true });
+  await rm(path.join(packageRoot, "dist"), { recursive: true, force: true });
   await execFile("pnpm", ["build"], { cwd: root });
   assert.deepEqual(
     packedDist,
-    await digests(path.join(root, "dist")),
+    await digests(path.join(packageRoot, "dist")),
     "the packed dist/ is not this working tree's build — `pnpm pack` archives whatever dist/ already holds",
   );
   for (const removed of [

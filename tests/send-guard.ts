@@ -47,7 +47,12 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MessageRef, Outbound, SendOptions, WhatsAppSession } from "../src/index.ts";
+import type {
+  MessageRef,
+  Outbound,
+  SendOptions,
+  WhatsAppSession,
+} from "../packages/whatsappd/src/index.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 

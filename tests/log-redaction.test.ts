@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 import pino from "pino";
 import { test } from "./_expect.ts";
-import { REDACTED_PATHS } from "../src/session.ts";
+import { REDACTED_PATHS } from "../packages/whatsappd/src/session.ts";
 
 const TEXT = "meet me at the safehouse";
 const NUMBER = "15551230000";

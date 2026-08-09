@@ -3,7 +3,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { createSession, fileStore, qrAuth } from "../../src/index.ts";
+import { createSession, fileStore, qrAuth } from "../../packages/whatsappd/src/index.ts";
 
 const directory = path.join(path.dirname(fileURLToPath(import.meta.url)), ".data");
 const session = createSession({

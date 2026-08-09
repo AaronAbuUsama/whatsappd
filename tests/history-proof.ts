@@ -42,10 +42,13 @@ import { fileURLToPath } from "node:url";
 import { isAbsolute } from "node:path";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { createSession, qrAuth, refOf } from "../src/index.ts";
-import { libsqlStore } from "../src/stores/libsql.ts";
-import type { ConversationSyncBatch, InboundMessage } from "../src/model/index.ts";
-import type { MessageRef } from "../src/model/outbound.ts";
+import { createSession, qrAuth, refOf } from "../packages/whatsappd/src/index.ts";
+import { libsqlStore } from "../packages/whatsappd/src/stores/libsql.ts";
+import type {
+  ConversationSyncBatch,
+  InboundMessage,
+} from "../packages/whatsappd/src/model/index.ts";
+import type { MessageRef } from "../packages/whatsappd/src/model/outbound.ts";
 import { guardedSender, resolveAllowlistedTarget } from "./send-guard.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));

@@ -20,16 +20,16 @@ when it drifted. `tests/execution-state.ts` re-derives all of it from the
 
 ## Where things live
 
-| Artifact                        | Location                                                   |
-| ------------------------------- | ---------------------------------------------------------- |
-| Node state, blockers, frontier  | GitHub Issues, via `pnpm state`                            |
-| Accepted architecture decisions | `docs/adr/` — the filenames are the decisions              |
-| Shared domain language          | `CONTEXT.md`                                               |
-| Historical target architecture  | `docs/architecture/runtime-backends-and-headless-react.md` |
-| Published build specification   | GitHub issue #15                                           |
-| Capability planning guide       | `docs/sdk-capabilities.md`                                 |
-| Client stack defect ledger      | `docs/client-stack-defect-ledger.md`                       |
-| Shipped product path            | `src/session.ts`, `src/runtime/`, and root exports         |
+| Artifact                        | Location                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------- |
+| Node state, blockers, frontier  | GitHub Issues, via `pnpm state`                                                          |
+| Accepted architecture decisions | `docs/adr/` — the filenames are the decisions                                            |
+| Shared domain language          | `CONTEXT.md`                                                                             |
+| Historical target architecture  | `docs/architecture/runtime-backends-and-headless-react.md`                               |
+| Published build specification   | GitHub issue #15                                                                         |
+| Capability planning guide       | `docs/sdk-capabilities.md`                                                               |
+| Client stack defect ledger      | `docs/client-stack-defect-ledger.md`                                                     |
+| Shipped product path            | `packages/whatsappd/src/session.ts`, `packages/whatsappd/src/runtime/`, and root exports |
 
 The architecture document preserves the original target and proof boundaries.
 Accepted ADRs supersede it where implementation and owner decisions moved on.
@@ -116,7 +116,7 @@ Pairing a real WhatsApp device is the only step in the proof ladder a human has
 to perform, and it must be performed once rather than once per run.
 
 `libsqlBackend()` persists credentials, and `createWhatsAppRuntime` hands that
-store straight to the session (`src/runtime/runtime.ts:714`), so a Runtime whose
+store straight to the session (`packages/whatsappd/src/runtime/runtime.ts:714`), so a Runtime whose
 database file survives the process resumes its link with no human present. The
 same is already true of `fileStore` at the Session layer, which is why
 `tests/proof.ts` re-runs without a second QR scan.
@@ -163,7 +163,7 @@ machine is lost. `pnpm proof:profile <name>` establishes or resumes one.
   briefed to defend it — conceded the retired design stayed typeable under it.
   Anything that still names `conversation.*` is superseded text, not a contract.
 - `docs/issue-71-dx-contract-v2.md` is historical. Where it and
-  `src/runtime/client.ts` on `master` disagree, the code wins.
+  `packages/whatsappd/src/runtime/client.ts` on `master` disagree, the code wins.
 - `docs/client-stack-defect-ledger.md` spans the whole Client stack and does not
   reset per PR. Its "Inherited obligation" lines bind later layers.
 - Client message retention is deliberately unbounded, with the reasoning and the
@@ -187,5 +187,5 @@ machine is lost. `pnpm proof:profile <name>` establishes or resumes one.
 Read `CONTEXT.md`, this file, the relevant ADRs, and `docs/sdk-capabilities.md`.
 Then run `pnpm state` and open the frontier issue bodies. Do not reconstruct
 blockers from prose in any document, including this one — `## Blocked by` on the
-issue is the edge. `src/runtime/` is real product code; reopening an accepted
+issue is the edge. `packages/whatsappd/src/runtime/` is real product code; reopening an accepted
 decision requires an explicit superseding ADR.

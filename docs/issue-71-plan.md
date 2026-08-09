@@ -63,7 +63,7 @@ None of these depends on the others or on any Client decision.
 ### S1 — Revision-pinned joint read
 
 **Problem.** `snapshot()` and `messages()` open separate read transactions
-(`src/runtime/contracts.ts:430,443`; `src/runtime/libsql.ts:1250,1332`) and
+(`packages/whatsappd/src/runtime/contracts.ts:430,443`; `packages/whatsappd/src/runtime/libsql.ts:1250,1332`) and
 neither accepts a revision. Reconciling one global snapshot with N per-chat pages
 against a live write stream needs an unbounded retry and is livelock-prone. This
 produced PR #94's round-1 P1 and it is not fixable above the store.
@@ -71,7 +71,7 @@ produced PR #94's round-1 P1 and it is not fixable above the store.
 **Change.** Expose the read transaction boundary `libsql` already has:
 
 ```ts
-// src/runtime/contracts.ts — WhatsAppDataStore
+// packages/whatsappd/src/runtime/contracts.ts — WhatsAppDataStore
 read<T>(accountId: string, fn: (view: MirrorView) => Promise<T>): Promise<T>;
 
 export interface MirrorView {
@@ -90,7 +90,7 @@ snapshot and page at one revision, repeatably, with no retry.
 
 **Problem.** Presence and connection carry no revision but sit in the same union
 and the same listener set as snapshot and patch
-(`src/runtime/contracts.ts:626-648`), and from one observation the Runtime
+(`packages/whatsappd/src/runtime/contracts.ts:626-648`), and from one observation the Runtime
 publishes the live frame at `runtime.ts:335` before the durable patch derived
 from it at `:353`. Live state structurally cannot join a revision-ordered
 boundary.
@@ -106,7 +106,7 @@ onLive (listener: (frame: WhatsAppLiveFrame)    => void): Unsubscribe;
 ```
 
 **Also fix, in the same PR, because they are in the function being rewritten** —
-three reproduced P1s in `publish()` (`src/runtime/runtime.ts:233-245`):
+three reproduced P1s in `publish()` (`packages/whatsappd/src/runtime/runtime.ts:233-245`):
 
 - **R1** iteration over a live `Set`: one `emit` drove 200,000 listener
   deliveries when a listener resubscribed. _This is the same defect as the
@@ -129,8 +129,8 @@ does not remove other listeners.
 ### S3 — Carry the alias delta on the patch
 
 **Problem.** The projection computes three mutation kinds
-(`src/runtime/projection.ts:30-33`) and the patch ships two
-(`src/runtime/contracts.ts:356-357`). `MirrorDelete` (`:256`) omits freed native
+(`packages/whatsappd/src/runtime/projection.ts:30-33`) and the patch ships two
+(`packages/whatsappd/src/runtime/contracts.ts:356-357`). `MirrorDelete` (`:256`) omits freed native
 ids. A client maintaining state from patches cannot keep `contactAliases`
 coherent at all — it can only re-snapshot.
 
@@ -171,7 +171,7 @@ commit/delivery primitive and core namespaces; #106 completes conversations and
 lifetimes; #107 owns only the public/package cut. Each targets its predecessor
 while stacked and merges bottom-up.
 
-Do not import `src/runtime/client.ts` from PR #93 or #94 in any form. The
+Do not import `packages/whatsappd/src/runtime/client.ts` from PR #93 or #94 in any form. The
 previous plan mandated exactly that and it is why the second attempt's first
 commit was byte-identical to the first attempt's head.
 
@@ -201,7 +201,7 @@ not patches on a retired branch:
 The branch's amendments to ADR-0006 and ADR-0023 do not land. Both stand as
 written on `master`; the application still owns Backend, Runtime and Client.
 
-**Not in scope, still real.** `src/session.ts` and the lease store carry three
+**Not in scope, still real.** `packages/whatsappd/src/session.ts` and the lease store carry three
 further P1s — `memoryLeaseStore.acquire()` returns the stored lease by reference,
 so one field write makes a lease immortal and defeats mutual exclusion; session
 events reach every handler by reference; `session.status` hands out a shared

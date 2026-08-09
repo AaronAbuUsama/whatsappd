@@ -17,8 +17,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { createSession, qrAuth } from "../src/index.ts";
-import { libsqlStore } from "../src/stores/libsql.ts";
+import { createSession, qrAuth } from "../packages/whatsappd/src/index.ts";
+import { libsqlStore } from "../packages/whatsappd/src/stores/libsql.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const url = `file:${path.join(here, "..", ".wa-libsql.db")}`;

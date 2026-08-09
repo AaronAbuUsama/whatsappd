@@ -2,7 +2,7 @@
 > for the reasoning rather than the interface. Its `chats.open(chatId)`
 > conversation handle was retired unbuilt on 2026-08-03 (ADR-0023, ADR-0029),
 > and several of its type shapes were deliberately diverged from by #105. Where
-> this file disagrees with `src/runtime/client.ts` on `master`, or with the
+> this file disagrees with `packages/whatsappd/src/runtime/client.ts` on `master`, or with the
 > current issue bodies, it loses.
 
 ## Parent
@@ -214,11 +214,11 @@ Message upserts route only to the matching open conversation. A revocation tombs
 
 Expected product files:
 
-- new `src/runtime/client.ts`: friendly Client state and opened-conversation implementation;
-- `src/runtime/contracts.ts`: friendly public interfaces; raw feed types become internal or move out;
-- `src/runtime/runtime.ts`: register a module-private Client source for Runtime instances and expose Session identity internally;
-- `src/index.ts`: export `createWhatsAppClient` and friendly types; remove raw Client/frame exports and `createInProcessWhatsAppClient`;
-- `src/testing.ts`: only the minimum deterministic driver additions needed to emit identities/gaps through a real Runtime.
+- new `packages/whatsappd/src/runtime/client.ts`: friendly Client state and opened-conversation implementation;
+- `packages/whatsappd/src/runtime/contracts.ts`: friendly public interfaces; raw feed types become internal or move out;
+- `packages/whatsappd/src/runtime/runtime.ts`: register a module-private Client source for Runtime instances and expose Session identity internally;
+- `packages/whatsappd/src/index.ts`: export `createWhatsAppClient` and friendly types; remove raw Client/frame exports and `createInProcessWhatsAppClient`;
+- `packages/whatsappd/src/testing.ts`: only the minimum deterministic driver additions needed to emit identities/gaps through a real Runtime.
 
 Expected tests:
 

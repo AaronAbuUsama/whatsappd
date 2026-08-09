@@ -15,9 +15,9 @@ import {
   toMessagingHistoryEvents,
   toMessagingHistoryStatusEvents,
   toMessagesUpsertEvents,
-} from "../src/baileys/socket.ts";
-import { loadAuth } from "../src/baileys/auth-state.ts";
-import { memoryStore } from "../src/stores/memory.ts";
+} from "../packages/whatsappd/src/baileys/socket.ts";
+import { loadAuth } from "../packages/whatsappd/src/baileys/auth-state.ts";
+import { memoryStore } from "../packages/whatsappd/src/stores/memory.ts";
 import { baseMessage, SELF } from "./fixtures.ts";
 
 type HistoryPayload = BaileysEventMap["messaging-history.set"];

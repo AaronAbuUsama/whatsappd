@@ -1,6 +1,6 @@
 import { expect, test } from "./_expect.ts";
-import { loadAuth } from "../src/baileys/auth-state.ts";
-import type { CredentialStore } from "../src/ports.ts";
+import { loadAuth } from "../packages/whatsappd/src/baileys/auth-state.ts";
+import type { CredentialStore } from "../packages/whatsappd/src/ports.ts";
 
 /** In-memory KV store — the smallest possible CredentialStore. */
 function memStore(): CredentialStore & { dump(): Record<string, string> } {

@@ -37,7 +37,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "./_expect.ts";
-import type { WhatsAppDataEvent, WhatsAppDurableEvent } from "../src/runtime/contracts.ts";
+import type {
+  WhatsAppDataEvent,
+  WhatsAppDurableEvent,
+} from "../packages/whatsappd/src/runtime/contracts.ts";
 
 const ACCOUNT = "personal";
 const AT = 1_700_000_000_000;
@@ -96,8 +99,8 @@ mock.module("@libsql/client", {
   },
 });
 
-const { libsqlBackend, memoryMediaStore } = await import("../src/index.ts");
-const { textMessage } = await import("../src/testing.ts");
+const { libsqlBackend, memoryMediaStore } = await import("../packages/whatsappd/src/index.ts");
+const { textMessage } = await import("../packages/whatsappd/src/testing.ts");
 
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,

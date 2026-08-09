@@ -1,4 +1,4 @@
-import type { MediaStore } from "../src/index.ts";
+import type { MediaStore } from "../packages/whatsappd/src/index.ts";
 
 export const sourceOf = (bytes: Uint8Array): AsyncIterable<Uint8Array> => ({
   async *[Symbol.asyncIterator]() {

@@ -1,5 +1,8 @@
 import { expect, test } from "./_expect.ts";
-import { mapGroupMetadataUpdates, mapGroupParticipantsUpdate } from "../src/baileys/groups.ts";
+import {
+  mapGroupMetadataUpdates,
+  mapGroupParticipantsUpdate,
+} from "../packages/whatsappd/src/baileys/groups.ts";
 
 test("maps group metadata updates into pure group updates", () => {
   expect(
