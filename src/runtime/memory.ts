@@ -17,6 +17,7 @@ import {
   operationSubscription,
   operationInputJson,
   validatedOperationResult,
+  validatedOperationState,
   validatedOperationSubmission,
   type WhatsAppOperation,
   type WhatsAppOperationStore,
@@ -393,7 +394,12 @@ export function memoryOperationStore(): WhatsAppOperationStore {
     state: WhatsAppOperation["state"],
     at: number,
   ): WhatsAppOperation => {
-    const next = { ...current, state, revision: current.revision + 1, updatedAt: at };
+    const next = {
+      ...current,
+      state: validatedOperationState(state, current.input),
+      revision: current.revision + 1,
+      updatedAt: at,
+    };
     held.byId.set(current.id, next);
     return next;
   };

@@ -100,12 +100,14 @@ const read = async (
   return result.rows[0] && fromRow(result.rows[0]);
 };
 
-const write = (transaction: Transaction, operation: WhatsAppOperation): Promise<unknown> =>
-  transaction.execute({
+const write = (transaction: Transaction, operation: WhatsAppOperation): Promise<unknown> => {
+  const state = validatedOperationState(operation.state, operation.input);
+  return transaction.execute({
     sql: `UPDATE wa_operations SET operation_json = ?
       WHERE account_id = ? AND operation_id = ?`,
-    args: [JSON.stringify(operation), operation.accountId, operation.id],
+    args: [JSON.stringify({ ...operation, state }), operation.accountId, operation.id],
   });
+};
 
 const terminal = (state: WhatsAppOperationState): boolean =>
   state.status === "succeeded" || state.status === "failed" || state.status === "outcome_unknown";

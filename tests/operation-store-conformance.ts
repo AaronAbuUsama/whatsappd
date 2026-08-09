@@ -273,4 +273,43 @@ export function operationStoreConformance(name: string, create: () => Promise<St
       await fixture.close();
     }
   });
+
+  void test(`[${name}] transition arguments are validated before persistence`, async () => {
+    const fixture = await create();
+    try {
+      await fixture.store.submit({
+        accountId: "personal",
+        id: "unsafe-failure",
+        idempotencyKey: "unsafe-failure",
+        input: input("fail safely"),
+      });
+      await fixture.store.claim("personal", "failure-attempt", 1_000);
+      await assert.rejects(
+        fixture.store.fail("personal", "unsafe-failure", "failure-attempt", {
+          name: "Error",
+          message: "boom",
+          stack: "SECRET_STACK",
+        } as never),
+        TypeError,
+      );
+      assert.equal(
+        (await fixture.store.get("personal", "unsafe-failure"))?.state.status,
+        "claimed",
+      );
+
+      await fixture.store.release("personal", "unsafe-failure", "failure-attempt");
+      await fixture.store.claim("personal", "unknown-attempt", 1_000);
+      await fixture.store.start("personal", "unsafe-failure", "unknown-attempt", 1_000);
+      await assert.rejects(
+        fixture.store.unknown("personal", "unsafe-failure", "unknown-attempt", 42 as never),
+        TypeError,
+      );
+      assert.equal(
+        (await fixture.store.get("personal", "unsafe-failure"))?.state.status,
+        "executing",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
 }
