@@ -236,6 +236,13 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
           : undefined,
       ),
 
+    release: (accountId, operationId, attemptId) =>
+      transition(accountId, operationId, (current, at) =>
+        current.state.status === "claimed" && current.state.attemptId === attemptId
+          ? { ...current, state: { status: "queued" }, updatedAt: at }
+          : undefined,
+      ),
+
     succeed: (accountId, operationId, attemptId, result) =>
       transition(accountId, operationId, (current, at) =>
         current.state.status === "executing" && current.state.attemptId === attemptId

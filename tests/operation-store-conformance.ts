@@ -88,6 +88,12 @@ export function operationStoreConformance(name: string, create: () => Promise<St
         "succeeded",
       );
       assert.equal((await fixture.store.claim("personal", "attempt-b", 1_000))?.id, "b");
+      assert.equal(await fixture.store.release("personal", "b", "stale-attempt"), undefined);
+      assert.equal(
+        (await fixture.store.release("personal", "b", "attempt-b"))?.state.status,
+        "queued",
+      );
+      assert.equal((await fixture.store.claim("personal", "attempt-b2", 1_000))?.id, "b");
     } finally {
       await fixture.close();
     }

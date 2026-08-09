@@ -117,6 +117,11 @@ export interface WhatsAppOperationStore {
     attemptId: string,
     ttlMs: number,
   ): Promise<WhatsAppOperation | undefined>;
+  release(
+    accountId: string,
+    operationId: string,
+    attemptId: string,
+  ): Promise<WhatsAppOperation | undefined>;
   succeed(
     accountId: string,
     operationId: string,

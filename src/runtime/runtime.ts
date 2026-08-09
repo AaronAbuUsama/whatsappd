@@ -162,6 +162,8 @@ export interface WhatsAppRuntimeConfig {
   readonly holderId?: string;
   /** Account-lease TTL, renewed at half this interval. @defaultValue `30_000` */
   readonly leaseTtlMs?: number;
+  /** Durable-operation claim TTL. @defaultValue `30_000` */
+  readonly operationTtlMs?: number;
   /**
    * How long a live connection or presence observation stays current.
    *
@@ -361,6 +363,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   const { accountId, backend } = config;
   const holderId = config.holderId ?? crypto.randomUUID();
   const leaseTtlMs = config.leaseTtlMs ?? 30_000;
+  const operationTtlMs = config.operationTtlMs ?? 30_000;
   const freshnessMs = config.freshnessMs ?? 15_000;
 
   const durableListeners = new Set<Registration<WhatsAppDurableFrame>>();
@@ -398,7 +401,7 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
   const operationExecutor = createOperationExecutor({
     accountId,
     backend,
-    ttlMs: leaseTtlMs,
+    ttlMs: operationTtlMs,
     session: () => session,
     stopped: () => stopped,
     failed(error) {

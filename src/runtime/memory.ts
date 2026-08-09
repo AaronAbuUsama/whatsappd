@@ -509,6 +509,9 @@ export function memoryOperationStore(): WhatsAppOperationStore {
       });
     },
 
+    release: (accountId, operationId, attemptId) =>
+      complete(accountId, operationId, attemptId, "claimed", () => ({ status: "queued" })),
+
     succeed(accountId, operationId, attemptId, result) {
       return complete(accountId, operationId, attemptId, "executing", (at) => ({
         status: "succeeded",

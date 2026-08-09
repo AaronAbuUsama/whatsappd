@@ -68,16 +68,19 @@ export function createOperationExecutor(config: {
   let online = false;
   let draining: Promise<void> | undefined;
   let rerun = false;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+
+  const release = (operation: WhatsAppOperation): Promise<WhatsAppOperation | undefined> =>
+    operation.state.status === "claimed"
+      ? config.backend.operations.release(config.accountId, operation.id, operation.state.attemptId)
+      : Promise.resolve(undefined);
 
   const execute = async (operation: WhatsAppOperation): Promise<void> => {
     if (operation.state.status !== "claimed") return;
     const attemptId = operation.state.attemptId;
     const session = config.session();
-    if (!session) {
-      await config.backend.operations.fail(config.accountId, operation.id, attemptId, {
-        name: "RuntimeUnavailableError",
-        message: "the runtime has no live Session",
-      });
+    if (!online || !session) {
+      await release(operation);
       return;
     }
 
@@ -118,6 +121,11 @@ export function createOperationExecutor(config: {
       return;
     }
 
+    if (!online || config.session() !== session) {
+      await release(operation);
+      return;
+    }
+
     const started = await config.backend.operations.start(
       config.accountId,
       operation.id,
@@ -150,12 +158,20 @@ export function createOperationExecutor(config: {
         randomUUID(),
         config.ttlMs,
       );
-      if (!operation) return;
+      if (!operation) {
+        if (!config.stopped() && online) {
+          retry ??= setTimeout(wake, Math.max(1, config.ttlMs));
+          retry.unref();
+        }
+        return;
+      }
       await execute(operation);
     }
   };
 
-  const wake = (): void => {
+  function wake(): void {
+    if (retry) clearTimeout(retry);
+    retry = undefined;
     if (config.stopped() || !online || !config.session()) return;
     if (draining) {
       rerun = true;
@@ -178,7 +194,7 @@ export function createOperationExecutor(config: {
         config.failed(error);
       },
     );
-  };
+  }
 
   const unsubscribe = config.backend.operations.subscribe(config.accountId, wake);
   return {
@@ -188,6 +204,8 @@ export function createOperationExecutor(config: {
     },
     async stop(): Promise<void> {
       online = false;
+      if (retry) clearTimeout(retry);
+      retry = undefined;
       unsubscribe();
       await draining;
     },

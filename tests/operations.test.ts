@@ -330,3 +330,89 @@ void test("failures are classified on the correct side of the WhatsApp boundary"
     await runtime.stop();
   }
 });
+
+void test("a replacement retries a claim left behind by a crashed worker", async () => {
+  const backend = memoryBackend();
+  const operation = await backend.operations.submit({
+    accountId: "crash",
+    id: "crash-claim",
+    idempotencyKey: "crash-claim",
+    input: { version: 1, type: "send", chatId: CHAT, content: { text: "resume me" } },
+  });
+  await backend.operations.claim("crash", "dead-worker", 20);
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "crash",
+    backend,
+    operationTtlMs: 20,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  try {
+    const completed = await Promise.race([
+      client.operations.wait(operation.id),
+      new Promise<never>((_, reject) => {
+        const timeout = setTimeout(() => reject(new Error("expired claim was not retried")), 2_000);
+        timeout.unref();
+      }),
+    ]);
+    assert.equal(completed.state.status, "succeeded");
+    assert.equal(driver.commands.sent.length, 1);
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("disconnecting during media preparation requeues before the send boundary", async () => {
+  const stored = memoryMediaStore();
+  let entered!: () => void;
+  let release!: () => void;
+  const reading = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reads = 0;
+  const backend = {
+    ...memoryBackend(),
+    media: {
+      put: (input: Parameters<typeof stored.put>[0]) => stored.put(input),
+      async read(input: Parameters<typeof stored.read>[0]) {
+        reads += 1;
+        if (reads === 1) {
+          entered();
+          await blocked;
+        }
+        return stored.read(input);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "disconnect",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  try {
+    const operation = await client.messages.send.image(CHAT, Buffer.from("prepared"));
+    await reading;
+    await driver.emit({ type: "connection", status: { phase: "disconnected" } });
+    release();
+    await until(() => client.operations.get(operation.id)?.state.status === "queued");
+    assert.equal(driver.commands.sent.length, 0);
+    await driver.emit({ type: "connection", status: { phase: "online" } });
+    assert.equal((await client.operations.wait(operation.id)).state.status, "succeeded");
+    assert.equal(driver.commands.sent.length, 1);
+  } finally {
+    release();
+    await client.close();
+    await runtime.stop();
+  }
+});
