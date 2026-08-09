@@ -2066,7 +2066,7 @@ test("a deliberate stop drains conversation sync already inside the Session pipe
   await inFlight;
 
   const stopping = runtime.stop();
-  await renewalObserved;
+  await withDeadline(renewalObserved);
   expect(renewals > 0).toBe(true);
   release();
 
@@ -2099,7 +2099,7 @@ test("a renewal loss during stop cannot stamp with or release the stale claim", 
   };
   const { runtime } = lane("personal", { backend, leaseTtlMs: 20 });
   await runtime.start();
-  await renewing;
+  await withDeadline(renewing);
 
   const stopping = runtime.stop();
   await new Promise((resolve) => setTimeout(resolve, 25));
