@@ -115,6 +115,13 @@ const scripts = new Set(
   ),
 );
 
+const readme = await readFile(path.join(root, "README.md"), "utf8");
+assert.doesNotMatch(
+  readme,
+  /client\.chats\.list\(\)\[0\]/,
+  "README examples must not infer a real send target from the first chat",
+);
+
 for (const doc of DOCS) {
   const absolute = path.join(root, doc);
   if (!existsSync(absolute)) {

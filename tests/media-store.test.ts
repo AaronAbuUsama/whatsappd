@@ -43,49 +43,8 @@ async function expectOwnedAndIsolated(store: MediaStore): Promise<void> {
   assert.deepEqual(repeated, stored);
 }
 
-async function expectStagingLeases(store: MediaStore): Promise<void> {
-  const input = {
-    accountId: "staging",
-    owner: { type: "operation", operationId: "operation-1" },
-    kind: "document",
-    bytes: Uint8Array.from([7, 8, 9]),
-    temporary: true,
-  } as const;
-  const first = await store.put(input);
-  const second = await store.put(input);
-  assert.ok(first.leaseId);
-  assert.ok(second.leaseId);
-  await store.discard({ accountId: input.accountId, ref: first.ref, leaseId: first.leaseId });
-  assert.deepEqual(await store.read({ accountId: input.accountId, ref: first.ref }), input.bytes);
-  await store.retain({ accountId: input.accountId, ref: second.ref, leaseId: second.leaseId });
-  const repeated = await store.put(input);
-  assert.ok(repeated.leaseId);
-  await store.discard({
-    accountId: input.accountId,
-    ref: repeated.ref,
-    leaseId: repeated.leaseId,
-  });
-  assert.deepEqual(
-    await store.read({ accountId: input.accountId, ref: repeated.ref }),
-    input.bytes,
-  );
-
-  const abandoned = await store.put({ ...input, bytes: Uint8Array.from([1, 1, 1]) });
-  assert.ok(abandoned.leaseId);
-  await store.discard({
-    accountId: input.accountId,
-    ref: abandoned.ref,
-    leaseId: abandoned.leaseId,
-  });
-  assert.equal(await store.read({ accountId: input.accountId, ref: abandoned.ref }), null);
-}
-
 test("memory media owns mutable bytes, isolates accounts, and reuses immutable refs", async () => {
   await expectOwnedAndIsolated(memoryMediaStore());
-});
-
-test("memory media staging leases discard only unretained bytes", async () => {
-  await expectStagingLeases(memoryMediaStore());
 });
 
 test("file media survives a new store, keeps private opaque paths, and owns bytes", async () => {
@@ -117,15 +76,6 @@ test("file media survives a new store, keeps private opaque paths, and owns byte
       const metadata = await stat(path.join(namespace, entry));
       assert.equal(metadata.mode & 0o777, metadata.isDirectory() ? 0o700 : 0o600);
     }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("file media staging leases discard only unretained bytes", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-staging-"));
-  try {
-    await expectStagingLeases(fileMediaStore({ directory }));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

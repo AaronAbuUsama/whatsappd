@@ -10,6 +10,7 @@ import { libsqlBackend } from "../src/runtime/libsql.ts";
 import { createWhatsAppRuntime } from "../src/runtime/runtime.ts";
 import { createWhatsAppClient } from "../src/runtime/client.ts";
 import { fileMediaStore } from "../src/runtime/file-media.ts";
+import type { MediaStore } from "../src/runtime/contracts.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { operationStoreConformance } from "./operation-store-conformance.ts";
 
@@ -195,6 +196,34 @@ void test("libSQL and file media resume a staged send after backend replacement"
     }
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+void test("attachment sends require only the exported media byte contract", async () => {
+  const stored = memoryMediaStore();
+  const media = {
+    put: (input: Parameters<typeof stored.put>[0]) => stored.put(input),
+    read: (input: Parameters<typeof stored.read>[0]) => stored.read(input),
+  } satisfies MediaStore;
+  const backend = { ...memoryBackend(), media };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "media-contract",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    const operation = await client.messages.send.image(CHAT, Buffer.from("portable-adapter"), {
+      idempotencyKey: "portable-adapter",
+    });
+    await driver.emit({ type: "connection", status: { phase: "online" } });
+    assert.equal((await client.operations.wait(operation.id)).state.status, "succeeded");
+    assert.deepEqual(driver.commands.sent[0]?.content, { image: Buffer.from("portable-adapter") });
+  } finally {
+    await client.close();
+    await runtime.stop();
   }
 });
 
@@ -411,7 +440,7 @@ void test("committed receipts drive Client wait without a second store read", as
   }
 });
 
-void test("a failed media operation submission discards its staging lease", async () => {
+void test("a failed media operation submission preserves published immutable bytes", async () => {
   const media = memoryMediaStore();
   const operations = memoryOperationStore();
   let stagedRef = "";
@@ -441,10 +470,13 @@ void test("a failed media operation submission discards its staging lease", asyn
   const client = await createWhatsAppClient(runtime);
   try {
     await assert.rejects(
-      client.messages.send.image(CHAT, Buffer.from("discard me")),
+      client.messages.send.image(CHAT, Buffer.from("preserve me")),
       /operation database unavailable/,
     );
-    assert.equal(await media.read({ accountId: "failed-media-submit", ref: stagedRef }), null);
+    assert.deepEqual(
+      await media.read({ accountId: "failed-media-submit", ref: stagedRef }),
+      Uint8Array.from(Buffer.from("preserve me")),
+    );
     assert.deepEqual(await operations.list("failed-media-submit"), []);
   } finally {
     await client.close();

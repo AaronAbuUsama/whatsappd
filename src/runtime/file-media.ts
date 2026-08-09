@@ -1,6 +1,6 @@
 /** Durable local media bytes, separate from structured database state (ADR-0015). */
 import { randomUUID } from "node:crypto";
-import { chmod, link, mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { MediaStore } from "./contracts.ts";
 import { immutableMediaRef, mediaAccountDirectory, mediaObjectName } from "./media.ts";
@@ -47,13 +47,7 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
     if (!objectName) return undefined;
     const accountDirectory = join(namespace, mediaAccountDirectory(accountId));
     const objectPath = join(accountDirectory, `${objectName}.bin`);
-    return {
-      accountDirectory,
-      objectName,
-      objectPath,
-      retainedPath: `${objectPath}.retained`,
-      leasePath: (leaseId: string) => `${objectPath}.${leaseId}.lease`,
-    };
+    return { accountDirectory, objectName, objectPath };
   };
 
   return {
@@ -63,13 +57,10 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
       const objectName = mediaObjectName(ref);
       if (!objectName) throw new Error("generated an invalid immutable media reference");
       const location = paths(input.accountId, ref)!;
-      const { accountDirectory, objectPath, retainedPath, leasePath } = location;
+      const { accountDirectory, objectPath } = location;
       await ensurePrivateDirectory(namespace);
       await ensurePrivateDirectory(accountDirectory);
 
-      const leaseId = randomUUID();
-      const heldPath = leasePath(leaseId);
-      await writeFile(heldPath, "", { flag: "wx", mode: 0o600, flush: true });
       const temporary = join(accountDirectory, `${objectName}.${randomUUID()}.tmp`);
       try {
         await writeFile(temporary, bytes, { flag: "wx", mode: 0o600, flush: true });
@@ -83,23 +74,11 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
         }
         await chmod(objectPath, 0o600);
         await syncPath(objectPath);
-        if (!input.temporary) {
-          await writeFile(retainedPath, "", { flag: "a", mode: 0o600, flush: true });
-          await syncPath(retainedPath);
-          await rm(heldPath);
-        }
-      } catch (error) {
-        await rm(heldPath, { force: true });
-        throw error;
       } finally {
         await rm(temporary, { force: true });
         await syncPath(accountDirectory);
       }
-      return {
-        ref,
-        byteLength: bytes.byteLength,
-        ...(input.temporary && { leaseId }),
-      };
+      return { ref, byteLength: bytes.byteLength };
     },
 
     async read({ accountId, ref }) {
@@ -112,40 +91,6 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
         if (hasCode(error, "ENOENT")) return null;
         throw error;
       }
-    },
-    async retain({ accountId, ref, leaseId }) {
-      const location = paths(accountId, ref);
-      if (!location) throw new Error("invalid media staging reference");
-      await readFile(location.leasePath(leaseId));
-      await writeFile(location.retainedPath, "", { flag: "a", mode: 0o600, flush: true });
-      await syncPath(location.retainedPath);
-      await rm(location.leasePath(leaseId));
-      await syncPath(location.accountDirectory);
-    },
-    async discard({ accountId, ref, leaseId }) {
-      const location = paths(accountId, ref);
-      if (!location) return;
-      try {
-        await rm(location.leasePath(leaseId));
-      } catch (error) {
-        if (hasCode(error, "ENOENT")) return;
-        throw error;
-      }
-      const entries = await readdir(location.accountDirectory).catch((error: unknown) => {
-        if (hasCode(error, "ENOENT")) return [];
-        throw error;
-      });
-      const leased = entries.some(
-        (entry) => entry.startsWith(`${location.objectName}.bin.`) && entry.endsWith(".lease"),
-      );
-      const retained = await readFile(location.retainedPath)
-        .then(() => true)
-        .catch((error: unknown) => {
-          if (hasCode(error, "ENOENT")) return false;
-          throw error;
-        });
-      if (!leased && !retained) await rm(location.objectPath, { force: true });
-      await syncPath(location.accountDirectory);
     },
   };
 }

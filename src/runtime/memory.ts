@@ -9,7 +9,6 @@
  *
  * @packageDocumentation
  */
-import { randomUUID } from "node:crypto";
 import { memoryStore } from "../stores/memory.ts";
 import { immutableMediaRef } from "./media.ts";
 import {
@@ -594,44 +593,20 @@ export function memoryOperationStore(): WhatsAppOperationStore {
  * message, kind, and byte content.
  */
 export function memoryMediaStore(): MediaStore {
-  const blobs = new Map<
-    string,
-    {
-      readonly accountId: string;
-      readonly bytes: Uint8Array;
-      readonly leases: Set<string>;
-      permanent: boolean;
-    }
-  >();
+  const blobs = new Map<string, { readonly accountId: string; readonly bytes: Uint8Array }>();
   return {
-    async put({ accountId, owner, kind, bytes, temporary }) {
+    async put({ accountId, owner, kind, bytes }) {
       const ref = immutableMediaRef({ accountId, owner, kind, bytes });
       const blob = blobs.get(ref) ?? {
         accountId,
         bytes: Uint8Array.from(bytes),
-        leases: new Set<string>(),
-        permanent: false,
       };
-      const leaseId = temporary ? randomUUID() : undefined;
-      if (leaseId) blob.leases.add(leaseId);
-      else blob.permanent = true;
       blobs.set(ref, blob);
-      return { ref, byteLength: bytes.byteLength, ...(leaseId && { leaseId }) };
+      return { ref, byteLength: bytes.byteLength };
     },
     async read({ accountId, ref }) {
       const blob = blobs.get(ref);
       return blob?.accountId === accountId ? Uint8Array.from(blob.bytes) : null;
-    },
-    async retain({ accountId, ref, leaseId }) {
-      const blob = blobs.get(ref);
-      if (!blob || blob.accountId !== accountId || !blob.leases.delete(leaseId))
-        throw new Error("media staging lease does not exist");
-      blob.permanent = true;
-    },
-    async discard({ accountId, ref, leaseId }) {
-      const blob = blobs.get(ref);
-      if (!blob || blob.accountId !== accountId || !blob.leases.delete(leaseId)) return;
-      if (!blob.permanent && blob.leases.size === 0) blobs.delete(ref);
     },
   };
 }

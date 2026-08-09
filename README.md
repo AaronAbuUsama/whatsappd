@@ -117,26 +117,9 @@ console.log(client.chats.list());
 console.log(client.contacts.list());
 console.log(client.groups.list());
 
-const chat = client.chats.list()[0];
-let unsubscribe = () => {};
-if (chat) {
-  const render = () => console.log(client.messages.get(chat.chatId));
-  unsubscribe = client.messages.subscribe(render);
-  render();
-  client.messages.older(chat.chatId); // newest saved page; call again to go further back
-
-  const operation = await client.messages.send.text(chat.chatId, "hello", {
-    // Reuse this key when retrying the same application action.
-    idempotencyKey: crypto.randomUUID(),
-  });
-  const completed = await client.operations.wait(operation.id);
-  console.log(completed.state);
-}
-
 // Keep the local worker alive until Ctrl-C, then close what the application owns.
 await new Promise<void>((resolve) => process.once("SIGINT", resolve));
 
-unsubscribe();
 await client.close();
 await runtime.stop();
 await backend.close();

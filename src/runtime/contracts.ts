@@ -570,13 +570,9 @@ export interface MediaStore {
     kind: "image" | "video" | "audio" | "document" | "sticker";
     bytes: Uint8Array;
     mimetype?: string;
-    /** Hold this object behind a lease until its operation row commits. */
-    temporary?: boolean;
-  }): Promise<{ ref: string; byteLength: number; leaseId?: string }>;
+  }): Promise<{ ref: string; byteLength: number }>;
 
   read(input: { accountId: string; ref: string }): Promise<Uint8Array | null>;
-  retain(input: { accountId: string; ref: string; leaseId: string }): Promise<void>;
-  discard(input: { accountId: string; ref: string; leaseId: string }): Promise<void>;
 }
 
 /**
