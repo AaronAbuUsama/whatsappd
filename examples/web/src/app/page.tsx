@@ -1,17 +1,22 @@
-import { PrototypeApp } from "@/components/prototype/prototype-app";
+import { WhatsAppShell } from "@/components/whatsapp-shell";
+import { applicationState } from "@/lib/whatsapp.server";
 
-const prototypeVariants = ["dense", "control", "pocket"] as const;
-type PrototypeVariant = (typeof prototypeVariants)[number];
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Promise<{ variant?: string; fixture?: string }>;
-}) {
-  const params = await searchParams;
-  const variant = prototypeVariants.includes(params.variant as PrototypeVariant)
-    ? (params.variant as PrototypeVariant)
-    : "dense";
-  const fixture = params.fixture === "pairing" ? "pairing" : "online";
-  return <PrototypeApp fixture={fixture} variant={variant} />;
+export default async function Home() {
+  if (!process.env.WHATSAPPD_PROFILE_DIR || !process.env.WHATSAPPD_ACCOUNT_ID) {
+    return (
+      <main className="grid min-h-svh place-items-center p-6">
+        <div className="max-w-lg rounded-xl border bg-card p-6">
+          <h1 className="text-lg font-semibold">WhatsApp account not configured</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Set WHATSAPPD_PROFILE_DIR and WHATSAPPD_ACCOUNT_ID, then restart this local example.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  return <WhatsAppShell initial={await applicationState()} />;
 }

@@ -562,6 +562,62 @@ test("a patch stored before aliases were carried still resolves addresses", asyn
   }
 });
 
+test("an empty legacy operation table upgrades without blocking the saved mirror", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-legacy-operations-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const created = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  await created.data.snapshot(ACCOUNT);
+  await created.close();
+
+  const legacy = createClient({ url });
+  await legacy.executeMultiple(`
+    DROP TABLE wa_operations;
+    DELETE FROM wa_schema_migrations WHERE version = 3;
+    CREATE TABLE wa_operations (
+      operation_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      input_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempt_id TEXT,
+      lease_expires_at INTEGER,
+      started_at INTEGER,
+      result_json TEXT,
+      error_json TEXT,
+      unknown_reason TEXT,
+      submitted_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      PRIMARY KEY (account_id, operation_id)
+    );
+  `);
+  legacy.close();
+
+  const upgraded = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  try {
+    expect(await upgraded.operations.list(ACCOUNT)).toEqual([]);
+    expect((await upgraded.data.snapshot(ACCOUNT)).chats).toEqual([]);
+  } finally {
+    await upgraded.close();
+  }
+
+  const inspected = createClient({ url });
+  try {
+    const columns = await inspected.execute("PRAGMA table_info(wa_operations)");
+    expect(columns.rows.map((row) => row.name)).toEqual([
+      "account_id",
+      "operation_id",
+      "idempotency_key",
+      "submitted_at",
+      "operation_json",
+      "sequence",
+    ]);
+  } finally {
+    inspected.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("migrations preserve wa_auth and credential clear cannot reach mirror data or another account", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-credentials-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;

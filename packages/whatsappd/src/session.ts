@@ -10,7 +10,15 @@ import { assertE164 } from "./errors.ts";
 import { createPacer } from "./pacer.ts";
 import type { MetricEvent, MetricsHook } from "./model/metrics.ts";
 import { initialState, transition, type Input, type MachineCtx } from "./machine.ts";
-import type { GroupMetadata, Outbound, Status, WaIdentity } from "./model/index.ts";
+import type {
+  GroupMetadata,
+  GroupParticipantAction,
+  GroupParticipantUpdateResult,
+  GroupSetting,
+  Outbound,
+  Status,
+  WaIdentity,
+} from "./model/index.ts";
 import type { MessageRef, SendOptions } from "./model/outbound.ts";
 import { isTerminal } from "./model/index.ts";
 import type { AuthStrategy, CredentialStore } from "./ports.ts";
@@ -178,6 +186,22 @@ export interface WhatsAppSession {
    * @param chatId - The group JID.
    */
   groupMetadata(chatId: string): Promise<GroupMetadata>;
+  /** Create a group. This is a live action and is never retried by whatsappd. */
+  groupCreate(subject: string, participants: readonly string[]): Promise<GroupMetadata>;
+  /** Leave a group. This is a live action and is never retried by whatsappd. */
+  groupLeave(chatId: string): Promise<void>;
+  groupUpdateSubject(chatId: string, subject: string): Promise<void>;
+  groupUpdateDescription(chatId: string, description?: string): Promise<void>;
+  groupParticipantsUpdate(
+    chatId: string,
+    participants: readonly string[],
+    action: GroupParticipantAction,
+  ): Promise<readonly GroupParticipantUpdateResult[]>;
+  groupSettingUpdate(chatId: string, setting: GroupSetting): Promise<void>;
+  groupInviteCode(chatId: string): Promise<string | undefined>;
+  groupRevokeInvite(chatId: string): Promise<string | undefined>;
+  groupUpdatePicture(chatId: string, image: Uint8Array): Promise<void>;
+  groupRemovePicture(chatId: string): Promise<void>;
   /**
    * Fetch a profile picture URL.
    *
@@ -646,6 +670,56 @@ export function createSession(config: SessionConfig): WhatsAppSession {
       if (status.phase !== "online" || !conn)
         throw new Error(`not online (phase: ${status.phase})`);
       return conn.groupMetadata(chatId);
+    },
+    async groupCreate(subject, participants) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupCreate(subject, [...participants]);
+    },
+    async groupLeave(chatId) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupLeave(chatId);
+    },
+    async groupUpdateSubject(chatId, subject) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupUpdateSubject(chatId, subject);
+    },
+    async groupUpdateDescription(chatId, description) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupUpdateDescription(chatId, description);
+    },
+    async groupParticipantsUpdate(chatId, participants, action) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupParticipantsUpdate(chatId, [...participants], action);
+    },
+    async groupSettingUpdate(chatId, setting) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupSettingUpdate(chatId, setting);
+    },
+    async groupInviteCode(chatId) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupInviteCode(chatId);
+    },
+    async groupRevokeInvite(chatId) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupRevokeInvite(chatId);
+    },
+    async groupUpdatePicture(chatId, image) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupUpdatePicture(chatId, image);
+    },
+    async groupRemovePicture(chatId) {
+      if (status.phase !== "online" || !conn)
+        throw new Error(`not online (phase: ${status.phase})`);
+      return conn.groupRemovePicture(chatId);
     },
     async profilePictureUrl(jid, type) {
       if (status.phase !== "online" || !conn)

@@ -1796,6 +1796,8 @@ test("an identity a session builds from anything is still copied safely", async 
     ...driver.session,
     identity: () => ({
       jid: "15551230000:7@s.whatsapp.net",
+      phoneJid: "15551230000@s.whatsapp.net",
+      lid: "123456789@lid",
       pushName: "Me",
       // Not part of `WaIdentity`, and not structured-cloneable.
       refresh: () => {},
@@ -1821,6 +1823,8 @@ test("an identity a session builds from anything is still copied safely", async 
     expect(notified).toBe(1);
     expect(client.account.get().identity?.jid).toBe("15551230000:7@s.whatsapp.net");
     expect(client.account.get().identity?.pushName).toBe("Me");
+    expect(client.account.get().identity?.phoneJid).toBe("15551230000@s.whatsapp.net");
+    expect(client.account.get().identity?.lid).toBe("123456789@lid");
     // Only the contract's fields are carried across.
     expect("refresh" in (client.account.get().identity ?? {})).toBe(false);
   } finally {

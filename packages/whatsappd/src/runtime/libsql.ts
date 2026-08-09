@@ -156,6 +156,22 @@ const migrations = [
   },
 ] as const;
 
+async function replaceEmptyLegacyOperationTable(transaction: Transaction): Promise<void> {
+  const columns = await transaction.execute("PRAGMA table_info(wa_operations)");
+  const names = new Set(columns.rows.map((row) => (typeof row.name === "string" ? row.name : "")));
+  if (!names.has("input_json") || names.has("operation_json")) return;
+
+  const count = await transaction.execute("SELECT COUNT(*) AS count FROM wa_operations");
+  if (integer(count.rows[0]?.count, "legacy operation count") !== 0) {
+    throw new Error("legacy wa_operations contains durable rows and cannot be replaced safely");
+  }
+
+  await transaction.executeMultiple(`
+    DROP TABLE wa_operations;
+    DELETE FROM wa_schema_migrations WHERE version >= 2;
+  `);
+}
+
 async function migrate(client: Client): Promise<void> {
   const transaction = await client.transaction("write");
   try {
@@ -166,6 +182,7 @@ async function migrate(client: Client): Promise<void> {
       )`,
       args: [],
     });
+    await replaceEmptyLegacyOperationTable(transaction);
     const applied = await transaction.execute({
       sql: "SELECT version FROM wa_schema_migrations",
       args: [],

@@ -87,7 +87,7 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
           if (!hasCode(error, "EEXIST")) throw error;
           const existing = await consumeImmutableMedia({
             ...input,
-            source: createReadStream(objectPath),
+            source: createReadStream(/* turbopackIgnore: true */ objectPath),
             consume: () => {},
           });
           if (existing.ref !== stored.ref || existing.byteLength !== stored.byteLength)
@@ -108,7 +108,7 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
       const objectPath = join(namespace, mediaAccountDirectory(accountId), `${objectName}.bin`);
       try {
         if (!(await stat(objectPath)).isFile()) return null;
-        return createReadStream(objectPath);
+        return createReadStream(/* turbopackIgnore: true */ objectPath);
       } catch (error) {
         if (hasCode(error, "ENOENT")) return null;
         throw error;

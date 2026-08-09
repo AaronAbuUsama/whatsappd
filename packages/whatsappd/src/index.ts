@@ -36,6 +36,8 @@ export type {
   GroupMetadata,
   GroupParticipant,
   GroupParticipantAction,
+  GroupParticipantUpdateResult,
+  GroupSetting,
   GroupUpdate,
   PresenceKind,
   PresenceUpdate,

@@ -1,6 +1,7 @@
 import { addressOf, type InboundMessage } from "./model/message.ts";
 import type { MessageRef, Outbound, SendOptions } from "./model/outbound.ts";
 import type { WaIdentity } from "./model/status.ts";
+import type { GroupSetting, GroupParticipantAction } from "./model/group.ts";
 import type { WhatsAppSession } from "./session.ts";
 import { createSubscriptionDispatcher, type WhatsAppEvent } from "./subscription.ts";
 
@@ -58,6 +59,7 @@ export interface RecordedSessionCommands {
     readonly count: number;
     readonly result: { readonly requestId: string };
   }>;
+  readonly groups: Array<readonly [string, ...unknown[]]>;
 }
 
 export interface TestWhatsAppSessionDriver {
@@ -67,6 +69,17 @@ export interface TestWhatsAppSessionDriver {
     | "send"
     | "markRead"
     | "setTyping"
+    | "groupMetadata"
+    | "groupCreate"
+    | "groupLeave"
+    | "groupUpdateSubject"
+    | "groupUpdateDescription"
+    | "groupParticipantsUpdate"
+    | "groupSettingUpdate"
+    | "groupInviteCode"
+    | "groupRevokeInvite"
+    | "groupUpdatePicture"
+    | "groupRemovePicture"
     | "requestHistory"
     | "start"
     | "stop"
@@ -104,6 +117,7 @@ export function createTestWhatsAppSession(
     readonly count: number;
     readonly result: { readonly requestId: string };
   }> = [];
+  const groups: Array<readonly [string, ...unknown[]]> = [];
   const send = async (
     to: string,
     content: Outbound,
@@ -153,6 +167,43 @@ export function createTestWhatsAppSession(
       async setTyping(chatId, on) {
         typing.push({ chatId, on });
       },
+      async groupMetadata(chatId) {
+        return { id: chatId, participants: [] };
+      },
+      async groupCreate(subject, participants) {
+        groups.push(["create", subject, [...participants]]);
+        return { id: "test-group@g.us", subject, participants: [] };
+      },
+      async groupLeave(chatId) {
+        groups.push(["leave", chatId]);
+      },
+      async groupUpdateSubject(chatId, subject) {
+        groups.push(["subject", chatId, subject]);
+      },
+      async groupUpdateDescription(chatId, description) {
+        groups.push(["description", chatId, description]);
+      },
+      async groupParticipantsUpdate(chatId, participants, action: GroupParticipantAction) {
+        groups.push(["participants", chatId, [...participants], action]);
+        return participants.map((id) => ({ id, status: "200" }));
+      },
+      async groupSettingUpdate(chatId, setting: GroupSetting) {
+        groups.push(["setting", chatId, setting]);
+      },
+      async groupInviteCode(chatId) {
+        groups.push(["invite", chatId]);
+        return "test-invite";
+      },
+      async groupRevokeInvite(chatId) {
+        groups.push(["revoke_invite", chatId]);
+        return "test-invite-revoked";
+      },
+      async groupUpdatePicture(chatId, image) {
+        groups.push(["picture", chatId, image.byteLength]);
+      },
+      async groupRemovePicture(chatId) {
+        groups.push(["remove_picture", chatId]);
+      },
       async requestHistory(anchor, opts) {
         const count = opts?.count ?? 50;
         // Mirror the real seam's ADR-0010 bound so driver-tested code cannot
@@ -164,7 +215,7 @@ export function createTestWhatsAppSession(
         return result;
       },
     },
-    commands: { sent, read, typing, historyRequests },
+    commands: { sent, read, typing, historyRequests, groups },
     emit(event) {
       const task = (pipeline = pipeline.then(() => dispatcher.dispatch(event)));
       // Reported to the session's life as well as to the caller: a handler that

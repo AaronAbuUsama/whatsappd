@@ -12,7 +12,14 @@
  *
  * @packageDocumentation
  */
+/* eslint-disable max-lines -- protocol lifecycle and its one internal Client source stay colocated */
 import { isOnline, isTerminal, type Status, type WaIdentity } from "../model/status.ts";
+import type {
+  GroupMetadata,
+  GroupParticipantAction,
+  GroupParticipantUpdateResult,
+  GroupSetting,
+} from "../model/group.ts";
 import { refOf } from "../model/outbound.ts";
 import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
@@ -143,6 +150,21 @@ export interface RuntimeSession extends OperationSession {
    * runtime never requires it; a session that cannot answer simply has none.
    */
   identity?(): WaIdentity | undefined;
+  groupMetadata?(chatId: string): Promise<GroupMetadata>;
+  groupCreate?(subject: string, participants: readonly string[]): Promise<GroupMetadata>;
+  groupLeave?(chatId: string): Promise<void>;
+  groupUpdateSubject?(chatId: string, subject: string): Promise<void>;
+  groupUpdateDescription?(chatId: string, description?: string): Promise<void>;
+  groupParticipantsUpdate?(
+    chatId: string,
+    participants: readonly string[],
+    action: GroupParticipantAction,
+  ): Promise<readonly GroupParticipantUpdateResult[]>;
+  groupSettingUpdate?(chatId: string, setting: GroupSetting): Promise<void>;
+  groupInviteCode?(chatId: string): Promise<string | undefined>;
+  groupRevokeInvite?(chatId: string): Promise<string | undefined>;
+  groupUpdatePicture?(chatId: string, image: Uint8Array): Promise<void>;
+  groupRemovePicture?(chatId: string): Promise<void>;
 }
 
 /** Configuration for {@link createWhatsAppRuntime}. */
@@ -237,6 +259,21 @@ export interface ClientRuntimeSource {
   readonly operations: WhatsAppOperationStore;
   readonly media: WhatsAppBackend["media"];
   setTyping(chatId: string, on: boolean): Promise<void>;
+  groupMetadata(chatId: string): Promise<GroupMetadata>;
+  groupCreate(subject: string, participants: readonly string[]): Promise<GroupMetadata>;
+  groupLeave(chatId: string): Promise<void>;
+  groupUpdateSubject(chatId: string, subject: string): Promise<void>;
+  groupUpdateDescription(chatId: string, description?: string): Promise<void>;
+  groupParticipantsUpdate(
+    chatId: string,
+    participants: readonly string[],
+    action: GroupParticipantAction,
+  ): Promise<readonly GroupParticipantUpdateResult[]>;
+  groupSettingUpdate(chatId: string, setting: GroupSetting): Promise<void>;
+  groupInviteCode(chatId: string): Promise<string | undefined>;
+  groupRevokeInvite(chatId: string): Promise<string | undefined>;
+  groupUpdatePicture(chatId: string, image: Uint8Array): Promise<void>;
+  groupRemovePicture(chatId: string): Promise<void>;
 }
 
 /**
@@ -839,6 +876,64 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       if (!opened) throw new Error("the runtime has no live Session");
       if (!opened.setTyping) throw new Error("the Session cannot set typing state");
       await opened.setTyping(chatId, on);
+    },
+    async groupMetadata(chatId) {
+      const opened = session;
+      if (!opened?.groupMetadata) throw new Error("the Session cannot read group metadata");
+      return opened.groupMetadata(chatId);
+    },
+    async groupCreate(subject, participants) {
+      const opened = session;
+      if (!opened?.groupCreate) throw new Error("the Session cannot create groups");
+      return opened.groupCreate(subject, participants);
+    },
+    async groupLeave(chatId) {
+      const opened = session;
+      if (!opened?.groupLeave) throw new Error("the Session cannot leave groups");
+      await opened.groupLeave(chatId);
+    },
+    async groupUpdateSubject(chatId, subject) {
+      const opened = session;
+      if (!opened?.groupUpdateSubject) throw new Error("the Session cannot update group subjects");
+      await opened.groupUpdateSubject(chatId, subject);
+    },
+    async groupUpdateDescription(chatId, description) {
+      const opened = session;
+      if (!opened?.groupUpdateDescription)
+        throw new Error("the Session cannot update group descriptions");
+      await opened.groupUpdateDescription(chatId, description);
+    },
+    async groupParticipantsUpdate(chatId, participants, action) {
+      const opened = session;
+      if (!opened?.groupParticipantsUpdate)
+        throw new Error("the Session cannot update group participants");
+      return opened.groupParticipantsUpdate(chatId, participants, action);
+    },
+    async groupSettingUpdate(chatId, setting) {
+      const opened = session;
+      if (!opened?.groupSettingUpdate) throw new Error("the Session cannot update group settings");
+      await opened.groupSettingUpdate(chatId, setting);
+    },
+    async groupInviteCode(chatId) {
+      const opened = session;
+      if (!opened?.groupInviteCode) throw new Error("the Session cannot read group invite codes");
+      return opened.groupInviteCode(chatId);
+    },
+    async groupRevokeInvite(chatId) {
+      const opened = session;
+      if (!opened?.groupRevokeInvite)
+        throw new Error("the Session cannot revoke group invite codes");
+      return opened.groupRevokeInvite(chatId);
+    },
+    async groupUpdatePicture(chatId, image) {
+      const opened = session;
+      if (!opened?.groupUpdatePicture) throw new Error("the Session cannot update group pictures");
+      await opened.groupUpdatePicture(chatId, image);
+    },
+    async groupRemovePicture(chatId) {
+      const opened = session;
+      if (!opened?.groupRemovePicture) throw new Error("the Session cannot remove group pictures");
+      await opened.groupRemovePicture(chatId);
     },
   });
 

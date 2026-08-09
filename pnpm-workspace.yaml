@@ -5,6 +5,7 @@ packages:
 
 allowBuilds:
   baileys: false
+  ffmpeg-static: true
   protobufjs: false
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.2

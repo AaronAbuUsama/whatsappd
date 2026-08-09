@@ -23,6 +23,9 @@ import { settle } from "../outcome.ts";
 import {
   addressOf,
   type GroupMetadata,
+  type GroupParticipantAction,
+  type GroupParticipantUpdateResult,
+  type GroupSetting,
   type GroupUpdate,
   type ConversationSyncBatch,
   type InboundMessage,
@@ -87,6 +90,20 @@ export interface BaileysConn {
   setTyping(chatId: string, on: boolean): Promise<void>;
   /** Fetch normalized group metadata for a group JID. */
   groupMetadata(chatId: string): Promise<GroupMetadata>;
+  groupCreate(subject: string, participants: string[]): Promise<GroupMetadata>;
+  groupLeave(chatId: string): Promise<void>;
+  groupUpdateSubject(chatId: string, subject: string): Promise<void>;
+  groupUpdateDescription(chatId: string, description?: string): Promise<void>;
+  groupParticipantsUpdate(
+    chatId: string,
+    participants: string[],
+    action: GroupParticipantAction,
+  ): Promise<readonly GroupParticipantUpdateResult[]>;
+  groupSettingUpdate(chatId: string, setting: GroupSetting): Promise<void>;
+  groupInviteCode(chatId: string): Promise<string | undefined>;
+  groupRevokeInvite(chatId: string): Promise<string | undefined>;
+  groupUpdatePicture(chatId: string, image: Uint8Array): Promise<void>;
+  groupRemovePicture(chatId: string): Promise<void>;
   /** Fetch the profile picture URL for a contact, account, or group JID. */
   profilePictureUrl(jid: string, type?: "image" | "preview"): Promise<string | undefined>;
   /**
@@ -99,6 +116,39 @@ export interface BaileysConn {
   identity(): WaIdentity | undefined;
   /** Intentional teardown — the resulting close is classified `intentional`. */
   end(): void | Promise<void>;
+}
+
+function toGroupMetadata(
+  metadata: {
+    id?: string;
+    subject?: string;
+    desc?: string;
+    announce?: boolean;
+    restrict?: boolean;
+    participants: readonly {
+      id: string;
+      phoneNumber?: string;
+      lid?: string;
+      admin?: string | null;
+    }[];
+  },
+  fallbackId: string,
+): GroupMetadata {
+  return {
+    id: metadata.id ?? fallbackId,
+    ...(metadata.subject ? { subject: metadata.subject } : {}),
+    ...(metadata.desc ? { description: metadata.desc } : {}),
+    ...(metadata.announce !== undefined ? { announcement: metadata.announce } : {}),
+    ...(metadata.restrict !== undefined ? { locked: metadata.restrict } : {}),
+    participants: metadata.participants.map((participant) => ({
+      id: participant.id,
+      ...(participant.phoneNumber && {
+        phoneJid: jidNormalizedUser(participant.phoneNumber),
+      }),
+      ...(participant.lid && { lid: jidNormalizedUser(participant.lid) }),
+      ...(participant.admin ? { role: participant.admin } : {}),
+    })),
+  };
 }
 
 type MessagesUpsertPayload = BaileysEventMap["messages.upsert"];
@@ -505,24 +555,45 @@ export async function openSocketWith(
     setTyping: (chatId, on) => sock.sendPresenceUpdate(on ? "composing" : "paused", chatId),
     groupMetadata: async (chatId) => {
       const metadata = await sock.groupMetadata(chatId);
-      return {
-        id: metadata.id ?? chatId,
-        ...(metadata.subject ? { subject: metadata.subject } : {}),
-        participants: metadata.participants.map((participant) => ({
-          id: participant.id,
-          ...(participant.admin ? { role: participant.admin } : {}),
-        })),
-      };
+      return toGroupMetadata(metadata, chatId);
     },
+    groupCreate: async (subject, participants) =>
+      toGroupMetadata(await sock.groupCreate(subject, participants), ""),
+    groupLeave: (chatId) => sock.groupLeave(chatId),
+    groupUpdateSubject: (chatId, subject) => sock.groupUpdateSubject(chatId, subject),
+    groupUpdateDescription: (chatId, description) =>
+      sock.groupUpdateDescription(chatId, description),
+    groupParticipantsUpdate: async (chatId, participants, action) =>
+      (await sock.groupParticipantsUpdate(chatId, participants, action)).map((result) => ({
+        ...(result.jid ? { id: result.jid } : {}),
+        status: result.status,
+      })),
+    groupSettingUpdate: (chatId, setting) => sock.groupSettingUpdate(chatId, setting),
+    groupInviteCode: (chatId) => sock.groupInviteCode(chatId),
+    groupRevokeInvite: (chatId) => sock.groupRevokeInvite(chatId),
+    groupUpdatePicture: (chatId, image) => sock.updateProfilePicture(chatId, Buffer.from(image)),
+    groupRemovePicture: (chatId) => sock.removeProfilePicture(chatId),
     profilePictureUrl: (jid, type) => sock.profilePictureUrl(jid, type),
     requestHistory: (count, ref, timestampMs) =>
       sock.fetchMessageHistory(count, refToKey(ref), timestampMs),
     identity: () => {
       const u = sock.user;
       if (!u?.id) return undefined;
-      const digits = u.id.split(/[:@]/)[0] ?? "";
+      const phoneJid = u.phoneNumber
+        ? jidNormalizedUser(u.phoneNumber)
+        : u.id.endsWith("@s.whatsapp.net")
+          ? jidNormalizedUser(u.id)
+          : undefined;
+      const lid = u.lid ? jidNormalizedUser(u.lid) : undefined;
+      const digits = phoneJid?.split("@", 1)[0] ?? "";
       const phoneE164 = /^\d+$/.test(digits) ? `+${digits}` : undefined;
-      return { jid: u.id, pushName: u.name ?? undefined, phoneE164 };
+      return {
+        jid: u.id,
+        ...(phoneJid && { phoneJid }),
+        ...(lid && { lid }),
+        pushName: u.name ?? undefined,
+        phoneE164,
+      };
     },
     end,
   };

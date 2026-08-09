@@ -317,6 +317,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
     const held = identityCopy;
     if (
       held?.jid !== identity.jid ||
+      held.phoneJid !== identity.phoneJid ||
+      held.lid !== identity.lid ||
       held.pushName !== identity.pushName ||
       held.phoneE164 !== identity.phoneE164
     )
@@ -328,6 +330,8 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // return anything; copying exactly the contract cannot fail.
       identityCopy = Object.freeze({
         jid: identity.jid,
+        ...(identity.phoneJid !== undefined && { phoneJid: identity.phoneJid }),
+        ...(identity.lid !== undefined && { lid: identity.lid }),
         ...(identity.pushName !== undefined && { pushName: identity.pushName }),
         ...(identity.phoneE164 !== undefined && { phoneE164: identity.phoneE164 }),
       });
@@ -956,6 +960,19 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         (ordered.groups ??= Object.freeze(
           [...groups.values()].sort((a, b) => compareId(a.groupId, b.groupId)),
         )),
+      metadata: (chatId) => source.groupMetadata(chatId),
+      create: (subject, participants) => source.groupCreate(subject, participants),
+      leave: (chatId) => source.groupLeave(chatId),
+      updateSubject: (chatId, subject) => source.groupUpdateSubject(chatId, subject),
+      updateDescription: (chatId, description) =>
+        source.groupUpdateDescription(chatId, description),
+      updateParticipants: (chatId, participants, action) =>
+        source.groupParticipantsUpdate(chatId, participants, action),
+      updateSetting: (chatId, setting) => source.groupSettingUpdate(chatId, setting),
+      inviteCode: (chatId) => source.groupInviteCode(chatId),
+      revokeInvite: (chatId) => source.groupRevokeInvite(chatId),
+      updatePicture: (chatId, image) => source.groupUpdatePicture(chatId, image),
+      removePicture: (chatId) => source.groupRemovePicture(chatId),
     },
 
     messages: {
