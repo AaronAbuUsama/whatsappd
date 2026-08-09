@@ -156,7 +156,9 @@ for history is a separate operation and is not hidden behind paging.
 The Client exposes durable send, reaction, edit, revoke, mark-read, and
 phone-history commands under `client.messages`. Each returns an operation
 receipt immediately; `client.operations.wait(id)` awaits its terminal outcome,
-and `acknowledge(id)` removes the receipt from optimistic UI state. A supplied
+and `acknowledge(id)` dismisses a terminal failure from optimistic UI state.
+A successful send remains optimistic until its authoritative message arrives,
+even if its receipt is acknowledged. A supplied
 `idempotencyKey` makes an application retry resolve to the same operation when
 its normalized input is identical and reject when it is not. If omitted, a key
 is generated and returned on the receipt; two calls without a shared key are

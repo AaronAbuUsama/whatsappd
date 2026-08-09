@@ -145,6 +145,29 @@ const throwIfAborted = (signal?: AbortSignal): void => {
   if (signal?.aborted) throw abortError(signal);
 };
 
+const withAbort = <T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> => {
+  if (!signal) return pending;
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => {
+      signal.removeEventListener("abort", abort);
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    void pending.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+};
+
 const terminal = (
   operation: WhatsAppOperation | undefined,
 ): operation is TerminalWhatsAppOperation =>
@@ -169,9 +192,18 @@ const bytesOf = async (input: BinaryInput, signal?: AbortSignal): Promise<Uint8A
     return new Uint8Array(await response.arrayBuffer());
   }
   const chunks: Uint8Array[] = [];
-  for await (const chunk of input.stream) {
-    throwIfAborted(signal);
-    chunks.push(Uint8Array.from(chunk));
+  const iterator = input.stream[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      const next = await withAbort(iterator.next(), signal);
+      if (next.done) break;
+      chunks.push(Uint8Array.from(next.value));
+    }
+  } catch (error) {
+    void Promise.resolve()
+      .then(() => iterator.return?.())
+      .catch(() => {});
+    throw error;
   }
   return Uint8Array.from(Buffer.concat(chunks));
 };

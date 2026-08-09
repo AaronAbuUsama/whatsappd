@@ -22,6 +22,13 @@ export function operationStoreConformance(name: string, create: () => Promise<St
   void test(`[${name}] idempotency is account-scoped and store values are owned`, async () => {
     const fixture = await create();
     try {
+      const changes: string[] = [];
+      const offThrowing = fixture.store.subscribe("personal", () => {
+        throw new Error("operation listener failed");
+      });
+      const offRecording = fixture.store.subscribe("personal", (operationId) => {
+        changes.push(operationId);
+      });
       const request = {
         accountId: "personal",
         id: "operation-1",
@@ -29,6 +36,9 @@ export function operationStoreConformance(name: string, create: () => Promise<St
         input: input("hello"),
       } as const;
       const first = await fixture.store.submit(request);
+      offThrowing();
+      offRecording();
+      assert.deepEqual(changes, [first.id]);
       const repeat = await fixture.store.submit(request);
       assert.deepEqual(repeat, first);
       await assert.rejects(
@@ -62,6 +72,7 @@ export function operationStoreConformance(name: string, create: () => Promise<St
       });
       const first = await fixture.store.claim("personal", "attempt-1", 0);
       assert.equal(first?.id, "a");
+      assert.equal(await fixture.store.start("personal", "a", "attempt-1", 1_000), undefined);
       const reclaimed = await fixture.store.claim("personal", "attempt-2", 1_000);
       assert.equal(reclaimed?.id, "a");
       assert.equal(await fixture.store.start("personal", "a", "attempt-1", 1_000), undefined);

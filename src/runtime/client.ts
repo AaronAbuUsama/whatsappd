@@ -473,7 +473,10 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
           (operation) =>
             operation.input.type === "send" &&
             operation.input.chatId === entry.chatId &&
-            operation.acknowledgedAt === undefined &&
+            !(
+              operation.acknowledgedAt !== undefined &&
+              (operation.state.status === "failed" || operation.state.status === "outcome_unknown")
+            ) &&
             !(
               operation.state.status === "succeeded" &&
               typeof operation.state.result === "object" &&
@@ -719,7 +722,10 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
       // into the middle of a mirror it no longer holds the front of.
       retained.clear();
       for (const operation of operations.values())
-        if (operation.input.type === "send" && operation.acknowledgedAt === undefined)
+        if (
+          operation.input.type === "send" &&
+          (operation.acknowledgedAt === undefined || operation.state.status === "succeeded")
+        )
           entryFor(operation.input.chatId);
       for (const namespace of NAMESPACES) touch(namespace);
     };

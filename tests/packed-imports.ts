@@ -206,6 +206,7 @@ try {
       const AT = 1_700_000_000_000;
       const DATA = path.resolve("data");
       const version = createRequire(import.meta.url)("whatsappd/package.json").version;
+      let writeExecutions;
 
       assert.equal(typeof root.createSession, "function");
       assert.equal(typeof createTestWhatsAppSession, "function");
@@ -279,9 +280,22 @@ try {
           await page(client, 25);
           await page(client, 30);
           const result = durable(client);
+          const operation = (await store.operations.list(ACCOUNT)).find(
+            (candidate) => candidate.idempotencyKey === "packed-outbound",
+          );
+          assert.equal(operation?.state.status, "succeeded");
+          assert.equal(typeof operation.acknowledgedAt, "number");
           assert.deepEqual(result.counts, { chats: 2, contacts: 1, groups: 1, messages: 30 });
           assert.deepEqual(result.noLive, { connection: true, identity: true, presence: true });
-          return result;
+          return {
+            ...result,
+            operation: {
+              idempotencyKey: operation.idempotencyKey,
+              status: operation.state.status,
+              acknowledged: operation.acknowledgedAt !== undefined,
+              revision: operation.revision,
+            },
+          };
         } finally {
           await client.close();
           await runtime.stop();
@@ -355,7 +369,8 @@ try {
           assert.equal(repeated.id, operation.id);
           assert.equal(driver.commands.sent.length, 1);
           await client.operations.acknowledge(operation.id);
-          assert.equal(client.messages.get(CHAT).outgoing.length, 0);
+          assert.equal(client.messages.get(CHAT).outgoing.length, 1);
+          writeExecutions = driver.commands.sent.length;
         } finally {
           await client.close();
           await runtime.stop();
@@ -364,7 +379,7 @@ try {
       }
 
       const result = await cold();
-      console.log(JSON.stringify({ pid: process.pid, version, ...result }));
+      console.log(JSON.stringify({ pid: process.pid, version, writeExecutions, ...result }));
     `,
   );
   await mkdir(path.join(consumer, "data"));
@@ -378,6 +393,13 @@ try {
     readonly hash: string;
     readonly counts: Record<string, number>;
     readonly noLive: Record<string, boolean>;
+    readonly writeExecutions?: number;
+    readonly operation: {
+      readonly idempotencyKey: string;
+      readonly status: string;
+      readonly acknowledged: boolean;
+      readonly revision: number;
+    };
   };
   const second = JSON.parse(
     (await execFile(process.execPath, ["verify.mjs", "read"], { cwd: consumer, env: childEnv }))
@@ -389,6 +411,8 @@ try {
   assert.equal(first.hash, second.hash, "packed replacement reconstructed different durable state");
   assert.deepEqual(first.counts, second.counts);
   assert.deepEqual(second.noLive, { connection: true, identity: true, presence: true });
+  assert.equal(first.writeExecutions, 1);
+  assert.deepEqual(first.operation, second.operation);
 
   const issueAt = process.argv.indexOf("--issue");
   const issue = issueAt === -1 ? 107 : Number(process.argv[issueAt + 1]);
@@ -403,6 +427,11 @@ try {
     durableStateHash: first.hash,
     counts: first.counts,
     noLiveStateReconstructed: second.noLive,
+    operationProof: {
+      ...second.operation,
+      writeExecutions: first.writeExecutions,
+      reconstructedAcrossProcesses: true,
+    },
   };
   const receiptAt = process.argv.indexOf("--receipt");
   if (receiptAt !== -1) {

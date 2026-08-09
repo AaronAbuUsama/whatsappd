@@ -122,6 +122,11 @@ void test("queued work and its optimistic message survive Client and Runtime rep
     assert.equal(completed.state.status, "succeeded");
     assert.equal(replacementDriver.commands.sent.length, 1);
     assert.equal(replacementClient.messages.get(CHAT).outgoing.length, 1);
+    assert.equal(
+      typeof (await replacementClient.operations.acknowledge(queued.id))?.acknowledgedAt,
+      "number",
+    );
+    assert.equal(replacementClient.messages.get(CHAT).outgoing.length, 1);
 
     await replacementDriver.emit({
       type: "message",
@@ -135,10 +140,6 @@ void test("queued work and its optimistic message survive Client and Runtime rep
       }),
     });
     assert.equal(replacementClient.messages.get(CHAT).outgoing.length, 0);
-    assert.equal(
-      typeof (await replacementClient.operations.acknowledge(queued.id))?.acknowledgedAt,
-      "number",
-    );
   } finally {
     await replacementClient.close();
     await replacementRuntime.stop();
@@ -288,6 +289,44 @@ void test("aborting wait does not cancel work once its durable row exists", asyn
     assert.equal((await client.operations.wait(operation.id)).state.status, "succeeded");
   } finally {
     release();
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("aborting a stalled media stream closes staging without a durable row", async () => {
+  const backend = memoryBackend();
+  const runtime = createWhatsAppRuntime({
+    accountId: "abort-staging",
+    backend,
+    openSession: () => createTestWhatsAppSession().session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  let closed = false;
+  const stream = {
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => new Promise<IteratorResult<Uint8Array>>(() => {}),
+        async return(): Promise<IteratorResult<Uint8Array>> {
+          closed = true;
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  };
+  const controller = new AbortController();
+  try {
+    const pending = client.messages.send.image(CHAT, { stream }, { signal: controller.signal });
+    await tick();
+    controller.abort();
+    await assert.rejects(
+      pending,
+      (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+    );
+    await until(() => closed);
+    assert.equal((await backend.operations.list("abort-staging")).length, 0);
+  } finally {
     await client.close();
     await runtime.stop();
   }

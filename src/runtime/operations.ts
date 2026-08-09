@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { MessageRef, SendOptions } from "../model/outbound.ts";
 import type { Unsubscribe } from "../subscription.ts";
+import { surface } from "./surface.ts";
 
 export type OperationMediaKind = "image" | "video" | "audio" | "document" | "sticker";
 
@@ -157,6 +158,21 @@ export function operationSubscription(
     held.delete(listener);
     if (held.size === 0) listeners.delete(accountId);
   };
+}
+
+export function announceOperationChanges(
+  listeners: ReadonlyMap<string, ReadonlySet<(operationId: string) => void>>,
+  accountId: string,
+  operationIds: readonly string[],
+): void {
+  for (const operationId of operationIds)
+    for (const listener of listeners.get(accountId) ?? []) {
+      try {
+        listener(operationId);
+      } catch (error) {
+        surface(error);
+      }
+    }
 }
 
 export class OperationIdempotencyConflictError extends Error {

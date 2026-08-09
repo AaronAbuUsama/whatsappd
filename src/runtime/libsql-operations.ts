@@ -3,6 +3,7 @@ import type { LazyLibsqlClient } from "../stores/libsql.ts";
 import { transact } from "./libsql-transaction.ts";
 import {
   OperationIdempotencyConflictError,
+  announceOperationChanges,
   operationSubscription,
   operationInputJson,
   type WhatsAppOperation,
@@ -98,16 +99,12 @@ const terminal = (state: WhatsAppOperationState): boolean =>
 
 export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperationStore {
   const listeners = new Map<string, Set<(operationId: string) => void>>();
-  const announce = (accountId: string, operationIds: readonly string[]): void => {
-    for (const operationId of operationIds)
-      for (const listener of listeners.get(accountId) ?? []) listener(operationId);
-  };
   const mutate = async <T>(
     accountId: string,
     work: (transaction: Transaction) => Promise<{ result: T; changed: string[] }>,
   ): Promise<T> => {
     const committed = await transact(client, "write", work);
-    announce(accountId, committed.changed);
+    announceOperationChanges(listeners, accountId, committed.changed);
     return structuredClone(committed.result);
   };
   const transition = (
@@ -227,7 +224,9 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
 
     start: (accountId, operationId, attemptId, ttlMs) =>
       transition(accountId, operationId, (current, at) =>
-        current.state.status === "claimed" && current.state.attemptId === attemptId
+        current.state.status === "claimed" &&
+        current.state.attemptId === attemptId &&
+        current.state.expiresAt > at
           ? {
               ...current,
               state: { status: "executing", attemptId, startedAt: at, expiresAt: at + ttlMs },

@@ -16,6 +16,7 @@ import { isOnline, isTerminal, type Status, type WaIdentity } from "../model/sta
 import { refOf } from "../model/outbound.ts";
 import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
+import { surface } from "./surface.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import { firstRejection, settle } from "../outcome.ts";
 import {
@@ -275,19 +276,7 @@ interface Registration<Frame> {
  * never fatal. `--no-warnings` silences it, as it silences every warning; that
  * is the operator asking not to be told.
  */
-export const surface = (error: unknown): void => {
-  try {
-    process.emitWarning(
-      error instanceof Error ? error : new Error(String(error), { cause: error }),
-    );
-  } catch {
-    // Describing a failure must not become a second one escaping the fanout:
-    // `String()` throws for a null-prototype object or a hostile
-    // `Symbol.toPrimitive`, and observers that have not run yet would lose a
-    // committed frame to it.
-    process.emitWarning(new Error("an observer failed with a value that cannot be described"));
-  }
-};
+export { surface };
 
 /**
  * Call every current member of one listener set, once, in isolation.

@@ -13,6 +13,7 @@ import { memoryStore } from "../stores/memory.ts";
 import { immutableMediaRef } from "./media.ts";
 import {
   OperationIdempotencyConflictError,
+  announceOperationChanges,
   operationSubscription,
   operationInputJson,
   type WhatsAppOperation,
@@ -368,16 +369,12 @@ export function memoryOperationStore(): WhatsAppOperationStore {
     );
     return result;
   };
-  const announce = (accountId: string, changed: readonly string[]): void => {
-    for (const operationId of changed)
-      for (const listener of listeners.get(accountId) ?? []) listener(operationId);
-  };
   const write = async <T>(
     accountId: string,
     work: (held: ReturnType<typeof account>) => { readonly result: T; readonly changed: string[] },
   ): Promise<T> => {
     const committed = await serialize(() => work(account(accountId)));
-    announce(accountId, committed.changed);
+    announceOperationChanges(listeners, accountId, committed.changed);
     return copy(committed.result);
   };
   const replace = (
