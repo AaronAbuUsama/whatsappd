@@ -9,7 +9,8 @@ replacement, expose optimistic receipts with wait and acknowledge APIs, and
 keep typing as a non-replayed live command.
 
 Media adapters now implement streaming `write`/`open` methods instead of
-whole-object `put`/`read`. Buffer, URL, and async-iterable sends are published
-incrementally before operation submission; ambiguous submit responses recover
-the deterministic committed row without deleting its media. Voice notes accept
+whole-object `put`/`read`. Buffer sends take one caller-isolating snapshot and
+publish it in bounded chunks; URL and async-iterable sends stream incrementally
+before operation submission. Ambiguous submit responses recover the
+deterministic committed row without deleting its media. Voice notes accept
 already-compatible Ogg Opus mono input and do not transcode.

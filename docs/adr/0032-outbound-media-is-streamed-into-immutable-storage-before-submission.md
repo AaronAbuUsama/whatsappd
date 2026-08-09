@@ -10,13 +10,16 @@ Operation is submitted. The operation row contains only the returned opaque
 media reference and message metadata. A replacement Runtime opens that
 reference as a byte stream immediately before the Session call.
 
-The Media Store accepts and returns asynchronous byte streams. It does not
-require callers or adapters to materialize a complete object as one
-`Uint8Array`. The filesystem adapter writes into a private temporary object,
-updates its content hash incrementally, syncs it, and publishes the immutable
-object only after the input ends successfully. Its read side streams the
-published object. In-memory storage may retain complete objects because that is
-the purpose of that adapter, but it satisfies the same streaming contract.
+The Media Store accepts and returns asynchronous byte streams. URL and
+asynchronous-stream inputs do not require the Client or adapters to materialize
+a complete object as one `Uint8Array`. A Buffer is already materialized and
+mutable, so the Client takes one call-time snapshot to own its value, then emits
+bounded views of that snapshot. The filesystem adapter writes into a private
+temporary object, updates its content hash incrementally, syncs it, and
+publishes the immutable object only after the input ends successfully. Its read
+side streams the published object. In-memory storage may retain complete objects
+because that is the purpose of that adapter, but it satisfies the same streaming
+contract.
 
 Publishing media and submitting an operation cross two independently
 replaceable durability systems. They are not one distributed transaction. The
@@ -61,8 +64,8 @@ application or future adapter concern.
 
 - The exported Media Store contract changes from whole-byte `put`/`read` to
   streaming `write`/`open`; custom adapters require an explicit 0.3 migration.
-- Buffer, URL and asynchronous-stream inputs follow one bounded Client staging
-  path and are consumed once.
+- Buffer input costs one caller-isolating snapshot and then follows the same
+  bounded-chunk staging path as URL and asynchronous-stream inputs.
 - The operation state machine and idempotency rules remain unchanged.
 - Orphaned published media is a bounded ownership problem to reconcile later,
   not data the submission path may guess is safe to delete.

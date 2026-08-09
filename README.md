@@ -170,10 +170,13 @@ with `await backend.media.open({ accountId, ref })`, which returns an
 `AsyncIterable<Uint8Array>` or `null`. The package does not invent a filesystem
 URL or browser delivery policy.
 
-Outbound Buffer, URL, and `AsyncIterable<Uint8Array>` attachments are streamed
-into the injected media store before their durable operation is queued. A
-voice note (`ptt: true`) must already be Ogg Opus mono; whatsappd validates that
-bounded header but does not transcode arbitrary audio.
+Outbound attachments reach the injected media store before their durable
+operation is queued. A Buffer is snapshotted once at method invocation, then
+published in bounded chunks; this protects the durable value from caller
+mutation but temporarily holds one owned copy alongside the caller's Buffer.
+URL and `AsyncIterable<Uint8Array>` inputs stream incrementally without a full
+Client-side copy. A voice note (`ptt: true`) must already be Ogg Opus mono;
+whatsappd validates that bounded header but does not transcode arbitrary audio.
 
 The Client merges saved pages and live changes for you, per chat, and what it retains grows
 with what the application **read**: reading a chat creates its entry, and from

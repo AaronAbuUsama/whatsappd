@@ -4,7 +4,7 @@
  */
 import type { InboundMessage } from "./message.ts";
 
-/** Bytes to send: an in-memory buffer, a URL Baileys fetches, or a byte stream. */
+/** Bytes to send: a snapshotted Buffer, a fetched URL, or a caller-driven byte stream. */
 export type BinaryInput = Buffer | { url: string } | { stream: AsyncIterable<Uint8Array> };
 
 /**

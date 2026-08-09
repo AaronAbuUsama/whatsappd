@@ -443,6 +443,82 @@ void test("Buffer attachments reach MediaStore in bounded chunks", async () => {
   }
 });
 
+void test("Buffer attachments own invocation bytes across staging awaits", async () => {
+  const media = memoryMediaStore();
+  let blockAfterFirst = false;
+  let firstConsumed!: () => void;
+  let release!: () => void;
+  const consumed = new Promise<void>((resolve) => {
+    firstConsumed = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const backend = {
+    ...memoryBackend(),
+    media: {
+      ...media,
+      async write(input: Parameters<typeof media.write>[0]) {
+        const pause = blockAfterFirst;
+        return media.write({
+          ...input,
+          source: (async function* () {
+            let first = true;
+            for await (const chunk of input.source) {
+              yield chunk;
+              if (first && pause) {
+                first = false;
+                firstConsumed();
+                await blocked;
+              }
+            }
+          })(),
+        });
+      },
+    },
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "owned-buffer-source",
+    backend,
+    openSession: () => createTestWhatsAppSession().session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const refOf = async (pending: ReturnType<typeof client.messages.send.image>) => {
+    const operation = await pending;
+    assert.equal(operation.input.type, "send");
+    assert.ok("image" in operation.input.content);
+    return operation.input.content.image.ref;
+  };
+  const bytesOf = async (ref: string) => {
+    const bytes = await readMedia(media, { accountId: "owned-buffer-source", ref });
+    assert.ok(bytes);
+    return Buffer.from(bytes);
+  };
+  try {
+    const immediate = Buffer.alloc(128 * 1024, 1);
+    const immediateRef = refOf(
+      client.messages.send.image(CHAT, immediate, { idempotencyKey: "immediate-buffer" }),
+    );
+    immediate.fill(9);
+    assert.equal(Buffer.compare(await bytesOf(await immediateRef), Buffer.alloc(128 * 1024, 1)), 0);
+
+    blockAfterFirst = true;
+    const during = Buffer.alloc(128 * 1024, 2);
+    const duringRef = refOf(
+      client.messages.send.image(CHAT, during, { idempotencyKey: "staged-buffer" }),
+    );
+    await consumed;
+    during.fill(8);
+    release();
+    assert.equal(Buffer.compare(await bytesOf(await duringRef), Buffer.alloc(128 * 1024, 2)), 0);
+  } finally {
+    release();
+    await client.close();
+    await runtime.stop();
+  }
+});
+
 void test("aborting wait does not cancel work once its durable row exists", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();

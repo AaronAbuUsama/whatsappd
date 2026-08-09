@@ -210,10 +210,11 @@ const sourceOf = async (
 ): Promise<AsyncIterable<Uint8Array>> => {
   throwIfAborted(signal);
   if (Buffer.isBuffer(input)) {
+    const bytes = Uint8Array.from(input);
     return (async function* () {
-      for (let offset = 0; offset < input.byteLength; offset += MEDIA_CHUNK_BYTES) {
+      for (let offset = 0; offset < bytes.byteLength; offset += MEDIA_CHUNK_BYTES) {
         throwIfAborted(signal);
-        yield input.subarray(offset, Math.min(offset + MEDIA_CHUNK_BYTES, input.byteLength));
+        yield bytes.subarray(offset, Math.min(offset + MEDIA_CHUNK_BYTES, bytes.byteLength));
       }
     })();
   }
