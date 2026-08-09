@@ -1,8 +1,13 @@
 import { expect, test } from "./_expect.ts";
 import { generateWAMessage, type AnyMessageContent } from "baileys";
-import { toContent, refToKey, keyToRef, toOptions } from "../src/baileys/outbound.ts";
-import { toInbound } from "../src/baileys/inbound.ts";
-import { refOf, type MessageRef, type Outbound } from "../src/model/outbound.ts";
+import {
+  toContent,
+  refToKey,
+  keyToRef,
+  toOptions,
+} from "../packages/whatsappd/src/baileys/outbound.ts";
+import { toInbound } from "../packages/whatsappd/src/baileys/inbound.ts";
+import { refOf, type MessageRef, type Outbound } from "../packages/whatsappd/src/model/outbound.ts";
 import { SELF } from "./fixtures.ts";
 
 const REF: MessageRef = { id: "MSG1", chatId: "111@s.whatsapp.net", fromMe: false };

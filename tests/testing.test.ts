@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+import { createTestWhatsAppSession, textMessage } from "../packages/whatsappd/src/testing.ts";
 
 test("a later update waits for the suspended message handler", async () => {
   const driver = createTestWhatsAppSession();

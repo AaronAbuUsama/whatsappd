@@ -40,7 +40,7 @@ It prints counts and exits. `pnpm proof:profile ios` does the same for the peer.
 Pairing happens only if a profile's database has no credentials, which on this
 machine means someone deleted it. `libsqlBackend()` persists credentials and
 `createWhatsAppRuntime` hands that store to the session
-(`src/runtime/runtime.ts:714`), so the link survives with the database file.
+(`packages/whatsappd/src/runtime/runtime.ts:714`), so the link survives with the database file.
 
 **Never delete a profile directory to "start clean".** That throws away the link
 and costs a human a QR scan. Proofs that need an unlinked start create their own

@@ -6,7 +6,7 @@
  * `makeStore` must return a FRESH, isolated store on each call.
  */
 import { expect, test } from "./_expect.ts";
-import type { CredentialStore } from "../src/ports.ts";
+import type { CredentialStore } from "../packages/whatsappd/src/ports.ts";
 
 // A value that exercises the things real creds contain: braces, quotes, newlines,
 // unicode — proving the store treats the blob as opaque bytes, not structured data.

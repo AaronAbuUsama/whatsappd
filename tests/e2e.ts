@@ -17,7 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { createSession, fileStore, qrAuth, refOf } from "../src/index.ts";
+import { createSession, fileStore, qrAuth, refOf } from "../packages/whatsappd/src/index.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const number = process.argv[2]?.replace(/[^0-9]/g, "");

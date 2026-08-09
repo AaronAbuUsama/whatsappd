@@ -9,11 +9,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "./_expect.ts";
-import { loadAuth } from "../src/baileys/auth-state.ts";
-import type { CredentialStore } from "../src/ports.ts";
-import { memoryStore } from "../src/stores/memory.ts";
-import { fileStore } from "../src/stores/file.ts";
-import { libsqlStore } from "../src/stores/libsql.ts";
+import { loadAuth } from "../packages/whatsappd/src/baileys/auth-state.ts";
+import type { CredentialStore } from "../packages/whatsappd/src/ports.ts";
+import { memoryStore } from "../packages/whatsappd/src/stores/memory.ts";
+import { fileStore } from "../packages/whatsappd/src/stores/file.ts";
+import { libsqlStore } from "../packages/whatsappd/src/stores/libsql.ts";
 
 const b64 = (b: Uint8Array): string => Buffer.from(b).toString("base64");
 

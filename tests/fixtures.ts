@@ -10,7 +10,7 @@
  *     media stays hand-built — see inbound.test.ts.)
  */
 import { generateWAMessage, type AnyMessageContent, type WAMessage } from "baileys";
-import type { WhatsAppAddress } from "../src/model/message.ts";
+import type { WhatsAppAddress } from "../packages/whatsappd/src/model/message.ts";
 
 const CHAT = "1234567890@s.whatsapp.net";
 

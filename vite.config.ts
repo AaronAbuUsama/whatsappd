@@ -4,13 +4,6 @@ export default defineConfig({
   staged: {
     "*": "vp check --fix",
   },
-  pack: {
-    entry: ["src/index.ts", "src/testing.ts"],
-    dts: {
-      tsgo: true,
-    },
-    exports: true,
-  },
   lint: {
     options: {
       typeAware: true,
@@ -51,7 +44,7 @@ export default defineConfig({
         // matches nothing while the config still looks correct -- this was
         // written that way first, and a probe importing `runtime/` from
         // `model/` passed clean.
-        files: ["src/model/**"],
+        files: ["packages/whatsappd/src/model/**"],
         rules: {
           "no-restricted-imports": [
             "error",
@@ -74,12 +67,20 @@ export default defineConfig({
         // protocol union, where the branch count *is* the specification.
         // Splitting them hides which cases are handled, and the defect ledger
         // records what happens when this layer is restructured for tidiness.
-        files: ["src/baileys/inbound.ts", "src/baileys/outbound.ts", "src/machine.ts"],
+        files: [
+          "packages/whatsappd/src/baileys/inbound.ts",
+          "packages/whatsappd/src/baileys/outbound.ts",
+          "packages/whatsappd/src/machine.ts",
+        ],
         rules: { complexity: ["error", { max: 45 }] },
       },
       {
         // Durable projection: the same exhaustiveness against stored shapes.
-        files: ["src/runtime/projection.ts", "src/runtime/libsql.ts", "src/session.ts"],
+        files: [
+          "packages/whatsappd/src/runtime/projection.ts",
+          "packages/whatsappd/src/runtime/libsql.ts",
+          "packages/whatsappd/src/session.ts",
+        ],
         rules: { complexity: ["error", { max: 35 }] },
       },
       {
@@ -87,13 +88,13 @@ export default defineConfig({
         // schema plus every statement written against it, so the schema and
         // its queries stay legible side by side. Splitting it is a real option
         // and not a free one; until then the number is written down.
-        files: ["src/runtime/libsql.ts"],
+        files: ["packages/whatsappd/src/runtime/libsql.ts"],
         rules: { "max-lines": ["error", { max: 1500, skipBlankLines: true, skipComments: true }] },
       },
       {
         // Lease acquisition and teardown, where the nesting is a sequence of
         // guarded recoveries that each have to unwind what the one before did.
-        files: ["src/runtime/runtime.ts"],
+        files: ["packages/whatsappd/src/runtime/runtime.ts"],
         rules: { "max-depth": ["error", { max: 6 }] },
       },
       {

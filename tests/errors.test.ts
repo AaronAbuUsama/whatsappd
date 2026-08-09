@@ -1,6 +1,11 @@
 import { expect, test } from "./_expect.ts";
 import { DisconnectReason } from "baileys";
-import { assertE164, classifyDisconnect, isRetryable, PairingError } from "../src/index.ts";
+import {
+  assertE164,
+  classifyDisconnect,
+  isRetryable,
+  PairingError,
+} from "../packages/whatsappd/src/index.ts";
 
 const boom = (statusCode: number) => ({ output: { statusCode } });
 

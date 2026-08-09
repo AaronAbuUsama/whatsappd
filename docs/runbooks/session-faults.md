@@ -6,7 +6,7 @@ quiet without delivering messages.
 ## 1. Get the fault reason
 
 Do not act on the symptom. Every disconnect is mapped from a transport status
-code into the closed `FaultReason` union in `src/errors.ts`, and the reason
+code into the closed `FaultReason` union in `packages/whatsappd/src/errors.ts`, and the reason
 decides everything that follows.
 
 The reason reaches you as the `error` on the `closed` frame from `watch()` or
@@ -27,7 +27,7 @@ that this is the gap to close after the incident, not during it.
 `service_unavailable` (503), `unknown`.
 
 The lifecycle loop reconnects on its own with capped exponential backoff
-(`backoffDelay` in `src/machine.ts`). A worker restart does not help and
+(`backoffDelay` in `packages/whatsappd/src/machine.ts`). A worker restart does not help and
 discards the backoff state, so restarting on a schedule turns one slow recovery
 into a reconnect storm.
 

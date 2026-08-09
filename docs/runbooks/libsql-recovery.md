@@ -53,7 +53,7 @@ sqlite3 whatsapp.db "PRAGMA integrity_check;"   # expect: ok
 ```
 
 If it reports errors, restore from backup rather than repairing in place. The
-schema is written by `src/runtime/libsql.ts` with `CREATE TABLE IF NOT EXISTS`
+schema is written by `packages/whatsappd/src/runtime/libsql.ts` with `CREATE TABLE IF NOT EXISTS`
 and tracked in `wa_schema_migrations`, so a fresh database is created
 automatically on next open — but a fresh database is an empty one, and the
 account will re-pair and re-sync from WhatsApp rather than resume.

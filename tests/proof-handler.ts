@@ -1,4 +1,4 @@
-import type { InboundMessage } from "../src/model/index.ts";
+import type { InboundMessage } from "../packages/whatsappd/src/model/index.ts";
 
 export async function replyToProofPing(
   message: InboundMessage,

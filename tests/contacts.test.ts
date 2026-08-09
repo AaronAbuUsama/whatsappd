@@ -1,5 +1,5 @@
 import { expect, test } from "./_expect.ts";
-import { mapContactUpdates } from "../src/baileys/contacts.ts";
+import { mapContactUpdates } from "../packages/whatsappd/src/baileys/contacts.ts";
 
 test("maps Baileys contact upserts into pure contact updates", () => {
   expect(

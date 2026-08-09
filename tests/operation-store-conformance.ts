@@ -4,7 +4,7 @@ import {
   OperationIdempotencyConflictError,
   type WhatsAppOperationInput,
   type WhatsAppOperationStore,
-} from "../src/runtime/operations.ts";
+} from "../packages/whatsappd/src/runtime/operations.ts";
 
 interface StoreFixture {
   readonly store: WhatsAppOperationStore;

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "./_expect.ts";
 import { conformsToStore } from "./store-conformance.ts";
-import { memoryStore } from "../src/stores/memory.ts";
-import { fileStore } from "../src/stores/file.ts";
-import { libsqlStore } from "../src/stores/libsql.ts";
+import { memoryStore } from "../packages/whatsappd/src/stores/memory.ts";
+import { fileStore } from "../packages/whatsappd/src/stores/file.ts";
+import { libsqlStore } from "../packages/whatsappd/src/stores/libsql.ts";
 
 // Every store must satisfy the same spec — that's what makes them swappable.
 conformsToStore("memory", () => memoryStore());

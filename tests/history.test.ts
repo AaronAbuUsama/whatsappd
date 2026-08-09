@@ -1,6 +1,6 @@
 import { proto, type BaileysEventMap } from "baileys";
 import { expect, test } from "./_expect.ts";
-import { toConversationSyncBatch } from "../src/baileys/history.ts";
+import { toConversationSyncBatch } from "../packages/whatsappd/src/baileys/history.ts";
 import { baseMessage, SELF } from "./fixtures.ts";
 
 type HistoryPayload = BaileysEventMap["messaging-history.set"];

@@ -1,5 +1,5 @@
 import { expect, test } from "./_expect.ts";
-import { mapPresenceUpdate } from "../src/baileys/presence.ts";
+import { mapPresenceUpdate } from "../packages/whatsappd/src/baileys/presence.ts";
 
 test("maps Baileys presence updates into pure presence signals", () => {
   expect(

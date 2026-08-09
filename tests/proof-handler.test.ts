@@ -1,5 +1,5 @@
 import { expect, test } from "./_expect.ts";
-import type { InboundMessage } from "../src/model/index.ts";
+import type { InboundMessage } from "../packages/whatsappd/src/model/index.ts";
 import { replyToProofPing } from "./proof-handler.ts";
 
 const message = (text: string, live = true): InboundMessage =>

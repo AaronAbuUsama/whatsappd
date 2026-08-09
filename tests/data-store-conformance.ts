@@ -9,9 +9,12 @@ import {
   type WhatsAppDataEvent,
   type WhatsAppDataStore,
   type WhatsAppDurableEvent,
-} from "../src/runtime/contracts.ts";
-import { projectCurrentMirror, type CurrentMirrorRecords } from "../src/runtime/projection.ts";
-import { textMessage } from "../src/testing.ts";
+} from "../packages/whatsappd/src/runtime/contracts.ts";
+import {
+  projectCurrentMirror,
+  type CurrentMirrorRecords,
+} from "../packages/whatsappd/src/runtime/projection.ts";
+import { textMessage } from "../packages/whatsappd/src/testing.ts";
 
 const ACCOUNT = "personal";
 const OTHER_ACCOUNT = "work";

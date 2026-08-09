@@ -115,19 +115,19 @@ channel/sidecar split:
 
 The current code already contains a richer and better lower-level boundary:
 
-- `src/session.ts` exposes connection, messages, conversation sync, updates,
+- `packages/whatsappd/src/session.ts` exposes connection, messages, conversation sync, updates,
   contacts, groups, presence, and native commands.
-- `src/ports.ts` defines `CredentialStore`, which is specifically an opaque
+- `packages/whatsappd/src/ports.ts` defines `CredentialStore`, which is specifically an opaque
   credential store.
-- `src/channel/types.ts` reduces the system to message, update, and status
+- `packages/whatsappd/src/channel/types.ts` reduces the system to message, update, and status
   events for Eve/Flue-style agent frameworks.
-- `src/channel/adapter.ts` pumps only those three streams, does not await
+- `packages/whatsappd/src/channel/adapter.ts` pumps only those three streams, does not await
   subscriber promises, and implements `markRead(chatId)` by inventing an empty
   message ID.
-- `src/sidecar/server.ts` forwards those reduced events to webhook targets.
+- `packages/whatsappd/src/sidecar/server.ts` forwards those reduced events to webhook targets.
   Delivery failures are logged and discarded, and messages sent by the linked
   account are dropped.
-- `src/sidecar/wire.ts` is consequently a lossy agent bridge rather than a
+- `packages/whatsappd/src/sidecar/wire.ts` is consequently a lossy agent bridge rather than a
   complete WhatsApp client protocol.
 - `package.json` still describes the package as an AI-agent channel and exports
   Eve, sidecar, and tools entry points.
@@ -292,7 +292,7 @@ identity exists until something retries. `AccountLease.fencingToken` is a
 writer has been superseded compares tokens, and string order ranks claim 10
 below claim 9 (ADR-0018). ADR-0022 adds the first delete: consolidation of a
 redundant current contact after WhatsApp delivers equivalent address forms.
-Read `src/runtime/contracts.ts` for the shipped shapes.
+Read `packages/whatsappd/src/runtime/contracts.ts` for the shipped shapes.
 
 ```ts
 export interface AcceptedWhatsAppBatch {

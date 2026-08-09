@@ -34,7 +34,7 @@ red test says so instead of claiming a guarantee it does not have.
 
 ### C1 — publish before the transition is complete
 
-**Closed by** `commit(mutate: (tx: Tx) => void): void` in `src/runtime/client.ts`,
+**Closed by** `commit(mutate: (tx: Tx) => void): void` in `packages/whatsappd/src/runtime/client.ts`,
 which is not `async`. A function that cannot await cannot yield, so no
 application callback can observe a half-applied transition. There is one
 notification point per transition.
@@ -232,7 +232,7 @@ rather than fixed.
 
 ### C5 — one listener Set holding several roles
 
-**Closed by** `fanout()` in `src/runtime/runtime.ts`, shared by the Runtime's
+**Closed by** `fanout()` in `packages/whatsappd/src/runtime/runtime.ts`, shared by the Runtime's
 channels and the Client's namespaces, plus registration _records_ rather than
 callbacks as Set members.
 
@@ -273,7 +273,7 @@ a construction.**
   of it, is trustworthy for the first time.
 
   Verified on three violating states, each observed red by the digests it
-  disagreed on rather than by an exit code. `dist/` built with `src/` checked
+  disagreed on rather than by an exit code. `dist/` built with `packages/whatsappd/src/` checked
   out from `7e1a730` — the repro #119 records — differs in four of its six
   files, and the retired control passed that same artifact green, re-confirmed
   by running master's harness against it on the fix branch. A planted
@@ -281,7 +281,7 @@ a construction.**
   rebuild. A build stubbed to write nothing throws `ENOENT` on a `dist/` removed
   a line earlier, instead of comparing two stale directories equal.
 
-  Note what the export surface could not have done: `src/index.ts` is
+  Note what the export surface could not have done: `packages/whatsappd/src/index.ts` is
   byte-identical between `7e1a730` and today, all 104 names, so a control
   derived from the published vocabulary — the obvious next-strongest idea —
   would have passed the exact artifact this one catches.
@@ -299,7 +299,7 @@ a construction.**
   set killed 20 of 25.
 - **A test double that diverges from the adapter it stands in for is this class
   too.** `createTestWhatsAppSession` returned a stable identity object while the
-  live session (`src/baileys/socket.ts`) builds a fresh one per call, so a cache
+  live session (`packages/whatsappd/src/baileys/socket.ts`) builds a fresh one per call, so a cache
   keyed on object identity passed its test and was inert in production. The
   double now allocates per call, and the test fails red against the real shape.
 
@@ -310,7 +310,7 @@ adapter on the axis under test — especially object identity.
 
 ### C8 — ordering determinism
 
-**Held by** `compareId` in `src/runtime/client.ts`, routed through by every
+**Held by** `compareId` in `packages/whatsappd/src/runtime/client.ts`, routed through by every
 ordered read, and pinned by a test that first asserts its two fixtures order
 _differently_ under binary and locale rules before using them.
 

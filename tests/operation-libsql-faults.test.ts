@@ -38,8 +38,8 @@ mock.module("@libsql/client", {
   },
 });
 
-const { libsqlBackend, memoryMediaStore } = await import("../src/index.ts");
-const { operationIdFor } = await import("../src/runtime/operations.ts");
+const { libsqlBackend, memoryMediaStore } = await import("../packages/whatsappd/src/index.ts");
+const { operationIdFor } = await import("../packages/whatsappd/src/runtime/operations.ts");
 
 const ACCOUNT = "operation-faults";
 const CHAT = "faults@s.whatsapp.net";

@@ -91,8 +91,8 @@ jobs:
       # the ceiling leaves room to grow deliberately and not silently.
       - name: Publish size
         run: |
-          pnpm pack --pack-destination "$RUNNER_TEMP" >/dev/null
-          VERSION="$(node -p "require('./package.json').version")"
+          pnpm --filter whatsappd pack --pack-destination "$RUNNER_TEMP" >/dev/null
+          VERSION="$(node -p "require('./packages/whatsappd/package.json').version")"
           bytes=$(wc -c < "$RUNNER_TEMP/whatsappd-$VERSION.tgz")
           echo "Package: ${bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
           if [ "$bytes" -gt 120000 ]; then

@@ -17,24 +17,24 @@ import {
   type WhatsAppLiveFrame,
   type WhatsAppPatch,
   type WhatsAppSnapshot,
-} from "../src/runtime/contracts.ts";
+} from "../packages/whatsappd/src/runtime/contracts.ts";
 import {
   memoryBackend,
   memoryDataStore,
   memoryLeaseStore,
   memoryMediaStore,
   memoryOperationStore,
-} from "../src/runtime/memory.ts";
+} from "../packages/whatsappd/src/runtime/memory.ts";
 import {
   createRuntimeMirrorReader,
   createWhatsAppRuntime,
   type WhatsAppRuntime,
-} from "../src/runtime/runtime.ts";
-import { memoryStore } from "../src/stores/memory.ts";
-import type { InboundMessage } from "../src/model/message.ts";
-import type { PresenceUpdate } from "../src/model/presence.ts";
-import { SubscriptionHandlerError } from "../src/subscription.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+} from "../packages/whatsappd/src/runtime/runtime.ts";
+import { memoryStore } from "../packages/whatsappd/src/stores/memory.ts";
+import type { InboundMessage } from "../packages/whatsappd/src/model/message.ts";
+import type { PresenceUpdate } from "../packages/whatsappd/src/model/presence.ts";
+import { SubscriptionHandlerError } from "../packages/whatsappd/src/subscription.ts";
+import { createTestWhatsAppSession, textMessage } from "../packages/whatsappd/src/testing.ts";
 import { readMedia } from "./media-store-helpers.ts";
 
 const PERSON = "person@s.whatsapp.net";

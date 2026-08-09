@@ -18,7 +18,7 @@
  * the barrier that matters for code someone writes; the runtime check is what
  * catches a cast through `unknown` and anything arriving from untyped code.
  */
-import type { MessageRef } from "../src/index.ts";
+import type { MessageRef } from "../packages/whatsappd/src/index.ts";
 import {
   resolveAllowlistedTarget,
   type AllowlistedTarget,

@@ -46,12 +46,12 @@ await client.close(); // nothing per-chat to close
 ```
 
 There is no `open()`, no conversation object, no per-chat `close()`. That design
-was **never implemented** — `git log --all -S "chats.open" -- src/` returns
+was **never implemented** — `git log --all -S "chats.open" -- packages/whatsappd/src/` returns
 nothing. It was retired on paper before code existed.
 
 ## The one thing that is not true yet
 
-**`createWhatsAppClient` is not exported from `src/index.ts`.** Count is zero.
+**`createWhatsAppClient` is not exported from `packages/whatsappd/src/index.ts`.** Count is zero.
 Nobody who installs the package can use any of the above. #107 is what makes it
 reachable. Until then the friendly Client is source-only.
 
@@ -140,7 +140,7 @@ The **full** #111 genuinely cannot run first — it needs pairing (#109) and sen
 Pairing #127's account is a **one-time** human cost, not a per-run one. The
 profile directory under `.proof-private/` is durable, `libsqlBackend()` persists
 the credentials, and `createWhatsAppRuntime` hands that store to the session
-(`src/runtime/runtime.ts:714`), so every later run resumes without a scan. See
+(`packages/whatsappd/src/runtime/runtime.ts:714`), so every later run resumes without a scan. See
 "A linked test account is a one-time human cost" in `docs/standing-decisions.md`;
 #111's pairing and unlink rows are the only ones that need an unlinked start,
 and they take their own throwaway profile.

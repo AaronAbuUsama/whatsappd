@@ -22,7 +22,7 @@ decision is actually resolved.
 │   └── adr/
 │       ├── 0001-example-decision.md
 │       └── 0002-another-decision.md
-└── src/
+└── packages/whatsappd/src/
 ```
 
 Do not introduce `CONTEXT-MAP.md` or context-scoped ADR directories unless the

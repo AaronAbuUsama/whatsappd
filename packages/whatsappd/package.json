@@ -1,0 +1,59 @@
+{
+  "name": "whatsappd",
+  "version": "0.3.0",
+  "description": "A typed WhatsApp session engine with awaited subscriptions and pluggable credential stores.",
+  "keywords": [
+    "baileys",
+    "chatbot",
+    "typescript",
+    "whatsapp",
+    "whatsapp-api",
+    "whatsapp-bot"
+  ],
+  "homepage": "https://github.com/AaronAbuUsama/whatsappd#readme",
+  "bugs": {
+    "url": "https://github.com/AaronAbuUsama/whatsappd/issues"
+  },
+  "license": "MIT",
+  "author": "Aaron AbuUsama <security@abuusama.dev>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AaronAbuUsama/whatsappd.git",
+    "directory": "packages/whatsappd"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./testing": "./dist/testing.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "prepublishOnly": "vp run build"
+  },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "pino": "^10.3.1",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@libsql/client": "^0.15.0"
+  },
+  "peerDependenciesMeta": {
+    "@libsql/client": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

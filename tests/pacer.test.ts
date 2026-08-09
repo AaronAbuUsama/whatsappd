@@ -1,5 +1,5 @@
 import { expect, test } from "./_expect.ts";
-import { createPacer } from "../src/pacer.ts";
+import { createPacer } from "../packages/whatsappd/src/pacer.ts";
 
 test("runs tasks in FIFO order even when queued concurrently", async () => {
   const pacer = createPacer(0);

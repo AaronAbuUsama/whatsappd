@@ -22,7 +22,7 @@ arrive at pairing has no protocol signal that this is everything — because
 it is not.
 
 whatsappd deliberately pairs light and requests full history only on a
-registered reconnect (`shouldRequestFullHistoryOnOpen`, `src/baileys/socket.ts`).
+registered reconnect (`shouldRequestFullHistoryOnOpen`, `packages/whatsappd/src/baileys/socket.ts`).
 A returning device whose `accountSyncCounter` proves initial sync already
 completed receives no history redelivery at all — only messages queued while
 it was offline (ADR-0002: connection readiness is separate from history
@@ -98,7 +98,7 @@ the time (published 2026-07-29):
 | Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **none observed** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)                                                                                                                                                                                                                                                                                  |
 
 One seam caveat sharpens, rather than weakens, the verdict: whatsappd's
-normalization (`toMessagingHistoryEvents`, `src/baileys/socket.ts`) emits no
+normalization (`toMessagingHistoryEvents`, `packages/whatsappd/src/baileys/socket.ts`) emits no
 batch for a history payload whose normalized chats, contacts, and messages
 are all empty — so a hypothetical entirely-empty response is
 indistinguishable from silence at this seam. "0 of 7" is therefore a claim

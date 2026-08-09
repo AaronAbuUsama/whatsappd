@@ -19,7 +19,7 @@ Investigated at: master `921ac3a`, PR #93 head `537726cd`, PR #94 head `4009780d
 
 1. **It was never two attempts. It was one 8-round loop, relabelled.**
    PR #94's first implementation commit is _byte-identical_ to PR #93's round-1 head —
-   same blob SHA for `src/runtime/client.ts` (`94768d3f…`) and `tests/client.test.ts`
+   same blob SHA for `packages/whatsappd/src/runtime/client.ts` (`94768d3f…`) and `tests/client.test.ts`
    (`8d889df6…`). Only docs differ. The re-charter reset the ledger, not the artifact.
    And it was mandated: commit 2 of the issue's own plan says _"carry forward the already
    proven friendly Client state foundation from the retired reviewed unit."_

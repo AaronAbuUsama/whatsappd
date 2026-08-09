@@ -4,7 +4,11 @@ import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileMediaStore, memoryMediaStore, type MediaStore } from "../src/index.ts";
+import {
+  fileMediaStore,
+  memoryMediaStore,
+  type MediaStore,
+} from "../packages/whatsappd/src/index.ts";
 import { test } from "./_expect.ts";
 
 const unsafeAccount = "../../personal/account";

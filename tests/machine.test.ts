@@ -5,9 +5,9 @@ import {
   transition,
   type Input,
   type MachineCtx,
-} from "../src/machine.ts";
-import type { Status } from "../src/model/index.ts";
-import type { WhatsAppFault } from "../src/errors.ts";
+} from "../packages/whatsappd/src/machine.ts";
+import type { Status } from "../packages/whatsappd/src/model/index.ts";
+import type { WhatsAppFault } from "../packages/whatsappd/src/errors.ts";
 
 const QR: MachineCtx = { method: "qr" };
 const CODE: MachineCtx = { method: "pairing_code" };

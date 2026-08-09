@@ -6,7 +6,7 @@
  * the conversion tests, which supply the address by hand.
  */
 import { expect, test } from "./_expect.ts";
-import { selfAddress } from "../src/baileys/socket.ts";
+import { selfAddress } from "../packages/whatsappd/src/baileys/socket.ts";
 
 type Sock = Parameters<typeof selfAddress>[0];
 

@@ -15,16 +15,19 @@ import type {
   ContactRecord,
   GroupRecord,
   WhatsAppBackend,
-} from "../src/runtime/contracts.ts";
-import { memoryBackend } from "../src/runtime/memory.ts";
+} from "../packages/whatsappd/src/runtime/contracts.ts";
+import { memoryBackend } from "../packages/whatsappd/src/runtime/memory.ts";
 import {
   createWhatsAppRuntime,
   type RuntimeSession,
   type WhatsAppRuntime,
-} from "../src/runtime/runtime.ts";
-import { createWhatsAppClient, type WhatsAppClient } from "../src/runtime/client.ts";
-import type { InboundMessage } from "../src/model/message.ts";
-import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+} from "../packages/whatsappd/src/runtime/runtime.ts";
+import {
+  createWhatsAppClient,
+  type WhatsAppClient,
+} from "../packages/whatsappd/src/runtime/client.ts";
+import type { InboundMessage } from "../packages/whatsappd/src/model/message.ts";
+import { createTestWhatsAppSession, textMessage } from "../packages/whatsappd/src/testing.ts";
 
 const PERSON = "person@s.whatsapp.net";
 const PERSON_LID = "77701@lid";
