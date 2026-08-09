@@ -23,8 +23,8 @@ import {
 } from "./proof-receipt-scan.ts";
 
 export const TARBALL_CEILING_BYTES = 120_000;
-export const EXPECTED_VERSION = "0.3.0-alpha.0";
-export const EXPECTED_PREMODE_CHANGESET_COUNT = 11;
+export const EXPECTED_VERSION = "0.3.0-alpha.1";
+export const EXPECTED_PREMODE_CHANGESET_COUNT = 12;
 export const EXPECTED_PREMODE = "pre";
 export const EXPECTED_PRERELEASE_TAG = "alpha";
 export const EXPECTED_INITIAL_VERSION = "0.2.2";

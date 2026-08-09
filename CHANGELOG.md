@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0-alpha.1
+
+### Patch Changes
+
+- Fetch full Git history in the Release workflow so committed receipt validation can resolve prior commits during tag-triggered releases.
+
 ## 0.3.0-alpha.0
 
 ### Minor Changes

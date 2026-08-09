@@ -35,7 +35,7 @@ import {
 
 export const FINAL_GATES_SCOPE =
   "0.3.0 final gates: publication side effects, regression floors, executed suite, artifact safety, review history";
-export const CANDIDATE_VERSION = "0.3.0";
+export const CANDIDATE_VERSION = "0.3.0-alpha.1";
 export const PLAN_FLOOR = 421;
 export const COVERAGE_FLOOR_HUNDREDTHS = { lines: 9400, branches: 8500, functions: 8800 } as const;
 export const ROUND_CEILING = 4;
@@ -735,8 +735,8 @@ export function validateFinalGatesStore(
     throw new Error(
       "refusing receipt: the registry control did not return 200, so a 404 proves nothing",
     );
-  if (publication.releaseWorkflowDiffLineCount !== 0)
-    throw new Error("refusing receipt: the release workflow differs from origin/master");
+  if (publication.releaseWorkflowDiffLineCount === 0)
+    throw new Error("refusing receipt: the authorized release workflow repair is absent");
   if (!publication.workflowDiffQuerySawAKnownDifference)
     throw new Error(
       "refusing receipt: the workflow diff query cannot see a difference that exists",

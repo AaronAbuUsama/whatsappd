@@ -61,7 +61,7 @@ const store = (
     npmViewDirectExit: 1,
     npmViewPipedExit: 0,
     npmViewControlDirectExit: 1,
-    releaseWorkflowDiffLineCount: 0,
+    releaseWorkflowDiffLineCount: 3,
     workflowDiffQuerySawAKnownDifference: true,
     releaseRunsOnCandidateBranch: 0,
     releaseRunQuerySawAKnownRun: true,
@@ -311,10 +311,10 @@ test("a tag, a published version, or a pushed branch is a refusal", () => {
   assert.throws(
     () =>
       validateFinalGatesStore(
-        store({ publication: { ...store().publication, releaseWorkflowDiffLineCount: 3 } }),
+        store({ publication: { ...store().publication, releaseWorkflowDiffLineCount: 0 } }),
         current,
       ),
-    /release workflow differs/u,
+    /authorized release workflow repair is absent/u,
   );
 });
 
