@@ -1,6 +1,6 @@
 # whatsappd
 
-The [SDK capability catalogue](docs/sdk-capabilities.md) lists what Baileys
+The [SDK capability catalogue](https://github.com/AaronAbuUsama/whatsappd/blob/master/docs/architecture/sdk-capabilities.md) lists what Baileys
 offers, what whatsappd exposes today, and what remains planned. It is a
 human-maintained guide, not a product authority or merge gate. Automated tests
 and the linked-account Client proof have been run; browser React and OpenTUI
@@ -270,7 +270,7 @@ to change it — and the logger it builds censors message bodies, addresses, and
 credentials, because the errors it reports come from the protocol layer and can
 arrive carrying the payload that failed to send. Passing your own `logger` opts
 out of that entirely and gives you exactly what you configured; see
-[ADR-0031](docs/adr/0031-the-default-logger-censors-what-it-cannot-vouch-for.md).
+[ADR-0031](https://github.com/AaronAbuUsama/whatsappd/blob/master/docs/adr/0031-the-default-logger-censors-what-it-cannot-vouch-for.md).
 
 ## Deterministic application tests
 

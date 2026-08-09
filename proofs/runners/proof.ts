@@ -1,0 +1,123 @@
+/**
+ * Proof harness — connect a real WhatsApp device against the session surface.
+ *
+ *   QR login:            pnpm proof
+ *   Pairing-code login:  pnpm proof +15551234567
+ *
+ * Scan the QR (or enter the printed code). On "🟢 ONLINE", use Message Yourself
+ * (or another account) to send "ping"; the daemon replies "pong". Auth persists in ./.wa-auth.
+ * LOG_LEVEL=debug to see the protocol trace.
+ */
+import path from "node:path";
+import { writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import pino from "pino";
+import qrcode from "qrcode-terminal";
+import {
+  createSession,
+  fileStore,
+  pairingAuth,
+  qrAuth,
+} from "../../packages/whatsappd/src/index.ts";
+import { replyToProofPing } from "../support/proof-handler.ts";
+import { guardedSender, resolveAllowlistedTarget } from "../support/send-guard.ts";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "../..");
+const authDir = process.env.AUTH_DIR
+  ? path.resolve(process.env.AUTH_DIR)
+  : path.join(root, "proofs", "private", "session");
+const phone = process.argv.slice(2).find((arg) => arg !== "--");
+
+const logger = pino({
+  level: process.env.LOG_LEVEL ?? "warn",
+  transport: { target: "pino-pretty", options: { colorize: true } },
+});
+
+const session = createSession({
+  store: fileStore(authDir),
+  auth: phone ? pairingAuth(phone) : qrAuth(),
+  logger,
+});
+const send = guardedSender(session);
+let conversationSyncBatches = 0;
+session.subscribe({
+  conversationSync() {
+    conversationSyncBatches++;
+  },
+  connection(ev) {
+    switch (ev.phase) {
+      case "pairing": {
+        const p = ev.pairing;
+        if (p.step === "challenge_live" && p.qr) {
+          console.log("\n📱 Scan in WhatsApp → Linked devices:\n");
+          qrcode.generate(p.qr, { small: true });
+        } else if (p.step === "challenge_live" && p.code) {
+          console.log(`\n🔑 Enter this code on ${phone}: ${p.code}\n`);
+        } else if (p.step === "restart_pending") {
+          console.log("✅ paired — expect a 515 restart, then ONLINE…");
+        }
+        break;
+      }
+      case "authenticated":
+        console.log(`… ${ev.sync.step}`);
+        break;
+      case "online":
+        console.log(
+          `🟢 ONLINE — connected and synced (${conversationSyncBatches} conversation-sync batches)`,
+        );
+        break;
+      case "backing_off":
+        console.log(
+          `🔻 ${ev.reason} — retrying at ${new Date(ev.nextRetryAt).toLocaleTimeString()}`,
+        );
+        break;
+      case "logged_out":
+        console.log(`🚪 logged out (${ev.reason}) — .wa-auth wiped, re-pair.`);
+        process.exit(1);
+        break;
+      case "suspended":
+        console.log(`⛔ suspended (${ev.reason}) — account/device problem, re-pairing won't help.`);
+        process.exit(1);
+        break;
+    }
+  },
+  async message(m) {
+    const replied = await replyToProofPing(m, async (chatId, text) => {
+      await send.send(resolveAllowlistedTarget(chatId), { text });
+    });
+    // Keep fromMe events so "Message Yourself" can prove a one-account round trip.
+    // The exact ping trigger cannot loop: the emitted response is "pong".
+    if (!m.live) return;
+    const desc = m.kind === "text" ? m.text : `[${m.kind}]`;
+    console.log(`📩 ${m.sender.id}: ${desc}`);
+    if (replied) console.log(`📤 replied "pong" to ${m.chatId}`);
+    // Live media check: pull bytes on demand and save to disk.
+    if (
+      m.kind === "image" ||
+      m.kind === "video" ||
+      m.kind === "audio" ||
+      m.kind === "document" ||
+      m.kind === "sticker"
+    ) {
+      try {
+        const bytes = await m.media.download();
+        const ext =
+          (m.media.mimetype ?? "application/octet-stream").split("/")[1]?.split(";")[0] ?? "bin";
+        const file = path.join(root, "proofs", "private", `media-${m.id}.${ext}`);
+        await writeFile(file, bytes);
+        console.log(`💾 downloaded ${m.kind} (${bytes.length} bytes) → ${file}`);
+      } catch (err) {
+        console.error(`media download failed:`, err);
+      }
+    }
+  },
+});
+
+process.on("SIGINT", () => {
+  console.log("\n…stopping");
+  void session.stop().then(() => process.exit(0));
+});
+
+console.log(phone ? `Starting pairing-code login for ${phone}…` : "Starting QR login…");
+await session.start();

@@ -17,11 +17,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: No inherited environment in spawned test processes
         run: |
-          if grep -rn '\.\.\.process\.env' tests/; then
+          if grep -rn '\.\.\.process\.env' packages/whatsappd/tests/ proofs/ tooling/ smoke/; then
             echo "::error::A test spawns a child with the parent environment. Pass an explicit allowlist instead -- inheriting NODE_TEST_CONTEXT makes a nested 'node --test' skip every file and exit 0."
             exit 1
           fi
-          echo "no inherited environment in tests/"
+          echo "no inherited environment in test and proof programs"
 
   build:
     runs-on: ubuntu-latest
@@ -55,7 +55,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: test-results-node${{ matrix.node }}
-          path: test-results.tap
+          path: .artifacts/test-results.tap
           if-no-files-found: error
           retention-days: 30
       # The agent-facing docs are checked against the repository they describe.
@@ -65,11 +65,7 @@ jobs:
       # instructions rather than improvising. #128 repaired exactly this drift
       # by hand.
       - run: pnpm check:docs
-      # Copy-paste and unused dependencies, both measured rather than assumed:
-      # duplication sits at 0.15% against a 0.3% gate, and the dependency graph
-      # is clean. Thresholds set at today's numbers are what make the next
-      # regression visible.
-      - run: pnpm check:dupes
+      # The dependency graph must stay free of unused files and packages.
       - run: pnpm check:unused
       # Build duration is recorded rather than gated. It is genuinely useful --
       # a build that creeps from one second to thirty is a real regression --

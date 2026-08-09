@@ -5,7 +5,7 @@ status: accepted
 # The capability inventory is a human-maintained guide
 
 The SDK capability inventory is edited directly in
-`docs/sdk-capabilities.md`. It is planning documentation, not a product
+`docs/architecture/sdk-capabilities.md`. It is planning documentation, not a product
 authority, generated artifact, or merge gate. Accepted ADRs and issue contracts
 govern decisions; runtime interfaces and their proof establish shipped
 behavior.

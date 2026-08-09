@@ -209,7 +209,7 @@ export interface WhatsAppSession {
    * Do not await "the result" — there is no result to await. Subscribe to
    * `conversationSync` and treat anything that arrives as a windfall. For
    * live-proof status, observed response rates, and device/platform caveats,
-   * see `docs/history-semantics.md` — the single home for those observations.
+   * see `docs/architecture/history-semantics.md` — the single home for those observations.
    *
    * @param anchor - The oldest known message to page back from: its ref plus
    * its timestamp in epoch milliseconds.

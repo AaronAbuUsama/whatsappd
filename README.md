@@ -1,6 +1,6 @@
 # whatsappd
 
-The [SDK capability catalogue](docs/sdk-capabilities.md) lists what Baileys
+The [SDK capability catalogue](docs/architecture/sdk-capabilities.md) lists what Baileys
 offers, what whatsappd exposes today, and what remains planned. It is a
 human-maintained guide, not a product authority or merge gate. Automated tests
 and the linked-account Client proof have been run; browser React and OpenTUI

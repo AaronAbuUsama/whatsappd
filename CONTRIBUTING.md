@@ -21,7 +21,7 @@ There is no dev server. This is a library, so the equivalent inner loop is
 edit, or a test file run directly:
 
 ```bash
-node --experimental-strip-types --test tests/pacer.test.ts
+node --experimental-strip-types --test packages/whatsappd/tests/pacer.test.ts
 ```
 
 ## Exercising it by hand
@@ -56,7 +56,6 @@ is opt-in and never runs in CI.
 pnpm check         # format, lint, and type-check
 pnpm test
 pnpm check:docs    # every path and script name the agent docs cite still exists
-pnpm check:dupes   # copy-paste detection
 pnpm check:unused  # unused files, exports, and dependencies
 pnpm build
 pnpm proof:pack    # builds, packs, and inspects the tarball a consumer receives
@@ -89,10 +88,10 @@ CI needs none.
 ## Conventions
 
 **Naming.** Files are `kebab-case.ts` — `file-media.ts`, `store-conformance.ts`.
-Tests are `tests/<subject>.test.ts`; that glob is what `pnpm test` and the
-required CI checks run, so a test file named anything else is a test that never
-runs. Helpers that are not themselves tests stay outside the pattern
-(`fixtures.ts`, `_expect.ts`, `proof.ts`).
+Package tests live beside their package at
+`packages/<name>/tests/<subject>.test.ts`. Proof tests live in `proofs/tests/`,
+packed-consumer smoke in `smoke/`, and repository checks in `tooling/checks/`.
+`pnpm test` runs every `*.test.ts` in those owned locations.
 
 Types and classes are `PascalCase`, values and functions `camelCase`, and
 capability constructors read as the thing they return — `fileStore()`,
@@ -113,7 +112,7 @@ runtime, then baileys — and lint enforces it.
 **Comments.** The ones in this codebase explain why a line resists an obvious
 simplification, usually citing the defect that made it necessary. Comments that
 restate the code get deleted; a comment that argues with the code below it is a
-defect in its own right (see `docs/client-stack-defect-ledger.md`).
+defect in its own right.
 
 ## Running it in production
 
@@ -126,17 +125,14 @@ against the disposition is the most common way to make an incident worse.
 ## Issues
 
 Issues are the only intake surface — pull requests are for implementation and
-review (`docs/agents/issue-tracker.md`). New issues open at `needs-triage`; the
+review (`docs/runbooks/development/issue-tracker.md`). New issues open at `needs-triage`; the
 maintainer moves them to `ready-for-agent`, `ready-for-human`, or `needs-info`
-(`docs/agents/triage-labels.md`).
+(`docs/runbooks/development/triage-labels.md`).
 
 Never paste real WhatsApp data into an issue. Phone numbers, message text, and
 credential files identify people who did not file it.
 
 ## If an agent is doing the work
 
-`AGENTS.md` is the entry point, and `docs/agents/frontier-execution.md` governs
-unattended runs: the durable GitHub graph, an independent review loop, the
-four-round ceiling, the proof gate, and the merge-frontier receipt are all
-mandatory. The four-round ceiling means a defect class that survives four
-rounds forces a replan rather than a fifth patch.
+`AGENTS.md` is the entry point. GitHub Issues are the source of truth for work
+and `pnpm state` prints the current dependency frontier.

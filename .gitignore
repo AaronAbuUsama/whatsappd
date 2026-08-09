@@ -8,8 +8,13 @@ dist
 .idea/
 .wa-auth/
 .proof-private/
+proofs/private/
+docs/.scratch/
+.artifacts/
+.pnpm-store/
+.fallow/
+.reviews/
 examples/qr-cli/.data/
-test-results.tap
 
 # Local environment. `.env.example` is the tracked template and is re-included
 # below, so adding a real value to it is a visible mistake rather than a silent
