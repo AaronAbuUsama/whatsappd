@@ -8,7 +8,7 @@
     "tests/store-proof.ts",
     "tests/history-proof.ts"
   ],
-  "project": ["src/**/*.ts", "tests/**/*.ts"],
+  "project": ["src/**/*.ts", "examples/**/*.ts", "tests/**/*.ts"],
 
   "ignoreDependencies": ["@typescript/native-preview", "vite", "jscpd"],
 
