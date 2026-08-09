@@ -29,7 +29,7 @@ import {
   type StoredMessagePage,
   type StoredMessagePageOptions,
   type WhatsAppBackend,
-  type WhatsAppClient,
+  type RuntimeMirrorReader,
   type WhatsAppDurableEvent,
   type WhatsAppDurableFrame,
   type WhatsAppLiveFrame,
@@ -133,7 +133,7 @@ export interface RuntimeSession {
    * @remarks
    * Sampled from whichever session is attached right now rather than retained,
    * so a runtime that has stopped consuming the account reports no identity at
-   * all — the same distinction {@link WhatsAppClientConnectionState} draws
+   * all — the same distinction {@link RuntimeConnectionObservation} draws
    * between an observation and a stored status (ADR-0020). Optional because the
    * runtime never requires it; a session that cannot answer simply has none.
    */
@@ -216,7 +216,7 @@ export interface ClientClaim {
  * Store's joint transaction, which a client receiving only a
  * {@link WhatsAppRuntime} could otherwise reach only by being handed a
  * {@link WhatsAppBackend} — infrastructure ownership leaking into application
- * state. `frames()` is the same pull loop {@link WhatsAppClient.watch} follows,
+ * state. `frames()` is the same pull loop {@link RuntimeMirrorReader.watch} follows,
  * not a second one. `identity()` and `currentClaim()` sample what is attached
  * and held right now, so neither can be retained past the session or lease that
  * made it true (ADR-0030).
@@ -960,12 +960,12 @@ async function* durableFrames(
 }
 
 /**
- * Create the client for a runtime living in this process.
+ * Create the internal frame-oriented reader for an in-process runtime.
  *
  * @param runtime - The runtime to read and follow.
- * @returns A {@link WhatsAppClient} over that runtime's mirror.
+ * @returns A {@link RuntimeMirrorReader} over that runtime's mirror.
  */
-export function createInProcessWhatsAppClient(runtime: WhatsAppRuntime): WhatsAppClient {
+export function createRuntimeMirrorReader(runtime: WhatsAppRuntime): RuntimeMirrorReader {
   return {
     // Straight to the mirror, deliberately independent of any watch: paging is
     // a read, and nothing about it asks WhatsApp for anything (ADR-0010).

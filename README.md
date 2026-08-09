@@ -84,6 +84,7 @@ pnpm add whatsappd @libsql/client
 ```
 
 ```ts
+import { mkdir } from "node:fs/promises";
 import {
   createSession,
   createWhatsAppClient,
@@ -94,6 +95,7 @@ import {
 } from "whatsappd";
 
 const accountId = "main";
+await mkdir("./data", { recursive: true });
 const media = fileMediaStore({ directory: "./data/whatsapp-media" });
 const backend = libsqlBackend({
   url: "file:./data/whatsapp.db",

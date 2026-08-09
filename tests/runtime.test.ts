@@ -11,7 +11,7 @@ import {
   type StoredMessageCursor,
   type StoredMessagePage,
   type WhatsAppBackend,
-  type WhatsAppClient,
+  type RuntimeMirrorReader,
   type WhatsAppDataEvent,
   type WhatsAppDurableFrame,
   type WhatsAppLiveFrame,
@@ -25,7 +25,7 @@ import {
   memoryMediaStore,
 } from "../src/runtime/memory.ts";
 import {
-  createInProcessWhatsAppClient,
+  createRuntimeMirrorReader,
   createWhatsAppRuntime,
   type WhatsAppRuntime,
 } from "../src/runtime/runtime.ts";
@@ -87,7 +87,7 @@ function lane(
   driver: ReturnType<typeof createTestWhatsAppSession>;
   backend: WhatsAppBackend;
   runtime: WhatsAppRuntime;
-  client: WhatsAppClient;
+  client: RuntimeMirrorReader;
   opened: () => number;
 } {
   const backend = options.backend ?? memoryBackend();
@@ -107,7 +107,7 @@ function lane(
     driver,
     backend,
     runtime,
-    client: createInProcessWhatsAppClient(runtime),
+    client: createRuntimeMirrorReader(runtime),
     opened: () => opened,
   };
 }
@@ -128,7 +128,7 @@ const fixedLeaseStore = (fencingToken: number): AccountLeaseStore => ({
 });
 
 /** Drain a client watch in the background so frame arrival is observable. */
-function watching(client: WhatsAppClient): {
+function watching(client: RuntimeMirrorReader): {
   frames: WhatsAppDurableFrame[];
   close(): Promise<void>;
 } {
@@ -231,7 +231,7 @@ const empty = (accountId: string): WhatsAppSnapshot => ({
 
 /** Every stored message id in one chat, newest first, by following the cursor. */
 async function pagedIds(
-  reader: Pick<WhatsAppClient, "messages">,
+  reader: Pick<RuntimeMirrorReader, "messages">,
   chatId: string,
   limit: number,
   from?: StoredMessageCursor,
@@ -2053,7 +2053,7 @@ test("an immediate session close failure releases the account exactly once", asy
     }),
   });
   await runtime.start();
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(createRuntimeMirrorReader(runtime));
   await tick();
 
   const [first, duplicate] = await Promise.allSettled([runtime.stop(), runtime.stop()]);
@@ -2112,7 +2112,7 @@ test("a session that dies on its own closes the watch with the failure", async (
   });
 
   await runtime.start();
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(createRuntimeMirrorReader(runtime));
   await tick();
 
   die(died);
@@ -2564,7 +2564,7 @@ test("aborting a watch during a hung snapshot read releases its subscription", a
   };
   const controller = new AbortController();
   const pump = (async () => {
-    for await (const _frame of createInProcessWhatsAppClient(runtime).watch({
+    for await (const _frame of createRuntimeMirrorReader(runtime).watch({
       signal: controller.signal,
     }));
   })();
@@ -2604,7 +2604,7 @@ test("a client applies only contiguous patches and re-snapshots after a gap", as
       });
   };
 
-  const seen = watching(createInProcessWhatsAppClient(runtime));
+  const seen = watching(createRuntimeMirrorReader(runtime));
   await tick();
   publish(0, 1);
   await tick();
@@ -3031,7 +3031,7 @@ test("a page boundary inside a timestamp collision neither drops nor repeats", a
     1,
   );
 
-  const client: Pick<WhatsAppClient, "messages"> = {
+  const client: Pick<RuntimeMirrorReader, "messages"> = {
     messages: (chatId, options) => data.messages("personal", chatId, options),
   };
   for (const limit of [1, 2, 3, 4, 5, 6]) {
@@ -3206,7 +3206,7 @@ test("a stale update is ignored, a future base re-snapshots, and pages read thro
 
   for (const [index, id] of ["m1", "m2", "m3", "m4"].entries()) await store(id, index);
 
-  const client = createInProcessWhatsAppClient(runtime);
+  const client = createRuntimeMirrorReader(runtime);
   const seen = watching(client);
   await tick();
 
@@ -3252,7 +3252,7 @@ test("a real runtime's missed update is detected and replaced with a fresh snaps
   // contiguity rule exists to survive. Nothing about the mirror is faked: the
   // snapshots and pages below are the backend's own.
   let drop = 0;
-  const lossy: WhatsAppClient = createInProcessWhatsAppClient({
+  const lossy: RuntimeMirrorReader = createRuntimeMirrorReader({
     ...runtime,
     onFrame: (listener) =>
       runtime.onFrame((frame) => {

@@ -593,3 +593,21 @@ established and not the loop that shape runs in. Round 1 made the same mistake i
 a different direction and this file already records it once. Deriving mutations
 from the code's decision points is necessary and is not sufficient; the arity of
 every loop the property ranges over is a decision point too.
+
+## #107 review rounds
+
+### Round 1 — `09163a1`
+
+The packed proof held: a fresh consumer installed the exact tarball, used the
+root Client with file media and libSQL, paged saved messages without requesting
+phone history, then reopened the same files in a distinct process and produced
+the same durable-state hash without reconstructing connection, identity or
+presence. C1, C2, C3, C6, C8 and C10 therefore gained no new Client state path.
+
+Two independent lenses blocked the head. The public name had been cut over, but
+the internal frame reader still declared a second, incompatible
+`WhatsAppClient`; it is now `RuntimeMirrorReader`, so Client has one meaning in
+the repository. The README also opened `./data/whatsapp.db` without first
+creating `./data`, while the proof harness quietly created that prerequisite.
+The example now creates the directory itself, making the documented path match
+the fresh-consumer path it claims to teach.

@@ -677,7 +677,7 @@ export class UnsupportedDurableEventError extends Error {
  * and never hydrated as startup truth — {@link AccountRecord} keeps when the
  * account last connected, which is a different claim from being connected now.
  */
-export interface WhatsAppClientConnectionState {
+export interface RuntimeConnectionObservation {
   readonly status: Status;
   readonly observedAt: number;
   readonly expiresAt: number;
@@ -729,10 +729,10 @@ export type WhatsAppLiveFrame =
       /** Presence is ephemeral; after this instant it means nothing. */
       readonly expiresAt: number;
     }
-  | { readonly type: "connection"; readonly state: WhatsAppClientConnectionState };
+  | { readonly type: "connection"; readonly state: RuntimeConnectionObservation };
 
-/** The backend-independent contract applications and React bindings consume. */
-export interface WhatsAppClient {
+/** Internal, frame-oriented reader used to prove the Runtime's mirror channel. */
+export interface RuntimeMirrorReader {
   /**
    * Watch one account: a current Snapshot Window first, then the changes that
    * follow it, each stamped with the revision it moves the mirror to.
@@ -749,7 +749,7 @@ export interface WhatsAppClient {
    * {@link WhatsAppDataStore.messages}.
    *
    * **Consumers apply both surfaces by record identity.** This method and the
-   * message upserts on {@link WhatsAppClient.watch} are independent reads; the
+   * message upserts on {@link RuntimeMirrorReader.watch} are independent reads; the
    * client does not own or reconcile an application collection. Merge them on
    * `(chatId, messageId)` — the identity of {@link MessageRecord} — rather than
    * appending:
