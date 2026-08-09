@@ -88,6 +88,7 @@ void test("libSQL operation writes roll back state and publication at every tran
     failNext = /^\s*INSERT INTO wa_operations/i;
     await assert.rejects(backend.operations.submit(submission), /injected operation write failure/);
     assert.deepEqual(await backend.operations.list(ACCOUNT), []);
+    assert.deepEqual(await rawOperations(), []);
     assert.deepEqual(changes, []);
 
     await backend.operations.submit(submission);
@@ -124,6 +125,7 @@ void test("libSQL operation writes roll back state and publication at every tran
 
     await backend.operations.claim(ACCOUNT, "attempt", 60_000);
     const beforeStart = await backend.operations.get(ACCOUNT, id);
+    const rawBeforeStart = await rawOperations();
     changes.length = 0;
     failNext = /^\s*UPDATE wa_operations/i;
     await assert.rejects(
@@ -131,10 +133,12 @@ void test("libSQL operation writes roll back state and publication at every tran
       /injected operation write failure/,
     );
     assert.deepEqual(await backend.operations.get(ACCOUNT, id), beforeStart);
+    assert.deepEqual(await rawOperations(), rawBeforeStart);
     assert.deepEqual(changes, []);
 
     await backend.operations.start(ACCOUNT, id, "attempt", 60_000);
     const beforeCompletion = await backend.operations.get(ACCOUNT, id);
+    const rawBeforeCompletion = await rawOperations();
     changes.length = 0;
     failNext = /^\s*UPDATE wa_operations/i;
     await assert.rejects(
@@ -146,6 +150,7 @@ void test("libSQL operation writes roll back state and publication at every tran
       /injected operation write failure/,
     );
     assert.deepEqual(await backend.operations.get(ACCOUNT, id), beforeCompletion);
+    assert.deepEqual(await rawOperations(), rawBeforeCompletion);
     assert.deepEqual(changes, []);
   } finally {
     off();

@@ -125,7 +125,7 @@ test("file media removes unpublished state when its source fails", async () => {
   }
 });
 
-test("file media removes a canonical object when publication durability fails", async () => {
+test("file media preserves immutable bytes when publication durability is uncertain", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-publication-failure-"));
   const originalOpen = fs.promises.open;
   fs.promises.open = (async (...args: Parameters<typeof originalOpen>) => {
@@ -146,12 +146,16 @@ test("file media removes a canonical object when publication durability fails", 
   const expected = await write(memoryMediaStore(), bytes, "personal");
   try {
     await assert.rejects(write(store, bytes, "personal"), /canonical sync failed/);
-    assert.equal(await store.open({ accountId: "personal", ref: expected.ref }), null);
+    assert.deepEqual(
+      await collect(await store.open({ accountId: "personal", ref: expected.ref })),
+      bytes,
+    );
     const entries = await readdir(path.join(directory, ".whatsappd-media"), { recursive: true });
     assert.equal(
-      entries.some((entry) => entry.endsWith(".tmp") || entry.endsWith(".bin")),
+      entries.some((entry) => entry.endsWith(".tmp")),
       false,
     );
+    assert.equal(entries.filter((entry) => entry.endsWith(".bin")).length, 1);
   } finally {
     fs.promises.open = originalOpen;
     syncBuiltinESMExports();

@@ -58,7 +58,6 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
       await ensurePrivateDirectory(accountDirectory);
 
       const temporary = join(accountDirectory, `${randomUUID()}.tmp`);
-      let createdObjectPath: string | undefined;
       try {
         const handle = await openFile(temporary, "wx", 0o600);
         let stored: Awaited<ReturnType<typeof consumeImmutableMedia>>;
@@ -84,7 +83,6 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
         const { objectPath } = location;
         try {
           await link(temporary, objectPath);
-          createdObjectPath = objectPath;
         } catch (error) {
           if (!hasCode(error, "EEXIST")) throw error;
           const existing = await consumeImmutableMedia({
@@ -97,17 +95,10 @@ export function fileMediaStore({ directory }: FileMediaStoreOptions): MediaStore
         }
         await chmod(objectPath, 0o600);
         await syncPath(objectPath);
+        return stored;
+      } finally {
         await rm(temporary, { force: true });
         await syncPath(accountDirectory);
-        createdObjectPath = undefined;
-        return stored;
-      } catch (error) {
-        await Promise.all([
-          rm(temporary, { force: true }),
-          ...(createdObjectPath ? [rm(createdObjectPath, { force: true })] : []),
-        ]);
-        await syncPath(accountDirectory);
-        throw error;
       }
     },
 

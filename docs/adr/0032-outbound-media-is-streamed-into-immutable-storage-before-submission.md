@@ -38,6 +38,12 @@ post-0.3 issue #72. Ordinary cancellation and failure remove only the current
 process's unpublished temporary file; a hard process exit may leave temporary
 storage for that later reconciliation work.
 
+Creating the immutable canonical object is the no-delete boundary. A later
+durability error may make one `write` call reject, but that path preserves the
+canonical bytes because another concurrent writer or committed operation may
+already reference them. Stronger writer coordination and orphan reconciliation
+remain post-0.3 work under #72.
+
 `ptt: true` classifies already-compatible voice-note bytes; it does not
 transcode them. Before publishing a voice-note operation, the Client performs a
 bounded structural check for an Ogg Opus mono payload and rejects incompatible

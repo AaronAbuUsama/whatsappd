@@ -568,9 +568,11 @@ export type MediaOwner =
  * @remarks
  * `write` consumes its source once with backpressure and must own each chunk
  * before requesting the next one. It resolves only after the complete object is
- * durably published; a rejected or incomplete write must not expose a new
- * canonical object. `open` returns a fresh byte stream for a published ref, or
- * `null` when that account cannot read it. See ADR-0015 and ADR-0032.
+ * durably published. Failure before publication exposes no canonical object;
+ * uncertainty after immutable publication preserves the object because another
+ * writer may already reference it. `open` returns a fresh byte stream for a
+ * published ref, or `null` when that account cannot read it. See ADR-0015 and
+ * ADR-0032.
  */
 export interface MediaStore {
   write(input: {
