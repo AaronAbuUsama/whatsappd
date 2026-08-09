@@ -94,6 +94,37 @@ test("file media survives a new store, keeps private opaque paths, and owns byte
   }
 });
 
+test("file media removes unpublished state when its source fails", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-failure-"));
+  let closed = false;
+  try {
+    await assert.rejects(
+      fileMediaStore({ directory }).write({
+        accountId: unsafeAccount,
+        owner: { type: "message", message: unsafeMessage },
+        kind: "document",
+        source: (async function* () {
+          try {
+            yield Uint8Array.from([1, 2, 3]);
+            throw new Error("source failed");
+          } finally {
+            closed = true;
+          }
+        })(),
+      }),
+      /source failed/,
+    );
+    assert.equal(closed, true);
+    const entries = await readdir(path.join(directory, ".whatsappd-media"), { recursive: true });
+    assert.equal(
+      entries.some((entry) => entry.endsWith(".tmp") || entry.endsWith(".bin")),
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("file media syncs created directories and the canonical publication before returning", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-sync-"));
   const originalOpen = fs.promises.open;

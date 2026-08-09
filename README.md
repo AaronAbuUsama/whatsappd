@@ -178,12 +178,12 @@ URL and `AsyncIterable<Uint8Array>` inputs stream incrementally without a full
 Client-side copy. A voice note (`ptt: true`) must already be Ogg Opus mono;
 whatsappd validates that bounded header but does not transcode arbitrary audio.
 
-The Client merges saved pages and live changes for you, per chat, and what it retains grows
-with what the application **read**: reading a chat creates its entry, and from
-that moment that chat accumulates its live traffic whether or not anything pages
-it again. A chat never read retains nothing, and a live message for it is
-dropped rather than buffered. There is no eviction policy yet, so a long-lived
-process that reads every chat retains every chat.
+The Client merges saved pages and live changes for you, per chat. The first read
+or durable send creates that chat's retained entry; from then on it accumulates
+live traffic whether or not anything pages it again. A chat neither read nor
+sent to retains nothing, and its live messages are dropped rather than buffered.
+There is no eviction policy yet, so a long-lived process that reads or sends to
+every chat retains every chat.
 
 Reconciling a stored page against the live stream leaves one visible transient.
 A page read returns the mirror's state at the moment it ran, which can be ahead

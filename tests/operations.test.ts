@@ -11,6 +11,7 @@ import { createWhatsAppRuntime } from "../src/runtime/runtime.ts";
 import { createWhatsAppClient } from "../src/runtime/client.ts";
 import { fileMediaStore } from "../src/runtime/file-media.ts";
 import type { MediaStore } from "../src/runtime/contracts.ts";
+import type { Outbound } from "../src/model/outbound.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 import { collectMedia, readMedia } from "./media-store-helpers.ts";
 import { operationStoreConformance } from "./operation-store-conformance.ts";
@@ -160,6 +161,38 @@ void test("queued work and its optimistic message survive Client and Runtime rep
   }
 });
 
+void test("a durable send materializes retained messages before the first read", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "send-retention",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    const operation = await client.messages.send.text(CHAT, "queued");
+    await driver.emit({
+      type: "message",
+      message: textMessage({ id: "live-after-send", chatId: CHAT, text: "live" }),
+    });
+
+    const retained = client.messages.get(CHAT);
+    assert.deepEqual(
+      retained.messages.map(({ messageId }) => messageId),
+      ["live-after-send"],
+    );
+    assert.deepEqual(
+      retained.outgoing.map(({ operationId }) => operationId),
+      [operation.id],
+    );
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
 void test("libSQL and file media resume a staged send after backend replacement", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-operation-restart-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
@@ -297,9 +330,67 @@ void test("every Session side effect has an awaited Client command and typing st
     await client.messages.setTyping(CHAT, true);
     assert.deepEqual(driver.commands.typing, [{ chatId: CHAT, on: true }]);
     assert.equal((await backend.operations.list("commands")).length, durableCount);
-    assert.equal(driver.commands.sent.length, 13);
+    const contentShape = (content: Outbound): unknown => {
+      if ("image" in content) {
+        assert.ok("stream" in content.image);
+        return { ...content, image: "stream" };
+      }
+      if ("video" in content) {
+        assert.ok("stream" in content.video);
+        return { ...content, video: "stream" };
+      }
+      if ("audio" in content) {
+        assert.ok("stream" in content.audio);
+        return { ...content, audio: "stream" };
+      }
+      if ("document" in content) {
+        assert.ok("stream" in content.document);
+        return { ...content, document: "stream" };
+      }
+      if ("sticker" in content) {
+        assert.ok("stream" in content.sticker);
+        return { ...content, sticker: "stream" };
+      }
+      return content;
+    };
+    assert.deepEqual(
+      driver.commands.sent.map(({ to, content, options }) => ({
+        to,
+        content: contentShape(content),
+        options,
+      })),
+      [
+        { to: CHAT, content: { text: "one" }, options: undefined },
+        { to: CHAT, content: { text: "two" }, options: undefined },
+        { to: CHAT, content: { image: "stream", caption: "image" }, options: undefined },
+        { to: CHAT, content: { video: "stream", gifPlayback: true }, options: undefined },
+        { to: CHAT, content: { audio: "stream", ptt: true }, options: undefined },
+        {
+          to: CHAT,
+          content: { document: "stream", fileName: "proof.txt", mimetype: "text/plain" },
+          options: undefined,
+        },
+        { to: CHAT, content: { sticker: "stream" }, options: undefined },
+        { to: CHAT, content: { location: { lat: 5.6, lng: -0.1 } }, options: undefined },
+        {
+          to: CHAT,
+          content: { contacts: { displayName: "Ada", vcards: ["BEGIN:VCARD"] } },
+          options: undefined,
+        },
+        { to: CHAT, content: { react: { to: ref, emoji: "👍" } }, options: undefined },
+        { to: CHAT, content: { react: { to: ref, emoji: "" } }, options: undefined },
+        { to: CHAT, content: { edit: { target: ref, text: "edited" } }, options: undefined },
+        { to: CHAT, content: { delete: ref }, options: undefined },
+      ],
+    );
     assert.deepEqual(driver.commands.read, [{ refs: [ref] }]);
-    assert.equal(driver.commands.historyRequests[0]?.count, 10);
+    assert.deepEqual(driver.commands.historyRequests, [
+      {
+        anchor: { ref, timestamp: 1 },
+        count: 10,
+        result: { requestId: "test-history-1" },
+      },
+    ]);
   } finally {
     await client.close();
     await runtime.stop();
@@ -554,6 +645,48 @@ void test("aborting wait does not cancel work once its durable row exists", asyn
     release();
     await client.close();
     await runtime.stop();
+  }
+});
+
+void test("closing a Client cancels its wait without cancelling durable work", async () => {
+  const backend = memoryBackend();
+  const firstDriver = createTestWhatsAppSession();
+  const firstRuntime = createWhatsAppRuntime({
+    accountId: "close-operation-wait",
+    backend,
+    openSession: () => firstDriver.session,
+  });
+  await firstRuntime.start();
+  const firstClient = await createWhatsAppClient(firstRuntime);
+  const operation = await firstClient.messages.send.text(CHAT, "survive client close");
+  const waiting = firstClient.operations.wait(operation.id);
+  const cancelled = assert.rejects(
+    waiting,
+    (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+  );
+  await firstClient.close();
+  await cancelled;
+  assert.equal(
+    (await backend.operations.get("close-operation-wait", operation.id))?.id,
+    operation.id,
+  );
+  await firstRuntime.stop();
+
+  const replacementDriver = createTestWhatsAppSession();
+  const replacementRuntime = createWhatsAppRuntime({
+    accountId: "close-operation-wait",
+    backend,
+    openSession: () => replacementDriver.session,
+  });
+  await replacementRuntime.start();
+  const replacementClient = await createWhatsAppClient(replacementRuntime);
+  try {
+    await replacementDriver.emit({ type: "connection", status: { phase: "online" } });
+    assert.equal((await replacementClient.operations.wait(operation.id)).state.status, "succeeded");
+    assert.equal(replacementDriver.commands.sent.length, 1);
+  } finally {
+    await replacementClient.close();
+    await replacementRuntime.stop();
   }
 });
 
@@ -851,17 +984,18 @@ void test("a replacement retries a claim left behind by a crashed worker", async
   await runtime.start();
   const client = await createWhatsAppClient(runtime);
   await driver.emit({ type: "connection", status: { phase: "online" } });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const completed = await Promise.race([
       client.operations.wait(operation.id),
       new Promise<never>((_, reject) => {
-        const timeout = setTimeout(() => reject(new Error("expired claim was not retried")), 2_000);
-        timeout.unref();
+        timeout = setTimeout(() => reject(new Error("expired claim was not retried")), 2_000);
       }),
     ]);
     assert.equal(completed.state.status, "succeeded");
     assert.equal(driver.commands.sent.length, 1);
   } finally {
+    if (timeout) clearTimeout(timeout);
     await client.close();
     await runtime.stop();
   }

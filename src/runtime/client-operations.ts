@@ -38,6 +38,15 @@ export type TerminalWhatsAppOperation<Result = WhatsAppOperationResult> = Omit<
 };
 
 export interface ClientMessageActions {
+  /**
+   * Durable message sends.
+   *
+   * @remarks
+   * Media is completely published before the operation receipt exists. Buffer
+   * input is snapshotted at method invocation; URL and async-iterable input is
+   * consumed once with backpressure. `ptt: true` is validated as Ogg Opus mono
+   * before publication; the Client does not transcode audio.
+   */
   readonly send: {
     text(
       chatId: string,

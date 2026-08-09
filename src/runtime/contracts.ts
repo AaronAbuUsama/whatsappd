@@ -562,7 +562,16 @@ export type MediaOwner =
   | { readonly type: "message"; readonly message: MessageRef }
   | { readonly type: "operation"; readonly operationId: string };
 
-/** Durable media bytes, keyed idempotently by account, owner, kind, and content (ADR-0015). */
+/**
+ * Durable immutable media, keyed idempotently by account, owner, kind, and content.
+ *
+ * @remarks
+ * `write` consumes its source once with backpressure and must own each chunk
+ * before requesting the next one. It resolves only after the complete object is
+ * durably published; a rejected or incomplete write must not expose a new
+ * canonical object. `open` returns a fresh byte stream for a published ref, or
+ * `null` when that account cannot read it. See ADR-0015 and ADR-0032.
+ */
 export interface MediaStore {
   write(input: {
     readonly accountId: string;
