@@ -15,6 +15,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pino from "pino";
 import {
   createSession,
   createWhatsAppRuntime,
@@ -49,6 +50,7 @@ const RUN_TIMEOUT_MS = 300_000;
 const MAX_CHILD_OUTPUT_BYTES = 64 * 1024;
 const PAGE_SEED_COUNT = 30;
 let proofStage = "startup";
+const logger = pino({ level: "silent" });
 
 type LinkMode = "resumed" | "paired";
 
@@ -94,7 +96,7 @@ interface OpenProfile {
   readonly runtime: WhatsAppRuntime;
   readonly session: WhatsAppSession;
   readonly link: LinkSummary;
-  readonly identity: string;
+  readonly address: string;
   readonly replaceClient: () => Promise<WhatsAppClientCore>;
   readonly close: () => Promise<void>;
 }
@@ -146,7 +148,7 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
     accountId: profile,
     backend,
     openSession(credentials: CredentialStore) {
-      const session = createSession({ store: credentials, auth: qrAuth() });
+      const session = createSession({ store: credentials, auth: qrAuth(), logger });
       session.subscribe({ connection: link.observe });
       liveSession = session;
       return session;
@@ -162,10 +164,10 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
       () => (client?.account.get().connection?.phase === "online" ? "online" : undefined),
       "the linked account to become online",
     );
-    const identity = await waitForAccount(
+    const address = await waitForAccount(
       client,
       () => client?.account.get().identity?.jid,
-      "the linked account identity",
+      "the linked account address",
     );
     if (!liveSession) throw new Error("the linked account opened no session");
     return {
@@ -178,7 +180,7 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
       runtime,
       session: liveSession,
       link: link.summary(),
-      identity,
+      address,
       async replaceClient() {
         await client?.close();
         client = await createWhatsAppClient(runtime);
@@ -217,10 +219,10 @@ interface EnvProbe {
 
 export interface PeerProcessResult {
   readonly pid: number;
-  readonly identityHash?: string;
+  readonly addressHash?: string;
   readonly privateKnownValues?: {
     readonly nonce?: string;
-    readonly peerJid: string;
+    readonly peerAddress: string;
   };
   readonly link?: LinkSummary;
   readonly envProbe?: EnvProbe;
@@ -246,7 +248,7 @@ export interface PeerProcessResult {
 interface PeerProcessOptions {
   readonly mode?: PeerMode;
   readonly timeoutMs?: number;
-  readonly identityHashSalt?: string;
+  readonly addressHashSalt?: string;
 }
 
 const PEER_ENV_KEYS = new Set([
@@ -264,8 +266,8 @@ const PEER_ENV_KEYS = new Set([
   "__CF_USER_TEXT_ENCODING",
 ]);
 
-function hashIdentity(salt: string, identity: string): string {
-  return createHash("sha256").update(salt).update(identity).digest("hex");
+function hashAddress(salt: string, address: string): string {
+  return createHash("sha256").update(salt).update(address).digest("hex");
 }
 
 function sha256(bytes: string | Uint8Array): string {
@@ -336,7 +338,7 @@ interface DurableDigest {
 export interface ReplacementObservation {
   readonly durableDigest: DurableDigest;
   readonly connectionPresent: false;
-  readonly identityPresent: false;
+  readonly addressPresent: false;
   readonly presenceAddressCount: number;
   readonly presenceObservationsRestored: 0;
   readonly lastConnectedAtPresent: true;
@@ -642,7 +644,7 @@ async function durableDigest(input: {
 export function runPeerProcess(options: PeerProcessOptions = {}): Promise<PeerProcessResult> {
   const mode = options.mode ?? "profile";
   const timeoutMs = options.timeoutMs ?? ONLINE_TIMEOUT_MS;
-  const identityHashSalt = options.identityHashSalt ?? randomBytes(16).toString("hex");
+  const addressHashSalt = options.addressHashSalt ?? randomBytes(16).toString("hex");
 
   return new Promise<PeerProcessResult>((resolve, reject) => {
     const child = spawn(
@@ -656,7 +658,7 @@ export function runPeerProcess(options: PeerProcessOptions = {}): Promise<PeerPr
           ...(process.env.HOME && { HOME: process.env.HOME }),
           WA_LOG_LEVEL: "silent",
           CLIENT_PROOF_CHILD_MODE: mode,
-          CLIENT_PROOF_HASH_SALT: identityHashSalt,
+          CLIENT_PROOF_HASH_SALT: addressHashSalt,
         },
       },
     );
@@ -725,7 +727,7 @@ async function peerChild(): Promise<void> {
   }
 
   const salt = process.env.CLIENT_PROOF_HASH_SALT;
-  if (!salt) throw new Error("peer child has no identity hash salt");
+  if (!salt) throw new Error("peer child has no address hash salt");
   if (mode === "replacement") {
     const result: PeerProcessResult = {
       pid: process.pid,
@@ -779,10 +781,10 @@ async function peerChild(): Promise<void> {
     }
     const result: PeerProcessResult = {
       pid: process.pid,
-      identityHash: hashIdentity(salt, peer.identity),
+      addressHash: hashAddress(salt, peer.address),
       privateKnownValues: {
         ...(nonce && { nonce }),
-        peerJid: peer.identity,
+        peerAddress: peer.address,
       },
       link: peer.link,
       ...(sent && { sent }),
@@ -823,7 +825,7 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
     accountId: "android",
     backend,
     openSession(credentials: CredentialStore) {
-      return createSession({ store: credentials, auth: qrAuth() });
+      return createSession({ store: credentials, auth: qrAuth(), logger });
     },
   });
   let client: WhatsAppClientCore | undefined;
@@ -868,7 +870,7 @@ async function coldReplacement(salt: string): Promise<ReplacementObservation> {
         salt,
       }),
       connectionPresent: false,
-      identityPresent: false,
+      addressPresent: false,
       presenceAddressCount: addresses.length,
       presenceObservationsRestored: 0,
       lastConnectedAtPresent: true,
@@ -927,7 +929,7 @@ async function pagingReplacementRun(): Promise<void> {
     proofStage = "cold-replacement";
     const replacementProcess = await runPeerProcess({
       mode: "replacement",
-      identityHashSalt: salt,
+      addressHashSalt: salt,
       timeoutMs: 120_000,
     });
     const replacement = replacementProcess.replacement;
@@ -959,7 +961,7 @@ async function pagingReplacementRun(): Promise<void> {
           durableDigestEqual: true,
           durableDigest: replacement.durableDigest,
           connectionPresent: replacement.connectionPresent,
-          identityPresent: replacement.identityPresent,
+          addressPresent: replacement.addressPresent,
           presenceAddressCount: replacement.presenceAddressCount,
           presenceObservationsRestored: replacement.presenceObservationsRestored,
           lastConnectedAtPresent: replacement.lastConnectedAtPresent,
@@ -993,7 +995,7 @@ async function subjectRun(): Promise<void> {
       client: subject.client,
       chatId,
       async send() {
-        textPeer = await runPeerProcess({ mode: "send-text", identityHashSalt: salt });
+        textPeer = await runPeerProcess({ mode: "send-text", addressHashSalt: salt });
         if (textPeer.sent?.kind !== "text") {
           throw new Error("the peer returned no text-send proof");
         }
@@ -1008,7 +1010,7 @@ async function subjectRun(): Promise<void> {
       media: subject.media,
       chatId,
       async send() {
-        documentPeer = await runPeerProcess({ mode: "send-document", identityHashSalt: salt });
+        documentPeer = await runPeerProcess({ mode: "send-document", addressHashSalt: salt });
         if (documentPeer.sent?.kind !== "document") {
           throw new Error("the peer returned no document-send proof");
         }
@@ -1029,7 +1031,7 @@ async function subjectRun(): Promise<void> {
     if (firstPublicPage.older === "exhausted") {
       pageSeedPeer = await runPeerProcess({
         mode: "seed-pages",
-        identityHashSalt: salt,
+        addressHashSalt: salt,
         timeoutMs: 120_000,
       });
       if (pageSeedPeer.sent?.kind !== "page-seed" || pageSeedPeer.sent.count < 26) {
@@ -1070,10 +1072,10 @@ async function subjectRun(): Promise<void> {
       salt,
     });
 
-    if (!textPeer || !documentPeer) throw new Error("the peer process returned no identity proof");
-    const subjectIdentityHash = hashIdentity(salt, subject.identity);
+    if (!textPeer || !documentPeer) throw new Error("the peer process returned no address proof");
+    const subjectAddressHash = hashAddress(salt, subject.address);
     const subjectLink = subject.link;
-    const peerIdentityHash = textPeer.identityHash;
+    const peerAddressHash = textPeer.addressHash;
     if (
       textPeer.pid === process.pid ||
       documentPeer.pid === process.pid ||
@@ -1081,11 +1083,10 @@ async function subjectRun(): Promise<void> {
       textPeer.pid === documentPeer.pid ||
       pageSeedPeer?.pid === textPeer.pid ||
       pageSeedPeer?.pid === documentPeer.pid ||
-      peerIdentityHash === undefined ||
-      documentPeer.identityHash !== peerIdentityHash ||
-      (pageSeedPeer?.identityHash !== undefined &&
-        pageSeedPeer.identityHash !== peerIdentityHash) ||
-      peerIdentityHash === subjectIdentityHash
+      peerAddressHash === undefined ||
+      documentPeer.addressHash !== peerAddressHash ||
+      (pageSeedPeer?.addressHash !== undefined && pageSeedPeer.addressHash !== peerAddressHash) ||
+      peerAddressHash === subjectAddressHash
     ) {
       throw new Error("subject and peer were not distinct linked accounts in distinct processes");
     }
@@ -1107,7 +1108,7 @@ async function subjectRun(): Promise<void> {
     proofStage = "cold-replacement";
     const replacementProcess = await runPeerProcess({
       mode: "replacement",
-      identityHashSalt: salt,
+      addressHashSalt: salt,
       timeoutMs: 120_000,
     });
     const replacement = replacementProcess.replacement;
@@ -1139,8 +1140,8 @@ async function subjectRun(): Promise<void> {
       documentPeerPid: documentPeer.pid,
       ...(pageSeedPeer && { pageSeedPeerPid: pageSeedPeer.pid }),
       replacementPid: replacementProcess.pid,
-      subjectIdentityHash,
-      peerIdentityHash,
+      subjectAddressHash,
+      peerAddressHash,
       peer: {
         mode: "second-account-own-process",
         linkMode: textPeer.link.linkMode,
@@ -1166,7 +1167,7 @@ async function subjectRun(): Promise<void> {
         durableDigestEqual: true,
         durableDigest: replacement.durableDigest,
         connectionPresent: replacement.connectionPresent,
-        identityPresent: replacement.identityPresent,
+        addressPresent: replacement.addressPresent,
         presenceAddressCount: replacement.presenceAddressCount,
         presenceObservationsRestored: replacement.presenceObservationsRestored,
         lastConnectedAtPresent: replacement.lastConnectedAtPresent,
@@ -1174,24 +1175,22 @@ async function subjectRun(): Promise<void> {
       },
     } satisfies ClientProofSummary;
     const nonce = textPeer.privateKnownValues?.nonce;
-    const peerJid = textPeer.privateKnownValues?.peerJid;
-    if (!nonce || !peerJid) {
+    const peerAddress = textPeer.privateKnownValues?.peerAddress;
+    if (!nonce || !peerAddress) {
       throw new Error("the receipt negative control is missing an in-memory known value");
     }
     const receipt = writeClientProofReceipt(root, {
       runStart,
       finalizedAt: new Date().toISOString(),
       summary,
-      knownValues: [nonce, peerJid, chatId],
+      knownValues: [nonce, peerAddress, chatId],
     });
     process.stderr.write(
       `${JSON.stringify({
         receipt: path.relative(root, receipt.file),
-        schemaUnknownFields: receipt.scan.schemaUnknownFields,
-        schemaInvalidFields: receipt.scan.schemaInvalidFields,
         patternHits: receipt.scan.patternHits,
         knownValueHits: receipt.scan.knownValueHits,
-        floorPassed: receipt.scan.floorPassed,
+        nonEmpty: receipt.scan.nonEmpty,
       })}\n`,
     );
     process.stdout.write(`${JSON.stringify(summary)}\n`);

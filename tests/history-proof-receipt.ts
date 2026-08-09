@@ -20,6 +20,7 @@
  * no rung of their own (P2 is product-durability work, issue #20).
  */
 import { createHash, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
@@ -39,6 +40,136 @@ export const redact = (text: string): string =>
   text.replace(/\+?\d[\d\s\-().]{4,28}\d/g, (m) =>
     m.replace(/\D/g, "").length >= 7 ? "<redacted>" : m,
   );
+
+export interface ProofRunStart {
+  readonly captureSite: string;
+  readonly gitHead: string;
+  readonly sourceTreeHash: string;
+  readonly treeClean: boolean;
+  readonly startedAt: string;
+}
+
+export interface ProofReceiptScan {
+  readonly patternHits: number;
+  readonly knownValueHits: number;
+  readonly receiptByteLength: number;
+  readonly nonEmpty: boolean;
+}
+
+const git = (cwd: string, args: readonly string[]): string =>
+  execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+
+export function captureProofRunStart(
+  cwd: string,
+  captureSite: string,
+  source = "HEAD:src",
+): ProofRunStart {
+  return {
+    captureSite,
+    gitHead: git(cwd, ["rev-parse", "HEAD"]),
+    sourceTreeHash: git(cwd, ["rev-parse", source]),
+    treeClean: git(cwd, ["status", "--porcelain"]).length === 0,
+    startedAt: new Date().toISOString(),
+  };
+}
+
+function stringLeaves(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringLeaves);
+  if (value && typeof value === "object") return Object.values(value).flatMap(stringLeaves);
+  return [];
+}
+
+function privatePatternHits(value: string): number {
+  if (/^[a-f0-9]{40,64}$/u.test(value) || !Number.isNaN(Date.parse(value))) return 0;
+  let hits = 0;
+  if (/\d{7,}/u.test(value.replace(/[\s\-().+]/gu, ""))) hits++;
+  if (/@(s\.whatsapp\.net|g\.us|lid|broadcast|newsletter)/u.test(value)) hits++;
+  if (!/^[a-z][A-Za-z0-9-]{0,63}$/u.test(value) && /[A-Za-z0-9+/_-]{32,}={0,2}/u.test(value)) {
+    hits++;
+  }
+  if (/(?:[A-Za-z0-9+/_-]+={0,2},){2,}[A-Za-z0-9+/_-]+={0,2}/u.test(value)) hits++;
+  if (value.includes(".proof-private")) hits++;
+  return hits;
+}
+
+export function scanProofReceipt(
+  receipt: unknown,
+  knownValues: readonly string[],
+): ProofReceiptScan {
+  const serialized = JSON.stringify(receipt);
+  const patternHits = stringLeaves(receipt).reduce(
+    (count, value) => count + privatePatternHits(value),
+    0,
+  );
+  return {
+    patternHits,
+    knownValueHits: knownValues.filter((value) => value && serialized.includes(value)).length,
+    receiptByteLength: Buffer.byteLength(serialized),
+    nonEmpty: serialized !== "{}" && serialized !== "null",
+  };
+}
+
+export function writeProofReceipt(options: {
+  readonly cwd: string;
+  readonly prefix: string;
+  readonly runStart: ProofRunStart;
+  readonly finalizedAt: string | undefined;
+  readonly knownValues: readonly string[];
+  readonly receipt: Record<string, unknown>;
+}): { readonly file: string; readonly scan: ProofReceiptScan } {
+  const { cwd, prefix, runStart, finalizedAt, knownValues } = options;
+  if (
+    !runStart.treeClean ||
+    git(cwd, ["status", "--porcelain"]).length !== 0 ||
+    runStart.gitHead !== git(cwd, ["rev-parse", "HEAD"])
+  ) {
+    throw new Error("refusing receipt: the run is dirty or no longer matches HEAD");
+  }
+  if (!finalizedAt) throw new Error("refusing receipt: the run is not finalized");
+  if (
+    knownValues.length < 3 ||
+    knownValues.some((value) => value.length === 0) ||
+    new Set(knownValues).size !== knownValues.length
+  ) {
+    throw new Error("refusing receipt: known-value negative control is incomplete");
+  }
+
+  const firstScan = scanProofReceipt(options.receipt, knownValues);
+  const receipt = {
+    ...options.receipt,
+    sanitization: {
+      captureSite: "shared-history-proof-receipt-writer",
+      patternHits: firstScan.patternHits,
+      knownValueHits: firstScan.knownValueHits,
+      knownValueControlCount: knownValues.length,
+      nonEmpty: firstScan.nonEmpty,
+    },
+  };
+  const scan = scanProofReceipt(receipt, knownValues);
+  if (scan.patternHits !== 0 || scan.knownValueHits !== 0 || !scan.nonEmpty) {
+    throw new Error(`refusing unsanitized receipt: ${JSON.stringify(scan)}`);
+  }
+
+  const outDir = path.join(cwd, ".proof-receipts");
+  mkdirSync(outDir, { recursive: true });
+  const runNumber = 1 + readdirSync(outDir).filter((name) => name.startsWith(prefix)).length;
+  const file = path.join(outDir, `${prefix}${runNumber}-${runStart.gitHead.slice(0, 7)}.json`);
+  const formatted = execFileSync(
+    path.join(cwd, "node_modules", ".bin", "vp"),
+    ["fmt", "--stdin-filepath=.proof-receipts/receipt.json"],
+    { cwd, input: `${JSON.stringify(receipt, null, 2)}\n`, encoding: "utf8" },
+  );
+  try {
+    writeFileSync(file, formatted, { flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`refusing to overwrite existing receipt ${file}`);
+    }
+    throw error;
+  }
+  return { file, scan };
+}
 
 interface Oracle {
   recordCount: number;

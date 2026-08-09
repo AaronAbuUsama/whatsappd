@@ -59,11 +59,9 @@ async function run(): Promise<void> {
         receipt: path.relative(root, receipt.file),
         refusalReason: refusal.reason,
         sessionSendInvocations: driver.commands.sent.length,
-        schemaUnknownFields: receipt.scan.schemaUnknownFields,
-        schemaInvalidFields: receipt.scan.schemaInvalidFields,
         patternHits: receipt.scan.patternHits,
         knownValueHits: receipt.scan.knownValueHits,
-        floorPassed: receipt.scan.floorPassed,
+        nonEmpty: receipt.scan.nonEmpty,
       })}\n`,
     );
   } finally {

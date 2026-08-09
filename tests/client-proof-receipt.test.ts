@@ -1,98 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { test } from "./_expect.ts";
 import {
   buildClientGuardProofReceipt,
   buildClientProofReceipt,
-  scanClientProofReceipt,
-  writeClientProofReceiptExclusive,
   type ClientGuardProofObservationStore,
   type ClientProofObservationStore,
 } from "./client-proof-receipt.ts";
-
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-
-test("the Client proof receipt scanner reports a schema-known non-vacuous artifact", () => {
-  const receipt = {
-    schemaVersion: 1,
-    issue: 127,
-    scope: "Issue 127 live Client read path",
-    tier: "P4",
-    provenance: {
-      captureSite: "client-proof-run-start",
-      gitHead: "38aab9cd0e17181ece2e0c6f3a8128208ef139e5",
-      sourceTreeHash: "1111111111111111111111111111111111111111",
-      treeClean: true,
-      startedAt: "2026-08-07T00:00:00.000Z",
-      finalizedAt: "2026-08-07T00:01:00.000Z",
-      command: "pnpm proof:client < /dev/null",
-    },
-    matrix: [
-      {
-        id: "inbound-text",
-        verdict: "observed",
-        captureSite: "client-live-upsert",
-        evidence: {
-          nonceSha256: "2".repeat(64),
-        },
-      },
-    ],
-  };
-
-  assert.deepEqual(
-    scanClientProofReceipt(receipt, ["private-nonce", `peer${"@lid"}`, `group${"@g.us"}`]),
-    {
-      schemaUnknownFields: 0,
-      schemaInvalidFields: 0,
-      patternHits: 0,
-      knownValueHits: 0,
-      freeFormFields: 1,
-      digestFields: 1,
-      receiptByteLength: JSON.stringify(receipt).length,
-      nonEmpty: true,
-      floorPassed: true,
-    },
-  );
-});
-
-test("the scanner refuses unknown fields and scans patterns only in free-form fields", () => {
-  const receipt = {
-    schemaVersion: 1,
-    issue: 127,
-    scope: "123456789012@s.whatsapp.net",
-    tier: "P4",
-    unexpected: "not-schema-owned",
-    matrix: [
-      {
-        id: "inbound-text",
-        verdict: "observed",
-        captureSite: "client-live-upsert",
-        evidence: { nonceSha256: "1".repeat(64) },
-      },
-    ],
-  };
-
-  const scan = scanClientProofReceipt(receipt, []);
-  assert.equal(scan.schemaUnknownFields, 1);
-  assert.equal(scan.patternHits, 2);
-  assert.equal(scan.digestFields, 1, "the SHA-256 digest is typed, not pattern-scanned");
-});
-
-test("the scanner detects held-in-memory known values and cannot pass an empty artifact", () => {
-  const knownValue = "shape-the-patterns-do-not-anticipate";
-  const knownValueScan = scanClientProofReceipt(
-    { schemaVersion: 1, issue: 127, scope: knownValue, tier: "P4" },
-    [knownValue],
-  );
-  assert.equal(knownValueScan.knownValueHits, 1);
-
-  const emptyScan = scanClientProofReceipt({}, []);
-  assert.equal(emptyScan.nonEmpty, false);
-  assert.equal(emptyScan.floorPassed, false);
-});
+import { scanProofReceipt } from "./history-proof-receipt.ts";
 
 function completeStore(): ClientProofObservationStore {
   return {
@@ -123,8 +37,8 @@ function completeStore(): ClientProofObservationStore {
       peerPid: 11,
       documentPeerPid: 12,
       replacementPid: 13,
-      subjectIdentityHash: "2".repeat(64),
-      peerIdentityHash: "3".repeat(64),
+      subjectAddressHash: "2".repeat(64),
+      peerAddressHash: "3".repeat(64),
       peer: {
         mode: "second-account-own-process",
         linkMode: "resumed",
@@ -168,7 +82,7 @@ function completeStore(): ClientProofObservationStore {
           media: "b".repeat(64),
         },
         connectionPresent: false,
-        identityPresent: false,
+        addressPresent: false,
         presenceAddressCount: 130,
         presenceObservationsRestored: 0,
         lastConnectedAtPresent: true,
@@ -178,110 +92,76 @@ function completeStore(): ClientProofObservationStore {
   };
 }
 
-test("the receipt writer refuses dishonest provenance and missing observations", () => {
-  const store = completeStore();
-  const current = { gitHead: store.runStart.gitHead, treeClean: true };
+test("the shared receipt scan catches native addresses and held private values", () => {
+  const known = "shape-the-patterns-do-not-anticipate";
+  const scan = scanProofReceipt(
+    {
+      digest: "1".repeat(64),
+      leakedAddress: "123456789012@s.whatsapp.net",
+      leakedPath: ".proof-private/android",
+      opaqueSecret: "Q".repeat(80),
+      known,
+    },
+    [known],
+  );
+  assert.equal(scan.patternHits >= 3, true);
+  assert.equal(scan.knownValueHits, 1);
+  assert.equal(scan.nonEmpty, true);
+  assert.equal(scanProofReceipt({}, []).nonEmpty, false);
+});
 
+test("the Client receipt refuses incomplete proof observations", () => {
+  const store = completeStore();
   assert.throws(
-    () =>
-      buildClientProofReceipt(
-        { ...store, runStart: { ...store.runStart, treeClean: false } },
-        current,
-      ),
-    /run or current worktree is dirty/,
-  );
-  assert.throws(
-    () => buildClientProofReceipt(store, { gitHead: "f".repeat(40), treeClean: true }),
-    /current head does not match/,
-  );
-  assert.throws(
-    () => buildClientProofReceipt({ ...store, finalizedAt: undefined }, current),
+    () => buildClientProofReceipt({ ...store, finalizedAt: undefined }),
     /run is not finalized/,
   );
   assert.throws(
     () =>
-      buildClientProofReceipt(
-        {
-          ...store,
-          summary: { ...store.summary!, replacementPid: store.summary!.peerPid },
-        },
-        current,
-      ),
+      buildClientProofReceipt({
+        ...store,
+        summary: { ...store.summary!, replacementPid: store.summary!.peerPid },
+      }),
     /proof processes are not distinct/,
   );
   assert.throws(
     () =>
-      buildClientProofReceipt(
-        {
-          ...store,
-          summary: {
-            ...store.summary!,
-            paging: { ...store.summary!.paging, pageCount: 1 },
-          },
+      buildClientProofReceipt({
+        ...store,
+        summary: {
+          ...store.summary!,
+          paging: { ...store.summary!.paging, pageCount: 1 },
         },
-        current,
-      ),
+      }),
     /required observations are missing/,
-  );
-  assert.throws(
-    () => buildClientProofReceipt({ ...store, knownValues: ["only-one"] }, current),
-    /known-value negative control is incomplete/,
   );
 });
 
-test("the receipt writer transcribes a complete observation store into a clean matrix", () => {
+test("the Client receipt transcribes the complete observed matrix without private values", () => {
   const store = completeStore();
-  const receipt = buildClientProofReceipt(store, {
-    gitHead: store.runStart.gitHead,
-    treeClean: true,
-  });
-  const scan = scanClientProofReceipt(receipt, store.knownValues);
-  assert.equal(scan.schemaUnknownFields, 0);
-  assert.equal(scan.schemaInvalidFields, 0);
+  const receipt = buildClientProofReceipt(store);
+  const scan = scanProofReceipt(receipt, store.knownValues);
   assert.equal(scan.patternHits, 0);
   assert.equal(scan.knownValueHits, 0);
-  assert.equal(scan.floorPassed, true);
   assert.deepEqual(
     (receipt.matrix as Array<{ verdict: string }>).map(({ verdict }) => verdict),
     Array(10).fill("observed"),
   );
 });
 
-test("the inbound-text capture site is derived from how the Client observed it", () => {
+test("the inbound-text capture site records the Client observation path", () => {
   const store = completeStore();
-  const storedPageStore: ClientProofObservationStore = {
+  const receipt = buildClientProofReceipt({
     ...store,
     summary: {
       ...store.summary!,
-      inboundText: {
-        ...store.summary!.inboundText,
-        observedVia: "stored-page",
-      },
+      inboundText: { ...store.summary!.inboundText, observedVia: "stored-page" },
     },
-  };
-  const receipt = buildClientProofReceipt(storedPageStore, {
-    gitHead: store.runStart.gitHead,
-    treeClean: true,
   });
   const inboundText = (
-    receipt.matrix as Array<{
-      readonly id: string;
-      readonly captureSite: string;
-    }>
+    receipt.matrix as Array<{ readonly id: string; readonly captureSite: string }>
   ).find(({ id }) => id === "inbound-text");
-
   assert.equal(inboundText?.captureSite, "client-stored-page");
-});
-
-test("the receipt writer uses exclusive creation and never overwrites evidence", () => {
-  const directory = mkdtempSync(path.join(os.tmpdir(), "client-proof-receipt-"));
-  const file = path.join(directory, "receipt.json");
-  writeClientProofReceiptExclusive(root, file, { first: true });
-  assert.throws(
-    () => writeClientProofReceiptExclusive(root, file, { first: false }),
-    /refusing to overwrite existing receipt/,
-  );
-  assert.equal(readFileSync(file, "utf8"), '{\n  "first": true\n}\n');
 });
 
 function completeGuardStore(): ClientGuardProofObservationStore {
@@ -296,7 +176,7 @@ function completeGuardStore(): ClientGuardProofObservationStore {
     finalizedAt: "2026-08-07T07:00:01.000Z",
     knownValues: [
       "generated-target-held-in-memory",
-      "generated-scan-canary-held-in-memory",
+      "generated-canary-held-in-memory",
       "generated-control-held-in-memory",
     ],
     guard: {
@@ -308,14 +188,9 @@ function completeGuardStore(): ClientGuardProofObservationStore {
   };
 }
 
-test("the guard receipt records a refusal before any recorded Session send without recording the target", () => {
+test("the guard receipt records refusal before any Session send", () => {
   const store = completeGuardStore();
-  const receipt = buildClientGuardProofReceipt(store, {
-    gitHead: store.runStart.gitHead,
-    treeClean: true,
-  });
-  const serialized = JSON.stringify(receipt);
-
+  const receipt = buildClientGuardProofReceipt(store);
   assert.deepEqual(receipt.matrix, [
     {
       id: "allowlist-unlisted-target-refused",
@@ -324,48 +199,25 @@ test("the guard receipt records a refusal before any recorded Session send witho
       evidence: store.guard,
     },
   ]);
-  assert.equal(serialized.includes(store.knownValues[0]!), false);
-  assert.deepEqual(scanClientProofReceipt(receipt, store.knownValues), {
-    schemaUnknownFields: 0,
-    schemaInvalidFields: 0,
-    patternHits: 0,
-    knownValueHits: 0,
-    freeFormFields: 1,
-    digestFields: 1,
-    receiptByteLength: serialized.length,
-    nonEmpty: true,
-    floorPassed: true,
-  });
+  assert.equal(scanProofReceipt(receipt, store.knownValues).knownValueHits, 0);
 });
 
-test("the guard receipt refuses a send invocation, a different refusal, or dishonest provenance", () => {
+test("the guard receipt refuses a send invocation or a different refusal", () => {
   const store = completeGuardStore();
-  const current = { gitHead: store.runStart.gitHead, treeClean: true };
-
   assert.throws(
     () =>
-      buildClientGuardProofReceipt(
-        {
-          ...store,
-          guard: { ...store.guard!, sessionSendInvocations: 1 },
-        },
-        current,
-      ),
+      buildClientGuardProofReceipt({
+        ...store,
+        guard: { ...store.guard!, sessionSendInvocations: 1 },
+      }),
     /guard observation is incomplete/,
   );
   assert.throws(
     () =>
-      buildClientGuardProofReceipt(
-        {
-          ...store,
-          guard: { ...store.guard!, refusalReason: "allowlist_file_absent" },
-        },
-        current,
-      ),
+      buildClientGuardProofReceipt({
+        ...store,
+        guard: { ...store.guard!, refusalReason: "allowlist_file_absent" },
+      }),
     /guard observation is incomplete/,
-  );
-  assert.throws(
-    () => buildClientGuardProofReceipt(store, { gitHead: "f".repeat(40), treeClean: true }),
-    /current head does not match/,
   );
 });
