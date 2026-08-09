@@ -3,10 +3,10 @@
   "issue": 108,
   "tier": "P2",
   "packedVersion": "0.2.2",
-  "firstProcessId": 37984,
-  "secondProcessId": 38004,
-  "submissionProcessId": 37950,
-  "durableStateHash": "1d8814200aa4cdc5fbee30553146502c0007fb4533bbd649e5245a2bc9b2e2f7",
+  "firstProcessId": 80772,
+  "secondProcessId": 80777,
+  "submissionProcessId": 80727,
+  "durableStateHash": "ab4e7dd65f516e763e0200b8c6f89bafaea451bb5442e4f5c9ba648c4f562065",
   "counts": {
     "chats": 2,
     "contacts": 1,
@@ -27,5 +27,5 @@
     "resumedAfterProcessReplacement": true,
     "reconstructedAfterExecution": true
   },
-  "gitHead": "750f2c3da404d8cb5c8ed741a80be67ef928e605"
+  "gitHead": "7da0b9a66ed6477695e2b6e294cb66810843c82f"
 }
