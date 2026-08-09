@@ -4,6 +4,7 @@ import type { Unsubscribe } from "../subscription.ts";
 import type { MediaStore } from "./contracts.ts";
 import {
   operationIdFor,
+  operationInputJson,
   type DurableOutbound,
   type WhatsAppOperation,
   type WhatsAppOperationInput,
@@ -183,30 +184,134 @@ const sendOptions = (options?: ClientSendOptions): SendOptions | undefined =>
       }
     : undefined;
 
-const bytesOf = async (input: BinaryInput, signal?: AbortSignal): Promise<Uint8Array> => {
+const abortableSource = (
+  source: AsyncIterable<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncIterable<Uint8Array> => ({
+  async *[Symbol.asyncIterator]() {
+    const iterator = source[Symbol.asyncIterator]();
+    try {
+      for (;;) {
+        const next = await withAbort(iterator.next(), signal);
+        if (next.done) return;
+        yield next.value;
+      }
+    } finally {
+      void Promise.resolve(iterator.return?.()).catch(() => {});
+    }
+  },
+});
+
+const sourceOf = async (
+  input: BinaryInput,
+  signal?: AbortSignal,
+): Promise<AsyncIterable<Uint8Array>> => {
   throwIfAborted(signal);
-  if (Buffer.isBuffer(input)) return Uint8Array.from(input);
+  if (Buffer.isBuffer(input)) {
+    const bytes = Uint8Array.from(input);
+    return (async function* () {
+      throwIfAborted(signal);
+      yield bytes;
+    })();
+  }
   if ("url" in input) {
     const response = await fetch(input.url, { signal });
     if (!response.ok) throw new Error(`media request failed with HTTP ${response.status}`);
-    return new Uint8Array(await response.arrayBuffer());
+    if (!response.body) throw new Error("media response has no body");
+    return abortableSource(response.body, signal);
   }
-  const chunks: Uint8Array[] = [];
-  const iterator = input.stream[Symbol.asyncIterator]();
-  try {
-    for (;;) {
-      const next = await withAbort(iterator.next(), signal);
-      if (next.done) break;
-      chunks.push(Uint8Array.from(next.value));
-    }
-  } catch (error) {
-    void Promise.resolve()
-      .then(() => iterator.return?.())
-      .catch(() => {});
-    throw error;
-  }
-  return Uint8Array.from(Buffer.concat(chunks));
+  return abortableSource(input.stream, signal);
 };
+
+interface MediaCursor {
+  readonly iterator: AsyncIterator<Uint8Array>;
+  chunk?: Uint8Array;
+  offset: number;
+}
+
+const invalidVoiceNote = (): TypeError =>
+  new TypeError("ptt audio must be an Ogg Opus mono stream");
+
+const fillVoiceNotePrefix = async (
+  cursor: MediaCursor,
+  prefix: Buffer,
+  length: number,
+  needed: number,
+): Promise<number> => {
+  while (length < needed) {
+    if (!cursor.chunk || cursor.offset === cursor.chunk.byteLength) {
+      const next = await cursor.iterator.next();
+      if (next.done) throw invalidVoiceNote();
+      if (!(next.value instanceof Uint8Array))
+        throw new TypeError("media source must yield Uint8Array");
+      cursor.chunk = next.value;
+      cursor.offset = 0;
+    }
+    const take = Math.min(needed - length, cursor.chunk.byteLength - cursor.offset);
+    prefix.set(cursor.chunk.subarray(cursor.offset, cursor.offset + take), length);
+    cursor.offset += take;
+    length += take;
+  }
+  return length;
+};
+
+const voiceNotePacketLength = (prefix: Buffer): number => {
+  let packetLength = 0;
+  for (let index = 0; index < prefix[26]!; index += 1) {
+    const lace = prefix[27 + index]!;
+    packetLength += lace;
+    if (lace < 255) return packetLength;
+  }
+  throw invalidVoiceNote();
+};
+
+const voiceNotePrefix = async (cursor: MediaCursor): Promise<Uint8Array> => {
+  const prefix = Buffer.allocUnsafe(65_307);
+  let length = await fillVoiceNotePrefix(cursor, prefix, 0, 27);
+  if (
+    prefix.toString("ascii", 0, 4) !== "OggS" ||
+    prefix[4] !== 0 ||
+    (prefix[5]! & 0x03) !== 0x02 ||
+    prefix.readUInt32LE(18) !== 0 ||
+    prefix[26] === 0
+  )
+    throw invalidVoiceNote();
+
+  const packet = 27 + prefix[26]!;
+  length = await fillVoiceNotePrefix(cursor, prefix, length, packet);
+  const packetLength = voiceNotePacketLength(prefix);
+  if (packetLength < 19 || packet + packetLength > prefix.byteLength) throw invalidVoiceNote();
+  length = await fillVoiceNotePrefix(cursor, prefix, length, packet + packetLength);
+  if (
+    prefix.toString("ascii", packet, packet + 8) !== "OpusHead" ||
+    prefix[packet + 8] !== 1 ||
+    prefix[packet + 9] !== 1 ||
+    prefix[packet + 18] !== 0
+  )
+    throw invalidVoiceNote();
+  return Uint8Array.from(prefix.subarray(0, length));
+};
+
+const voiceNoteSource = (source: AsyncIterable<Uint8Array>): AsyncIterable<Uint8Array> => ({
+  async *[Symbol.asyncIterator]() {
+    const cursor: MediaCursor = { iterator: source[Symbol.asyncIterator](), offset: 0 };
+    try {
+      yield await voiceNotePrefix(cursor);
+      if (cursor.chunk && cursor.offset < cursor.chunk.byteLength) {
+        const remainder = cursor.chunk.subarray(cursor.offset);
+        cursor.chunk = undefined;
+        yield remainder;
+      }
+      for (;;) {
+        const next = await cursor.iterator.next();
+        if (next.done) return;
+        yield next.value;
+      }
+    } finally {
+      void Promise.resolve(cursor.iterator.return?.()).catch(() => {});
+    }
+  },
+});
 
 const normalizedRefs = (refs: readonly MessageRef[]): readonly MessageRef[] => {
   const unique = new Map<string, MessageRef>();
@@ -256,11 +361,28 @@ export function createClientOperationApis(config: {
     signal?: AbortSignal,
   ): Promise<WhatsAppOperation<Result>> => {
     throwIfAborted(signal);
-    const submitted = await config.operations.submit({
-      accountId: config.accountId,
-      ...identity,
-      input,
-    });
+    let submitted: WhatsAppOperation;
+    try {
+      submitted = await config.operations.submit({
+        accountId: config.accountId,
+        ...identity,
+        input,
+      });
+    } catch (error) {
+      let recovered: WhatsAppOperation | undefined;
+      try {
+        recovered = await config.operations.get(config.accountId, identity.id);
+      } catch {
+        throw error;
+      }
+      if (
+        !recovered ||
+        recovered.idempotencyKey !== identity.idempotencyKey ||
+        operationInputJson(recovered.input) !== operationInputJson(input)
+      )
+        throw error;
+      submitted = recovered;
+    }
     config.retain(submitted);
     return submitted as WhatsAppOperation<Result>;
   };
@@ -272,13 +394,12 @@ export function createClientOperationApis(config: {
     signal?: AbortSignal,
     mimetype?: string,
   ): Promise<{ readonly ref: string }> => {
-    const bytes = await bytesOf(input, signal);
-    throwIfAborted(signal);
-    const stored = await config.media.put({
+    const source = await sourceOf(input, signal);
+    const stored = await config.media.write({
       accountId: config.accountId,
       owner: { type: "operation", operationId: identity.id },
       kind,
-      bytes,
+      source,
       ...(mimetype !== undefined && { mimetype }),
     });
     return { ref: stored.ref };
@@ -339,7 +460,14 @@ export function createClientOperationApis(config: {
       },
       async audio(chatId, input, options) {
         const identity = identityFor(options);
-        const audio = await stage("audio", input, identity, options?.signal, options?.mimetype);
+        const source = await sourceOf(input, options?.signal);
+        const audio = await config.media.write({
+          accountId: config.accountId,
+          owner: { type: "operation", operationId: identity.id },
+          kind: "audio",
+          source: options?.ptt === true ? voiceNoteSource(source) : source,
+          ...(options?.mimetype !== undefined && { mimetype: options.mimetype }),
+        });
         return send(
           chatId,
           {

@@ -68,11 +68,13 @@ const captureMessage = async (
         return { ...message, media: { ...metadata, state: "failed", reason: "download_failed" } };
       }
       try {
-        const stored = await mediaStore.put({
+        const stored = await mediaStore.write({
           accountId,
           owner: { type: "message", message: refOf(message) },
           kind: message.kind,
-          bytes,
+          source: (async function* () {
+            yield bytes;
+          })(),
           ...(metadata.mimetype !== undefined && { mimetype: metadata.mimetype }),
         });
         return { ...message, media: { ...metadata, state: "stored", ...stored } };

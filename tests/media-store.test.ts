@@ -14,32 +14,45 @@ const unsafeMessage = {
   fromMe: false,
 } as const;
 
-const put = (store: MediaStore, bytes: Uint8Array, accountId = unsafeAccount) =>
-  store.put({
+const sourceOf = (bytes: Uint8Array): AsyncIterable<Uint8Array> => ({
+  async *[Symbol.asyncIterator]() {
+    for (let offset = 0; offset < bytes.byteLength; offset += 2)
+      yield bytes.subarray(offset, offset + 2);
+  },
+});
+
+const collect = async (source: AsyncIterable<Uint8Array> | null): Promise<Uint8Array | null> => {
+  if (!source) return null;
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of source) chunks.push(Uint8Array.from(chunk));
+  return Uint8Array.from(Buffer.concat(chunks));
+};
+
+const write = (store: MediaStore, bytes: Uint8Array, accountId = unsafeAccount) =>
+  store.write({
     accountId,
     owner: { type: "message", message: unsafeMessage },
     kind: "document",
-    bytes,
+    source: sourceOf(bytes),
     mimetype: "application/octet-stream",
   });
 
 async function expectOwnedAndIsolated(store: MediaStore): Promise<void> {
   const callerBytes = Uint8Array.from([1, 2, 3, 4]);
-  const writing = put(store, callerBytes);
-  callerBytes[0] = 99;
+  const writing = write(store, callerBytes);
   const stored = await writing;
 
-  const firstRead = await store.read({ accountId: unsafeAccount, ref: stored.ref });
+  const firstRead = await collect(await store.open({ accountId: unsafeAccount, ref: stored.ref }));
   assert.deepEqual(firstRead, Uint8Array.from([1, 2, 3, 4]));
   assert.ok(firstRead);
   firstRead[1] = 88;
   assert.deepEqual(
-    await store.read({ accountId: unsafeAccount, ref: stored.ref }),
+    await collect(await store.open({ accountId: unsafeAccount, ref: stored.ref })),
     Uint8Array.from([1, 2, 3, 4]),
   );
-  assert.equal(await store.read({ accountId: "another-account", ref: stored.ref }), null);
+  assert.equal(await store.open({ accountId: "another-account", ref: stored.ref }), null);
 
-  const repeated = await put(store, Uint8Array.from([1, 2, 3, 4]));
+  const repeated = await write(store, Uint8Array.from([1, 2, 3, 4]));
   assert.deepEqual(repeated, stored);
 }
 
@@ -52,11 +65,11 @@ test("file media survives a new store, keeps private opaque paths, and owns byte
   try {
     const first = fileMediaStore({ directory });
     await expectOwnedAndIsolated(first);
-    const stored = await put(first, Uint8Array.from([5, 6, 7]));
+    const stored = await write(first, Uint8Array.from([5, 6, 7]));
 
     const replacement = fileMediaStore({ directory });
     assert.deepEqual(
-      await replacement.read({ accountId: unsafeAccount, ref: stored.ref }),
+      await collect(await replacement.open({ accountId: unsafeAccount, ref: stored.ref })),
       Uint8Array.from([5, 6, 7]),
     );
     for (const unsafe of [unsafeAccount, unsafeMessage.chatId, unsafeMessage.id])
@@ -88,6 +101,7 @@ test("file media syncs created directories and the canonical publication before 
   fs.promises.open = (async (...args: Parameters<typeof originalOpen>) => {
     const handle = await originalOpen(...args);
     return {
+      write: (...writeArgs: Parameters<typeof handle.write>) => handle.write(...writeArgs),
       async sync() {
         synced.push(String(args[0]));
         await handle.sync();
@@ -98,7 +112,7 @@ test("file media syncs created directories and the canonical publication before 
   syncBuiltinESMExports();
 
   try {
-    await put(fileMediaStore({ directory }), Uint8Array.from([1, 2, 3]), "personal");
+    await write(fileMediaStore({ directory }), Uint8Array.from([1, 2, 3]), "personal");
     const namespace = path.join(directory, ".whatsappd-media");
     const entries = await readdir(namespace, { recursive: true });
     const object = entries.find((entry) => entry.endsWith(".bin"));
@@ -115,15 +129,78 @@ test("file media syncs created directories and the canonical publication before 
   }
 });
 
-test("concurrent file media puts converge on one complete canonical object", async () => {
+test("file media writes and opens incrementally", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-streaming-"));
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let firstWritten!: () => void;
+  const written = new Promise<void>((resolve) => {
+    firstWritten = resolve;
+  });
+  const first = Uint8Array.from({ length: 128 * 1024 }, () => 1);
+  const second = Uint8Array.from({ length: 128 * 1024 }, () => 2);
+  const store = fileMediaStore({ directory });
+  try {
+    const writing = store.write({
+      accountId: "personal",
+      owner: { type: "message", message: unsafeMessage },
+      kind: "document",
+      source: (async function* () {
+        yield first;
+        firstWritten();
+        await blocked;
+        yield second;
+      })(),
+    });
+    await written;
+
+    const namespace = path.join(directory, ".whatsappd-media");
+    const inProgress = await readdir(namespace, { recursive: true });
+    const temporary = inProgress.find((entry) => entry.endsWith(".tmp"));
+    assert.ok(temporary);
+    assert.equal((await stat(path.join(namespace, temporary))).size, first.byteLength);
+    assert.equal(
+      inProgress.some((entry) => entry.endsWith(".bin")),
+      false,
+    );
+
+    release();
+    const stored = await writing;
+    const opened = await store.open({ accountId: "personal", ref: stored.ref });
+    assert.ok(opened);
+    const iterator = opened[Symbol.asyncIterator]();
+    const firstRead = await iterator.next();
+    assert.equal(firstRead.done, false);
+    assert.ok(firstRead.value.byteLength < stored.byteLength);
+    const chunks = [Uint8Array.from(firstRead.value)];
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) break;
+      chunks.push(Uint8Array.from(next.value));
+    }
+    assert.deepEqual(
+      Uint8Array.from(Buffer.concat(chunks)),
+      Uint8Array.from(Buffer.concat([first, second])),
+    );
+  } finally {
+    release();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent file media writes converge on one complete canonical object", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-media-race-"));
   try {
     const bytes = Uint8Array.from({ length: 64 * 1024 }, (_, index) => index % 251);
     const stores = Array.from({ length: 8 }, () => fileMediaStore({ directory }));
-    const results = await Promise.all(stores.map((store) => put(store, bytes, "personal")));
+    const results = await Promise.all(stores.map((store) => write(store, bytes, "personal")));
     assert.equal(new Set(results.map(({ ref }) => ref)).size, 1);
     assert.deepEqual(
-      await fileMediaStore({ directory }).read({ accountId: "personal", ref: results[0]!.ref }),
+      await collect(
+        await fileMediaStore({ directory }).open({ accountId: "personal", ref: results[0]!.ref }),
+      ),
       bytes,
     );
 

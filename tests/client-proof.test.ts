@@ -187,11 +187,14 @@ test("inbound document bytes are read through only the Client-surfaced media ref
   } as unknown as WhatsAppClient;
   const reads: { accountId: string; ref: string }[] = [];
   const media = {
-    async read(input) {
+    async open(input) {
       reads.push(input);
-      return input.ref === ref ? Uint8Array.from(bytes) : null;
+      if (input.ref !== ref) return null;
+      return (async function* () {
+        yield Uint8Array.from(bytes);
+      })();
     },
-  } as Pick<MediaStore, "read">;
+  } as Pick<MediaStore, "open">;
 
   const observed = await observeInboundDocument({
     accountId: "android",

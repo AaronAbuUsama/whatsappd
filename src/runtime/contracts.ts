@@ -564,15 +564,18 @@ export type MediaOwner =
 
 /** Durable media bytes, keyed idempotently by account, owner, kind, and content (ADR-0015). */
 export interface MediaStore {
-  put(input: {
-    accountId: string;
-    owner: MediaOwner;
-    kind: "image" | "video" | "audio" | "document" | "sticker";
-    bytes: Uint8Array;
-    mimetype?: string;
+  write(input: {
+    readonly accountId: string;
+    readonly owner: MediaOwner;
+    readonly kind: "image" | "video" | "audio" | "document" | "sticker";
+    readonly source: AsyncIterable<Uint8Array>;
+    readonly mimetype?: string;
   }): Promise<{ ref: string; byteLength: number }>;
 
-  read(input: { accountId: string; ref: string }): Promise<Uint8Array | null>;
+  open(input: {
+    readonly accountId: string;
+    readonly ref: string;
+  }): Promise<AsyncIterable<Uint8Array> | null>;
 }
 
 /**

@@ -12,9 +12,22 @@ import { createWhatsAppClient } from "../src/runtime/client.ts";
 import { fileMediaStore } from "../src/runtime/file-media.ts";
 import type { MediaStore } from "../src/runtime/contracts.ts";
 import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
+import { collectMedia, readMedia } from "./media-store-helpers.ts";
 import { operationStoreConformance } from "./operation-store-conformance.ts";
 
 const CHAT = "operation-test@s.whatsapp.net";
+
+const oggOpusMono = (): Buffer => {
+  const page = Buffer.alloc(47);
+  page.write("OggS", 0, "ascii");
+  page[5] = 0x02;
+  page[26] = 1;
+  page[27] = 19;
+  page.write("OpusHead", 28, "ascii");
+  page[36] = 1;
+  page[37] = 1;
+  return page;
+};
 
 operationStoreConformance("memory operations", async () => ({
   store: memoryOperationStore(),
@@ -186,9 +199,12 @@ void test("libSQL and file media resume a staged send after backend replacement"
         (await replacementClient.operations.wait(operationId)).state.status,
         "succeeded",
       );
-      assert.deepEqual(replacementDriver.commands.sent[0]?.content, {
-        image: Buffer.from("durable-image"),
-      });
+      const sent = replacementDriver.commands.sent[0]?.content;
+      assert.ok(sent && "image" in sent && !Buffer.isBuffer(sent.image) && "stream" in sent.image);
+      assert.deepEqual(
+        await collectMedia(sent.image.stream),
+        Uint8Array.from(Buffer.from("durable-image")),
+      );
     } finally {
       await replacementClient.close();
       await replacementRuntime.stop();
@@ -202,8 +218,8 @@ void test("libSQL and file media resume a staged send after backend replacement"
 void test("attachment sends require only the exported media byte contract", async () => {
   const stored = memoryMediaStore();
   const media = {
-    put: (input: Parameters<typeof stored.put>[0]) => stored.put(input),
-    read: (input: Parameters<typeof stored.read>[0]) => stored.read(input),
+    write: (input: Parameters<typeof stored.write>[0]) => stored.write(input),
+    open: (input: Parameters<typeof stored.open>[0]) => stored.open(input),
   } satisfies MediaStore;
   const backend = { ...memoryBackend(), media };
   const driver = createTestWhatsAppSession();
@@ -220,7 +236,12 @@ void test("attachment sends require only the exported media byte contract", asyn
     });
     await driver.emit({ type: "connection", status: { phase: "online" } });
     assert.equal((await client.operations.wait(operation.id)).state.status, "succeeded");
-    assert.deepEqual(driver.commands.sent[0]?.content, { image: Buffer.from("portable-adapter") });
+    const sent = driver.commands.sent[0]?.content;
+    assert.ok(sent && "image" in sent && !Buffer.isBuffer(sent.image) && "stream" in sent.image);
+    assert.deepEqual(
+      await collectMedia(sent.image.stream),
+      Uint8Array.from(Buffer.from("portable-adapter")),
+    );
   } finally {
     await client.close();
     await runtime.stop();
@@ -251,7 +272,7 @@ void test("every Session side effect has an awaited Client command and typing st
     await client.operations.wait(generatedB.id);
     await finish(client.messages.send.image(CHAT, Buffer.from("image"), { caption: "image" }));
     await finish(client.messages.send.video(CHAT, Buffer.from("video"), { gifPlayback: true }));
-    await finish(client.messages.send.audio(CHAT, Buffer.from("audio"), { ptt: true }));
+    await finish(client.messages.send.audio(CHAT, oggOpusMono(), { ptt: true }));
     await finish(
       client.messages.send.document(CHAT, Buffer.from("document"), {
         fileName: "proof.txt",
@@ -279,6 +300,32 @@ void test("every Session side effect has an awaited Client command and typing st
     assert.equal(driver.commands.sent.length, 13);
     assert.deepEqual(driver.commands.read, [{ refs: [ref] }]);
     assert.equal(driver.commands.historyRequests[0]?.count, 10);
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("voice notes reject non-Ogg or non-mono audio before operation submission", async () => {
+  const backend = memoryBackend();
+  const runtime = createWhatsAppRuntime({
+    accountId: "voice-note-validation",
+    backend,
+    openSession: () => createTestWhatsAppSession().session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    await assert.rejects(
+      client.messages.send.audio(CHAT, Buffer.from("arbitrary audio"), { ptt: true }),
+      /Ogg Opus mono|ended before its Opus header/,
+    );
+    assert.deepEqual(await backend.operations.list("voice-note-validation"), []);
+
+    const stereo = oggOpusMono();
+    stereo[37] = 2;
+    await assert.rejects(client.messages.send.audio(CHAT, stereo, { ptt: true }), /Ogg Opus mono/);
+    assert.deepEqual(await backend.operations.list("voice-note-validation"), []);
   } finally {
     await client.close();
     await runtime.stop();
@@ -375,13 +422,13 @@ void test("an abort after media commits still publishes its durable operation", 
     ...memoryBackend(),
     media: {
       ...media,
-      async put(input: Parameters<typeof media.put>[0]) {
-        const stored = await media.put(input);
+      async write(input: Parameters<typeof media.write>[0]) {
+        const stored = await media.write(input);
         entered();
         await blocked;
         return stored;
       },
-      read: (input: Parameters<typeof media.read>[0]) => media.read(input),
+      open: (input: Parameters<typeof media.open>[0]) => media.open(input),
     },
   };
   const runtime = createWhatsAppRuntime({
@@ -448,8 +495,8 @@ void test("a failed media operation submission preserves published immutable byt
     ...memoryBackend(),
     media: {
       ...media,
-      async put(input: Parameters<typeof media.put>[0]) {
-        const stored = await media.put(input);
+      async write(input: Parameters<typeof media.write>[0]) {
+        const stored = await media.write(input);
         stagedRef = stored.ref;
         return stored;
       },
@@ -474,10 +521,55 @@ void test("a failed media operation submission preserves published immutable byt
       /operation database unavailable/,
     );
     assert.deepEqual(
-      await media.read({ accountId: "failed-media-submit", ref: stagedRef }),
+      await readMedia(media, { accountId: "failed-media-submit", ref: stagedRef }),
       Uint8Array.from(Buffer.from("preserve me")),
     );
     assert.deepEqual(await operations.list("failed-media-submit"), []);
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("a lost submit response recovers the committed operation and its media", async () => {
+  const operations = memoryOperationStore();
+  const media = memoryMediaStore();
+  const backend = {
+    ...memoryBackend(),
+    media,
+    operations: {
+      ...operations,
+      async submit(request: Parameters<typeof operations.submit>[0]) {
+        await operations.submit(request);
+        throw new Error("operation commit response lost");
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "lost-submit-response",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  try {
+    const operation = await client.messages.send.image(CHAT, Buffer.from("committed media"), {
+      idempotencyKey: "lost-submit-response",
+    });
+    assert.equal(operation.state.status, "queued");
+    assert.ok(operation.input.type === "send" && "image" in operation.input.content);
+    assert.deepEqual(
+      await readMedia(media, {
+        accountId: "lost-submit-response",
+        ref: operation.input.content.image.ref,
+      }),
+      Uint8Array.from(Buffer.from("committed media")),
+    );
+
+    await driver.emit({ type: "connection", status: { phase: "online" } });
+    assert.equal((await client.operations.wait(operation.id)).state.status, "succeeded");
+    assert.equal(driver.commands.sent.length, 1);
   } finally {
     await client.close();
     await runtime.stop();
@@ -723,14 +815,14 @@ void test("disconnecting during media preparation requeues before the send bound
     ...memoryBackend(),
     media: {
       ...stored,
-      put: (input: Parameters<typeof stored.put>[0]) => stored.put(input),
-      async read(input: Parameters<typeof stored.read>[0]) {
+      write: (input: Parameters<typeof stored.write>[0]) => stored.write(input),
+      async open(input: Parameters<typeof stored.open>[0]) {
         reads += 1;
         if (reads === 1) {
           entered();
           await blocked;
         }
-        return stored.read(input);
+        return stored.open(input);
       },
     },
   };

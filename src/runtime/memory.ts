@@ -10,7 +10,7 @@
  * @packageDocumentation
  */
 import { memoryStore } from "../stores/memory.ts";
-import { immutableMediaRef } from "./media.ts";
+import { consumeImmutableMedia } from "./media.ts";
 import {
   OperationIdempotencyConflictError,
   announceOperationChanges,
@@ -601,18 +601,32 @@ export function memoryOperationStore(): WhatsAppOperationStore {
 export function memoryMediaStore(): MediaStore {
   const blobs = new Map<string, { readonly accountId: string; readonly bytes: Uint8Array }>();
   return {
-    async put({ accountId, owner, kind, bytes }) {
-      const ref = immutableMediaRef({ accountId, owner, kind, bytes });
+    async write({ accountId, owner, kind, source }) {
+      const chunks: Uint8Array[] = [];
+      const stored = await consumeImmutableMedia({
+        accountId,
+        owner,
+        kind,
+        source,
+        consume: (chunk) => {
+          chunks.push(chunk);
+        },
+      });
+      const bytes = Uint8Array.from(Buffer.concat(chunks));
+      const { ref } = stored;
       const blob = blobs.get(ref) ?? {
         accountId,
-        bytes: Uint8Array.from(bytes),
+        bytes,
       };
       blobs.set(ref, blob);
-      return { ref, byteLength: bytes.byteLength };
+      return stored;
     },
-    async read({ accountId, ref }) {
+    async open({ accountId, ref }) {
       const blob = blobs.get(ref);
-      return blob?.accountId === accountId ? Uint8Array.from(blob.bytes) : null;
+      if (blob?.accountId !== accountId) return null;
+      return (async function* () {
+        yield Uint8Array.from(blob.bytes);
+      })();
     },
   };
 }

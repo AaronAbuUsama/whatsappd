@@ -26,37 +26,37 @@ async function outbound(
   if ("edit" in content) return structuredClone(content);
   if ("delete" in content) return structuredClone(content);
 
-  const read = async (ref: string, kind: string): Promise<Buffer> => {
-    const bytes = await media.read({ accountId, ref });
-    if (!bytes) throw new Error(`staged ${kind} media is missing`);
-    return Buffer.from(bytes);
+  const open = async (ref: string, kind: string) => {
+    const source = await media.open({ accountId, ref });
+    if (!source) throw new Error(`staged ${kind} media is missing`);
+    return { stream: source };
   };
   if ("image" in content)
     return {
-      image: await read(content.image.ref, "image"),
+      image: await open(content.image.ref, "image"),
       ...(content.caption !== undefined && { caption: content.caption }),
     };
   if ("video" in content)
     return {
-      video: await read(content.video.ref, "video"),
+      video: await open(content.video.ref, "video"),
       ...(content.caption !== undefined && { caption: content.caption }),
       ...(content.gifPlayback !== undefined && { gifPlayback: content.gifPlayback }),
     };
   if ("audio" in content)
     return {
-      audio: await read(content.audio.ref, "audio"),
+      audio: await open(content.audio.ref, "audio"),
       ...(content.ptt !== undefined && { ptt: content.ptt }),
       ...(content.seconds !== undefined && { seconds: content.seconds }),
       ...(content.mimetype !== undefined && { mimetype: content.mimetype }),
     };
   if ("document" in content)
     return {
-      document: await read(content.document.ref, "document"),
+      document: await open(content.document.ref, "document"),
       fileName: content.fileName,
       mimetype: content.mimetype,
       ...(content.caption !== undefined && { caption: content.caption }),
     };
-  return { sticker: await read(content.sticker.ref, "sticker") };
+  return { sticker: await open(content.sticker.ref, "sticker") };
 }
 
 export function createOperationExecutor(config: {

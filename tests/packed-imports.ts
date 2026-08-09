@@ -313,19 +313,20 @@ try {
         });
         await runtime.start();
         const media = store.media;
-        const stored = await media.put({
+        const stored = await media.write({
           accountId: ACCOUNT,
           owner: {
             type: "message",
             message: { id: "packed-media", chatId: CHAT, fromMe: false },
           },
           kind: "document",
-          bytes: Uint8Array.from([1, 2, 3]),
+          source: (async function* () { yield Uint8Array.from([1, 2, 3]); })(),
         });
-        assert.deepEqual(
-          await media.read({ accountId: ACCOUNT, ref: stored.ref }),
-          Uint8Array.from([1, 2, 3]),
-        );
+        const opened = await media.open({ accountId: ACCOUNT, ref: stored.ref });
+        assert.ok(opened);
+        const chunks = [];
+        for await (const chunk of opened) chunks.push(...chunk);
+        assert.deepEqual(Uint8Array.from(chunks), Uint8Array.from([1, 2, 3]));
         await driver.emit({ type: "connection", status: { phase: "online" } });
         await driver.emit({
           type: "conversation_sync",

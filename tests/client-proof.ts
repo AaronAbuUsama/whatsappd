@@ -278,6 +278,21 @@ function sha256(bytes: string | Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function digestMedia(
+  media: Pick<MediaStore, "open">,
+  input: Parameters<MediaStore["open"]>[0],
+): Promise<{ readonly sha256: string; readonly byteLength: number } | undefined> {
+  const source = await media.open(input);
+  if (!source) return undefined;
+  const hash = createHash("sha256");
+  let byteLength = 0;
+  for await (const chunk of source) {
+    hash.update(chunk);
+    byteLength += chunk.byteLength;
+  }
+  return { sha256: hash.digest("hex"), byteLength };
+}
+
 function proofGroupId(): string {
   const parsed = JSON.parse(readFileSync(DEFAULT_ALLOWLIST_PATH, "utf8")) as unknown;
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -428,17 +443,17 @@ export async function observeInboundText(input: {
 async function documentObservation(
   accountId: string,
   client: WhatsAppClient,
-  media: Pick<MediaStore, "read">,
+  media: Pick<MediaStore, "open">,
   chatId: string,
   sent: SentPayload,
 ): Promise<InboundDocumentObservation | undefined> {
   for (const message of client.messages.get(chatId).messages) {
     if (message.kind !== "document" || message.media.state !== "stored") continue;
-    const bytes = await media.read({ accountId, ref: message.media.ref });
-    if (!bytes) continue;
-    const storedSha256 = sha256(bytes);
+    const stored = await digestMedia(media, { accountId, ref: message.media.ref });
+    if (!stored) continue;
+    const storedSha256 = stored.sha256;
     if (storedSha256 !== sent.sha256) continue;
-    if (message.media.byteLength !== sent.byteLength || bytes.byteLength !== sent.byteLength) {
+    if (message.media.byteLength !== sent.byteLength || stored.byteLength !== sent.byteLength) {
       throw new Error("the stored document length differs from the peer's sent length");
     }
     return {
@@ -457,7 +472,7 @@ async function documentObservation(
 export async function observeInboundDocument(input: {
   readonly accountId: string;
   readonly client: WhatsAppClient;
-  readonly media: Pick<MediaStore, "read">;
+  readonly media: Pick<MediaStore, "open">;
   readonly chatId: string;
   readonly send: () => Promise<SentPayload>;
   readonly timeoutMs?: number;
@@ -601,7 +616,7 @@ function contactAddresses(contacts: readonly ContactRecord[]): readonly string[]
 
 async function durableDigest(input: {
   readonly client: WhatsAppClient;
-  readonly media: Pick<MediaStore, "read">;
+  readonly media: Pick<MediaStore, "open">;
   readonly accountId: string;
   readonly chatId: string;
   readonly salt: string;
@@ -622,9 +637,12 @@ async function durableDigest(input: {
       continue;
     }
     if (message.media.state !== "stored") continue;
-    const bytes = await input.media.read({ accountId: input.accountId, ref: message.media.ref });
-    if (!bytes) throw new Error("a Client-surfaced stored media ref could not be read");
-    mediaEntries.push({ messageId: message.messageId, sha256: sha256(bytes) });
+    const stored = await digestMedia(input.media, {
+      accountId: input.accountId,
+      ref: message.media.ref,
+    });
+    if (!stored) throw new Error("a Client-surfaced stored media ref could not be read");
+    mediaEntries.push({ messageId: message.messageId, sha256: stored.sha256 });
   }
   return {
     chats: stableDigest(input.salt, chats),
