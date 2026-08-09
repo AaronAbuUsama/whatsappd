@@ -52,3 +52,10 @@ void test("release checkout retains history required by committed receipt valida
     `configured release checkout cannot resolve ${historicalReceiptHead}: ${String(configured.stderr)}`,
   );
 });
+
+void test("release publishes prereleases under their own dist-tag", () => {
+  const workflow = readFileSync(workflowPath, "utf8");
+  assert.match(workflow, /DIST_TAG="\$\{VERSION#\*-\}"/u);
+  assert.match(workflow, /DIST_TAG="\$\{DIST_TAG%%\.\*\}"/u);
+  assert.match(workflow, /npm publish [^\n]+ --tag "\$DIST_TAG"/u);
+});
