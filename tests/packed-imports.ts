@@ -358,17 +358,48 @@ try {
           const finalPage = await page(client, 30);
           assert.equal(finalPage.older, "exhausted");
           assert.equal(driver.commands.historyRequests.length, 0);
+          await driver.emit({ type: "connection", status: { phase: "disconnected" } });
           const operation = await client.messages.send.text(CHAT, "packed outbound", {
             idempotencyKey: "packed-outbound",
           });
           assert.equal(operation.idempotencyKey, "packed-outbound");
-          assert.equal((await client.operations.wait(operation.id)).state.status, "succeeded");
+          assert.equal(operation.state.status, "queued");
           const repeated = await client.messages.send.text(CHAT, "packed outbound", {
             idempotencyKey: "packed-outbound",
           });
           assert.equal(repeated.id, operation.id);
+          assert.equal(driver.commands.sent.length, 0);
+          assert.equal(client.messages.get(CHAT).outgoing.length, 1);
+          writeExecutions = driver.commands.sent.length;
+        } finally {
+          await client.close();
+          await runtime.stop();
+          await store.close();
+        }
+      }
+      if (process.argv[2] === "execute") {
+        const store = backend();
+        const driver = createTestWhatsAppSession();
+        const runtime = root.createWhatsAppRuntime({
+          accountId: ACCOUNT,
+          backend: store,
+          openSession: () => driver.session,
+        });
+        await runtime.start();
+        const client = await root.createWhatsAppClient(runtime);
+        try {
+          const queued = (await store.operations.list(ACCOUNT)).find(
+            (candidate) => candidate.idempotencyKey === "packed-outbound",
+          );
+          assert.equal(queued?.state.status, "queued");
+          await driver.emit({ type: "connection", status: { phase: "online" } });
+          assert.equal((await client.operations.wait(queued.id)).state.status, "succeeded");
+          const repeated = await client.messages.send.text(CHAT, "packed outbound", {
+            idempotencyKey: "packed-outbound",
+          });
+          assert.equal(repeated.id, queued.id);
           assert.equal(driver.commands.sent.length, 1);
-          await client.operations.acknowledge(operation.id);
+          await client.operations.acknowledge(queued.id);
           assert.equal(client.messages.get(CHAT).outgoing.length, 1);
           writeExecutions = driver.commands.sent.length;
         } finally {
@@ -378,21 +409,25 @@ try {
         }
       }
 
-      const result = await cold();
-      console.log(JSON.stringify({ pid: process.pid, version, writeExecutions, ...result }));
+      if (process.argv[2] === "write") {
+        console.log(JSON.stringify({ pid: process.pid, version, writeExecutions }));
+      } else {
+        const result = await cold();
+        console.log(JSON.stringify({ pid: process.pid, version, writeExecutions, ...result }));
+      }
     `,
   );
   await mkdir(path.join(consumer, "data"));
   const childEnv = { PATH: process.env.PATH ?? "" };
-  const first = JSON.parse(
+  const submission = JSON.parse(
     (await execFile(process.execPath, ["verify.mjs", "write"], { cwd: consumer, env: childEnv }))
       .stdout,
   ) as {
     readonly pid: number;
     readonly version: string;
-    readonly hash: string;
-    readonly counts: Record<string, number>;
-    readonly noLive: Record<string, boolean>;
+    readonly hash?: string;
+    readonly counts?: Record<string, number>;
+    readonly noLive?: Record<string, boolean>;
     readonly writeExecutions?: number;
     readonly operation: {
       readonly idempotencyKey: string;
@@ -401,11 +436,18 @@ try {
       readonly revision: number;
     };
   };
+  const first = JSON.parse(
+    (await execFile(process.execPath, ["verify.mjs", "execute"], { cwd: consumer, env: childEnv }))
+      .stdout,
+  ) as Required<typeof submission>;
   const second = JSON.parse(
     (await execFile(process.execPath, ["verify.mjs", "read"], { cwd: consumer, env: childEnv }))
       .stdout,
   ) as typeof first;
+  assert.notEqual(submission.pid, first.pid, "packed execution must replace submission process");
   assert.notEqual(first.pid, second.pid, "packed replacement must run in a new process");
+  assert.equal(submission.version, packageJson.version);
+  assert.equal(submission.writeExecutions, 0);
   assert.equal(first.version, packageJson.version);
   assert.equal(second.version, packageJson.version);
   assert.equal(first.hash, second.hash, "packed replacement reconstructed different durable state");
@@ -424,13 +466,15 @@ try {
     packedVersion: packageJson.version,
     firstProcessId: first.pid,
     secondProcessId: second.pid,
+    submissionProcessId: submission.pid,
     durableStateHash: first.hash,
     counts: first.counts,
     noLiveStateReconstructed: second.noLive,
     operationProof: {
       ...second.operation,
       writeExecutions: first.writeExecutions,
-      reconstructedAcrossProcesses: true,
+      resumedAfterProcessReplacement: true,
+      reconstructedAfterExecution: true,
     },
   };
   const receiptAt = process.argv.indexOf("--receipt");

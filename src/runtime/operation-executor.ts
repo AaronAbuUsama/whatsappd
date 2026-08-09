@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WhatsAppSession } from "../session.ts";
 import type { WhatsAppBackend } from "./contracts.ts";
 import {
+  assertWhatsAppOperationInput,
   serializedOperationError,
   type DurableOutbound,
   type WhatsAppOperation,
@@ -87,6 +88,7 @@ export function createOperationExecutor(config: {
     let invoke: () => Promise<WhatsAppOperationResult>;
     try {
       const input = operation.input;
+      assertWhatsAppOperationInput(input);
       switch (input.type) {
         case "send": {
           const send = session.send?.bind(session);
@@ -133,6 +135,15 @@ export function createOperationExecutor(config: {
       config.ttlMs,
     );
     if (!started) return;
+    if (!online || config.stopped() || config.session() !== session) {
+      await config.backend.operations.unknown(
+        config.accountId,
+        operation.id,
+        attemptId,
+        "runtime ownership changed after execution began but before Session invocation",
+      );
+      return;
+    }
     try {
       await config.backend.operations.succeed(
         config.accountId,
@@ -159,8 +170,9 @@ export function createOperationExecutor(config: {
         config.ttlMs,
       );
       if (!operation) {
-        if (!config.stopped() && online) {
-          retry ??= setTimeout(wake, Math.max(1, config.ttlMs));
+        const delay = await config.backend.operations.recoveryDelay(config.accountId);
+        if (delay !== undefined && !config.stopped() && online) {
+          retry ??= setTimeout(wake, Math.max(1, delay));
           retry.unref();
         }
         return;

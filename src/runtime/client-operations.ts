@@ -261,9 +261,8 @@ export function createClientOperationApis(config: {
       ...identity,
       input,
     });
-    const current = (await config.operations.get(config.accountId, submitted.id)) ?? submitted;
-    config.retain(current);
-    return current as WhatsAppOperation<Result>;
+    config.retain(submitted);
+    return submitted as WhatsAppOperation<Result>;
   };
 
   const stage = async (
@@ -282,7 +281,8 @@ export function createClientOperationApis(config: {
       bytes,
       ...(mimetype !== undefined && { mimetype }),
     });
-    throwIfAborted(signal);
+    // MediaStore has no delete seam: once put commits, the matching idempotent
+    // operation must be published even if the caller aborts in this window.
     return { ref: stored.ref };
   };
 
@@ -291,6 +291,7 @@ export function createClientOperationApis(config: {
     content: DurableOutbound,
     options: ClientSendOptions | undefined,
     identity = identityFor(options),
+    mediaCommitted = false,
   ): Promise<WhatsAppOperation<MessageRef>> => {
     const outboundOptions = sendOptions(options);
     return submit<MessageRef>(
@@ -302,7 +303,7 @@ export function createClientOperationApis(config: {
         ...(outboundOptions && { options: outboundOptions }),
       },
       identity,
-      options?.signal,
+      mediaCommitted ? undefined : options?.signal,
     );
   };
 
@@ -317,6 +318,7 @@ export function createClientOperationApis(config: {
           { image, ...(options?.caption !== undefined && { caption: options.caption }) },
           options,
           identity,
+          true,
         );
       },
       async video(chatId, input, options) {
@@ -331,6 +333,7 @@ export function createClientOperationApis(config: {
           },
           options,
           identity,
+          true,
         );
       },
       async audio(chatId, input, options) {
@@ -346,6 +349,7 @@ export function createClientOperationApis(config: {
           },
           options,
           identity,
+          true,
         );
       },
       async document(chatId, input, options) {
@@ -361,12 +365,13 @@ export function createClientOperationApis(config: {
           },
           options,
           identity,
+          true,
         );
       },
       async sticker(chatId, input, options) {
         const identity = identityFor(options);
         const sticker = await stage("sticker", input, identity, options?.signal);
-        return send(chatId, { sticker }, options, identity);
+        return send(chatId, { sticker }, options, identity, true);
       },
       location: (chatId, location, options) =>
         send(chatId, { location: structuredClone(location) }, options),

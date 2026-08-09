@@ -8,3 +8,18 @@ export const surface = (error: unknown): void => {
     process.emitWarning(new Error("an observer failed with a value that cannot be described"));
   }
 };
+
+/** Deliver once to every registration present when publication begins. */
+export function fanout<Listener>(
+  listeners: ReadonlySet<Listener>,
+  call: (listener: Listener) => void,
+): void {
+  for (const listener of Array.from(listeners)) {
+    if (!listeners.has(listener)) continue;
+    try {
+      call(listener);
+    } catch (error) {
+      surface(error);
+    }
+  }
+}

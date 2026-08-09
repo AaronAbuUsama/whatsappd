@@ -332,6 +332,84 @@ void test("aborting a stalled media stream closes staging without a durable row"
   }
 });
 
+void test("an abort after media commits still publishes its durable operation", async () => {
+  const media = memoryMediaStore();
+  let entered!: () => void;
+  let release!: () => void;
+  const committed = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const backend = {
+    ...memoryBackend(),
+    media: {
+      async put(input: Parameters<typeof media.put>[0]) {
+        const stored = await media.put(input);
+        entered();
+        await blocked;
+        return stored;
+      },
+      read: (input: Parameters<typeof media.read>[0]) => media.read(input),
+    },
+  };
+  const runtime = createWhatsAppRuntime({
+    accountId: "abort-after-media",
+    backend,
+    openSession: () => createTestWhatsAppSession().session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const controller = new AbortController();
+  try {
+    const pending = client.messages.send.image(CHAT, Buffer.from("committed"), {
+      signal: controller.signal,
+    });
+    await committed;
+    controller.abort();
+    release();
+    const operation = await pending;
+    assert.equal(operation.state.status, "queued");
+    assert.equal((await backend.operations.list("abort-after-media")).length, 1);
+  } finally {
+    release();
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("committed receipts drive Client wait without a second store read", async () => {
+  const operations = memoryOperationStore();
+  const backend = {
+    ...memoryBackend(),
+    operations: {
+      ...operations,
+      get: async () => {
+        throw new Error("receipt refresh unavailable");
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "receipt-delivery",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  try {
+    const submitted = await client.messages.send.text(CHAT, "one receipt");
+    assert.equal(typeof submitted.idempotencyKey, "string");
+    assert.equal((await client.operations.wait(submitted.id)).state.status, "succeeded");
+    assert.equal(driver.commands.sent.length, 1);
+  } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
 void test("failures are classified on the correct side of the WhatsApp boundary", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
@@ -400,6 +478,86 @@ void test("a replacement retries a claim left behind by a crashed worker", async
     assert.equal(completed.state.status, "succeeded");
     assert.equal(driver.commands.sent.length, 1);
   } finally {
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("an empty executor does not poll when no recovery deadline exists", async () => {
+  const operations = memoryOperationStore();
+  let claims = 0;
+  const backend = {
+    ...memoryBackend(),
+    operations: {
+      ...operations,
+      claim(...input: Parameters<typeof operations.claim>) {
+        claims += 1;
+        return operations.claim(...input);
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "no-operation-polling",
+    backend,
+    operationTtlMs: 2,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(claims, 1);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+void test("stopping after durable start never invokes the stale Session", async () => {
+  const operations = memoryOperationStore();
+  let entered!: () => void;
+  let release!: () => void;
+  const starting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const backend = {
+    ...memoryBackend(),
+    operations: {
+      ...operations,
+      async start(...input: Parameters<typeof operations.start>) {
+        const started = await operations.start(...input);
+        entered();
+        await blocked;
+        return started;
+      },
+    },
+  };
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "post-start-stop",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  await driver.emit({ type: "connection", status: { phase: "online" } });
+  const operation = await client.messages.send.text(CHAT, "do not send stale");
+  await starting;
+  const stopping = runtime.stop();
+  await tick();
+  release();
+  try {
+    await stopping;
+    assert.equal(driver.commands.sent.length, 0);
+    assert.equal(
+      (await operations.get("post-start-stop", operation.id))?.state.status,
+      "outcome_unknown",
+    );
+  } finally {
+    release();
     await client.close();
     await runtime.stop();
   }

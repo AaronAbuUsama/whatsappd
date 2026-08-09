@@ -16,7 +16,7 @@ import { isOnline, isTerminal, type Status, type WaIdentity } from "../model/sta
 import { refOf } from "../model/outbound.ts";
 import type { Update } from "../model/update.ts";
 import type { CredentialStore } from "../ports.ts";
-import { surface } from "./surface.ts";
+import { fanout, surface } from "./surface.ts";
 import type { Awaitable, Unsubscribe, WhatsAppSessionHandlers } from "../subscription.ts";
 import { firstRejection, settle } from "../outcome.ts";
 import {
@@ -276,7 +276,7 @@ interface Registration<Frame> {
  * never fatal. `--no-warnings` silences it, as it silences every warning; that
  * is the operator asking not to be told.
  */
-export { surface };
+export { fanout, surface };
 
 /**
  * Call every current member of one listener set, once, in isolation.
@@ -299,21 +299,6 @@ export { surface };
  *   stays subscribed: one dropped for a single bad value never receives
  *   `closed` and simply goes quiet for ever.
  */
-export function fanout<Listener>(
-  listeners: ReadonlySet<Listener>,
-  call: (listener: Listener) => void,
-): void {
-  const receiving = [...listeners];
-  for (const listener of receiving) {
-    if (!listeners.has(listener)) continue;
-    try {
-      call(listener);
-    } catch (error) {
-      surface(error);
-    }
-  }
-}
-
 /** Deliver one frame to a copy of one channel's listeners. */
 function deliver<Frame extends { readonly type: string }>(
   listeners: ReadonlySet<Registration<Frame>>,

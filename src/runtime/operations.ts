@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { MessageRef, SendOptions } from "../model/outbound.ts";
 import type { Unsubscribe } from "../subscription.ts";
-import { surface } from "./surface.ts";
+import { fanout } from "./surface.ts";
 
 export type OperationMediaKind = "image" | "video" | "audio" | "document" | "sticker";
 
@@ -112,6 +112,8 @@ export interface WhatsAppOperationStore {
     attemptId: string,
     ttlMs: number,
   ): Promise<WhatsAppOperation | undefined>;
+  /** Delay until the next claimed/executing row needs recovery, if any. */
+  recoveryDelay(accountId: string): Promise<number | undefined>;
   start(
     accountId: string,
     operationId: string,
@@ -142,37 +144,52 @@ export interface WhatsAppOperationStore {
     reason: string,
   ): Promise<WhatsAppOperation | undefined>;
   acknowledge(accountId: string, operationId: string): Promise<WhatsAppOperation | undefined>;
-  subscribe(accountId: string, listener: (operationId: string) => void): Unsubscribe;
+  subscribe(accountId: string, listener: (operation: WhatsAppOperation) => void): Unsubscribe;
+}
+
+interface OperationRegistration {
+  readonly notify: (operation: WhatsAppOperation) => void;
 }
 
 /** Shared local wake registration for operation-store implementations. */
 export function operationSubscription(
-  listeners: Map<string, Set<(operationId: string) => void>>,
+  listeners: Map<string, Set<OperationRegistration>>,
   accountId: string,
-  listener: (operationId: string) => void,
+  listener: (operation: WhatsAppOperation) => void,
 ): Unsubscribe {
   const held = listeners.get(accountId) ?? new Set();
-  held.add(listener);
+  const registration = { notify: listener };
+  held.add(registration);
   listeners.set(accountId, held);
   return () => {
-    held.delete(listener);
+    held.delete(registration);
     if (held.size === 0) listeners.delete(accountId);
   };
 }
 
 export function announceOperationChanges(
-  listeners: ReadonlyMap<string, ReadonlySet<(operationId: string) => void>>,
+  listeners: ReadonlyMap<string, ReadonlySet<OperationRegistration>>,
   accountId: string,
-  operationIds: readonly string[],
+  operations: readonly WhatsAppOperation[],
 ): void {
-  for (const operationId of operationIds)
-    for (const listener of listeners.get(accountId) ?? []) {
-      try {
-        listener(operationId);
-      } catch (error) {
-        surface(error);
-      }
-    }
+  const held = listeners.get(accountId);
+  if (!held) return;
+  for (const operation of operations)
+    fanout(held, (registration) => registration.notify(structuredClone(operation)));
+}
+
+/** Reject an unknown durable envelope before it can be persisted or executed. */
+export function assertWhatsAppOperationInput(
+  input: unknown,
+): asserts input is WhatsAppOperationInput {
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    throw new TypeError("invalid WhatsApp operation input");
+  const candidate = input as { readonly version?: unknown; readonly type?: unknown };
+  if (
+    candidate.version !== 1 ||
+    !["send", "mark_read", "phone_history"].includes(String(candidate.type))
+  )
+    throw new TypeError("unknown WhatsApp operation input version or type");
 }
 
 export class OperationIdempotencyConflictError extends Error {

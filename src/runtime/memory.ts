@@ -13,6 +13,7 @@ import { memoryStore } from "../stores/memory.ts";
 import { immutableMediaRef } from "./media.ts";
 import {
   OperationIdempotencyConflictError,
+  assertWhatsAppOperationInput,
   announceOperationChanges,
   operationSubscription,
   operationInputJson,
@@ -347,7 +348,10 @@ export function memoryOperationStore(): WhatsAppOperationStore {
       readonly byKey: Map<string, string>;
     }
   >();
-  const listeners = new Map<string, Set<(operationId: string) => void>>();
+  const listeners = new Map<
+    string,
+    Set<{ readonly notify: (operation: WhatsAppOperation) => void }>
+  >();
   let writes: Promise<void> = Promise.resolve();
 
   const account = (accountId: string) => {
@@ -371,7 +375,10 @@ export function memoryOperationStore(): WhatsAppOperationStore {
   };
   const write = async <T>(
     accountId: string,
-    work: (held: ReturnType<typeof account>) => { readonly result: T; readonly changed: string[] },
+    work: (held: ReturnType<typeof account>) => {
+      readonly result: T;
+      readonly changed: WhatsAppOperation[];
+    },
   ): Promise<T> => {
     const committed = await serialize(() => work(account(accountId)));
     announceOperationChanges(listeners, accountId, committed.changed);
@@ -404,11 +411,13 @@ export function memoryOperationStore(): WhatsAppOperationStore {
       )
         return { result: undefined, changed: [] };
       const at = Date.now();
-      return { result: replace(held, current, state(at), at), changed: [operationId] };
+      const completed = replace(held, current, state(at), at);
+      return { result: completed, changed: [completed] };
     });
 
   return {
     submit(request) {
+      assertWhatsAppOperationInput(request.input);
       return write(request.accountId, (held) => {
         const existingId = held.byKey.get(request.idempotencyKey);
         if (existingId) {
@@ -429,7 +438,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
         };
         held.byId.set(operation.id, operation);
         held.byKey.set(operation.idempotencyKey, operation.id);
-        return { result: operation, changed: [operation.id] };
+        return { result: operation, changed: [operation] };
       });
     },
 
@@ -451,23 +460,23 @@ export function memoryOperationStore(): WhatsAppOperationStore {
     claim(accountId, attemptId, ttlMs) {
       return write(accountId, (held) => {
         const now = Date.now();
-        const changed: string[] = [];
+        const changed: WhatsAppOperation[] = [];
         for (const operation of held.byId.values()) {
           if (operation.state.status === "claimed" && operation.state.expiresAt <= now) {
-            replace(held, operation, { status: "queued" }, now);
-            changed.push(operation.id);
+            changed.push(replace(held, operation, { status: "queued" }, now));
           } else if (operation.state.status === "executing" && operation.state.expiresAt <= now) {
-            replace(
-              held,
-              operation,
-              {
-                status: "outcome_unknown",
-                reason: "execution attempt expired after the WhatsApp boundary",
-                completedAt: now,
-              },
-              now,
+            changed.push(
+              replace(
+                held,
+                operation,
+                {
+                  status: "outcome_unknown",
+                  reason: "execution attempt expired after the WhatsApp boundary",
+                  completedAt: now,
+                },
+                now,
+              ),
             );
-            changed.push(operation.id);
           }
         }
         const queued = [...held.byId.values()]
@@ -480,9 +489,20 @@ export function memoryOperationStore(): WhatsAppOperationStore {
           { status: "claimed", attemptId, expiresAt: now + ttlMs },
           now,
         );
-        changed.push(claimed.id);
+        changed.push(claimed);
         return { result: claimed, changed };
       });
+    },
+
+    async recoveryDelay(accountId) {
+      await writes;
+      const now = Date.now();
+      const expiries = [...account(accountId).byId.values()].flatMap((operation) =>
+        operation.state.status === "claimed" || operation.state.status === "executing"
+          ? [operation.state.expiresAt]
+          : [],
+      );
+      return expiries.length === 0 ? undefined : Math.max(0, Math.min(...expiries) - now);
     },
 
     start(accountId, operationId, attemptId, ttlMs) {
@@ -502,7 +522,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
           { status: "executing", attemptId, startedAt: now, expiresAt: now + ttlMs },
           now,
         );
-        return { result: started, changed: [operationId] };
+        return { result: started, changed: [started] };
       });
     },
 
@@ -552,7 +572,7 @@ export function memoryOperationStore(): WhatsAppOperationStore {
           updatedAt: now,
         };
         held.byId.set(operationId, acknowledged);
-        return { result: acknowledged, changed: [operationId] };
+        return { result: acknowledged, changed: [acknowledged] };
       });
     },
 

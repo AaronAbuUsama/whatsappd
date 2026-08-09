@@ -26,8 +26,8 @@ export function operationStoreConformance(name: string, create: () => Promise<St
       const offThrowing = fixture.store.subscribe("personal", () => {
         throw new Error("operation listener failed");
       });
-      const offRecording = fixture.store.subscribe("personal", (operationId) => {
-        changes.push(operationId);
+      const offRecording = fixture.store.subscribe("personal", (operation) => {
+        changes.push(operation.id);
       });
       const request = {
         accountId: "personal",
@@ -105,6 +105,65 @@ export function operationStoreConformance(name: string, create: () => Promise<St
         "queued",
       );
       assert.equal((await fixture.store.claim("personal", "attempt-b2", 1_000))?.id, "b");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  void test(`[${name}] subscriptions preserve registrations and defer additions`, async () => {
+    const fixture = await create();
+    const seen: string[] = [];
+    const same = () => seen.push("same");
+    let registered = false;
+    let offLate = (): void => {};
+    const offFirst = fixture.store.subscribe("personal", same);
+    const offSecond = fixture.store.subscribe("personal", same);
+    const offRegistering = fixture.store.subscribe("personal", () => {
+      seen.push("registering");
+      if (!registered) {
+        registered = true;
+        offLate = fixture.store.subscribe("personal", () => seen.push("late"));
+      }
+    });
+    try {
+      await fixture.store.submit({
+        accountId: "personal",
+        id: "first",
+        idempotencyKey: "first",
+        input: input("first"),
+      });
+      assert.deepEqual(seen, ["same", "same", "registering"]);
+      offFirst();
+      await fixture.store.submit({
+        accountId: "personal",
+        id: "second",
+        idempotencyKey: "second",
+        input: input("second"),
+      });
+      assert.deepEqual(seen, ["same", "same", "registering", "same", "registering", "late"]);
+    } finally {
+      offFirst();
+      offSecond();
+      offRegistering();
+      offLate();
+      await fixture.close();
+    }
+  });
+
+  void test(`[${name}] unknown input versions never enter durable storage`, async () => {
+    const fixture = await create();
+    try {
+      await assert.rejects(
+        async () =>
+          fixture.store.submit({
+            accountId: "personal",
+            id: "future",
+            idempotencyKey: "future",
+            input: { ...input("future"), version: 2 } as unknown as WhatsAppOperationInput,
+          }),
+        TypeError,
+      );
+      assert.deepEqual(await fixture.store.list("personal"), []);
     } finally {
       await fixture.close();
     }

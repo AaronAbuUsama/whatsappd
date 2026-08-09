@@ -1028,24 +1028,22 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
   const frames = source.frames(follow.signal)[Symbol.asyncIterator]();
 
   let operationsReady = false;
-  const pendingOperations = new Set<string>();
-  const refreshOperation = async (operationId: string): Promise<void> => {
-    const operation = await source.operations.get(runtime.accountId, operationId);
-    if (operation) retainOperation(operation);
-  };
-  const offOperationChanges = source.operations.subscribe(runtime.accountId, (operationId) => {
+  const pendingOperations = new Map<string, WhatsAppOperation>();
+  const offOperationChanges = source.operations.subscribe(runtime.accountId, (operation) => {
     if (!operationsReady) {
-      pendingOperations.add(operationId);
+      const current = pendingOperations.get(operation.id);
+      if (!current || current.revision < operation.revision)
+        pendingOperations.set(operation.id, operation);
       return;
     }
-    void refreshOperation(operationId).catch(surface);
+    retainOperation(operation);
   });
 
   try {
     for (const operation of await source.operations.list(runtime.accountId))
       retainOperation(operation);
     operationsReady = true;
-    for (const operationId of pendingOperations) await refreshOperation(operationId);
+    for (const operation of pendingOperations.values()) retainOperation(operation);
     pendingOperations.clear();
   } catch (error) {
     offOperationChanges();

@@ -4,6 +4,7 @@ import { transact } from "./libsql-transaction.ts";
 import {
   OperationIdempotencyConflictError,
   announceOperationChanges,
+  assertWhatsAppOperationInput,
   operationSubscription,
   operationInputJson,
   type WhatsAppOperation,
@@ -34,8 +35,7 @@ const integer = (value: unknown, label: string): number => {
 function parseOperation(value: unknown): WhatsAppOperation {
   const held = record(value, "record");
   const input = record(held.input, "input");
-  if (input.version !== 1 || !["send", "mark_read", "phone_history"].includes(String(input.type)))
-    throw new Error("invalid libSQL operation input version or type");
+  assertWhatsAppOperationInput(input);
   const state = record(held.state, "state");
   if (
     !["queued", "claimed", "executing", "succeeded", "failed", "outcome_unknown"].includes(
@@ -98,10 +98,13 @@ const terminal = (state: WhatsAppOperationState): boolean =>
   state.status === "succeeded" || state.status === "failed" || state.status === "outcome_unknown";
 
 export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperationStore {
-  const listeners = new Map<string, Set<(operationId: string) => void>>();
+  const listeners = new Map<
+    string,
+    Set<{ readonly notify: (operation: WhatsAppOperation) => void }>
+  >();
   const mutate = async <T>(
     accountId: string,
-    work: (transaction: Transaction) => Promise<{ result: T; changed: string[] }>,
+    work: (transaction: Transaction) => Promise<{ result: T; changed: WhatsAppOperation[] }>,
   ): Promise<T> => {
     const committed = await transact(client, "write", work);
     announceOperationChanges(listeners, accountId, committed.changed);
@@ -120,11 +123,12 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
       if (!next) return { result: returnCurrent ? current : undefined, changed: [] };
       const committed = { ...next, revision: current.revision + 1 };
       await write(transaction, committed);
-      return { result: committed, changed: [operationId] };
+      return { result: committed, changed: [committed] };
     });
 
   return {
     submit(request) {
+      assertWhatsAppOperationInput(request.input);
       return mutate(request.accountId, async (transaction) => {
         const existing = await transaction.execute({
           sql: `SELECT account_id, operation_id, idempotency_key, operation_json
@@ -158,7 +162,7 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
             JSON.stringify(operation),
           ],
         });
-        return { result: operation, changed: [operation.id] };
+        return { result: operation, changed: [operation] };
       });
     },
 
@@ -185,7 +189,7 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
           args: [accountId],
         });
         const operations = result.rows.map(fromRow);
-        const changed: string[] = [];
+        const changed: WhatsAppOperation[] = [];
         for (const operation of operations) {
           if (
             (operation.state.status !== "claimed" && operation.state.status !== "executing") ||
@@ -206,7 +210,7 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
             updatedAt: at,
           });
           await write(transaction, operation);
-          changed.push(operation.id);
+          changed.push(operation);
         }
         const queued = operations.find((operation) => operation.state.status === "queued");
         if (!queued) return { result: undefined, changed };
@@ -217,8 +221,26 @@ export function libsqlOperationStore(client: LazyLibsqlClient): WhatsAppOperatio
           updatedAt: at,
         };
         await write(transaction, claimed);
-        changed.push(claimed.id);
+        changed.push(claimed);
         return { result: claimed, changed };
+      });
+    },
+
+    recoveryDelay(accountId) {
+      return transact(client, "read", async (transaction) => {
+        const at = await now(transaction);
+        const result = await transaction.execute({
+          sql: `SELECT account_id, operation_id, idempotency_key, operation_json
+            FROM wa_operations WHERE account_id = ? ORDER BY submitted_at, operation_id`,
+          args: [accountId],
+        });
+        const expiries = result.rows.flatMap((row) => {
+          const operation = fromRow(row);
+          return operation.state.status === "claimed" || operation.state.status === "executing"
+            ? [operation.state.expiresAt]
+            : [];
+        });
+        return expiries.length === 0 ? undefined : Math.max(0, Math.min(...expiries) - at);
       });
     },
 
