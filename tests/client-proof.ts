@@ -203,8 +203,7 @@ async function openProfile(profile: "android" | "ios"): Promise<OpenProfile> {
 
 type PeerMode =
   | "profile"
-  | "send-text"
-  | "send-document"
+  | "send-text-and-document"
   | "seed-pages"
   | "replacement"
   | "env-probe"
@@ -242,6 +241,11 @@ export interface PeerProcessResult {
         readonly count: number;
         readonly orderedBodyDigest: string;
       };
+  readonly documentSent?: {
+    readonly kind: "document";
+    readonly sha256: string;
+    readonly byteLength: number;
+  };
   readonly replacement?: ReplacementObservation;
 }
 
@@ -736,33 +740,27 @@ async function peerChild(): Promise<void> {
     process.stdout.write(JSON.stringify(result));
     return;
   }
-  if (
-    mode !== "profile" &&
-    mode !== "send-text" &&
-    mode !== "send-document" &&
-    mode !== "seed-pages"
-  ) {
+  if (mode !== "profile" && mode !== "send-text-and-document" && mode !== "seed-pages") {
     throw new Error("unknown peer child mode");
   }
 
   const peer = await openProfile("ios");
   try {
     let sent: PeerProcessResult["sent"];
+    let documentSent: PeerProcessResult["documentSent"];
     let nonce: string | undefined;
-    if (mode === "send-text") {
+    if (mode === "send-text-and-document") {
       nonce = randomBytes(24).toString("base64url");
       const target = resolveAllowlistedTarget(proofGroupId());
       await guardedSender(peer.session).send(target, { text: nonce });
       sent = { kind: "text", sha256: sha256(nonce), byteLength: Buffer.byteLength(nonce) };
-    } else if (mode === "send-document") {
       const bytes = randomBytes(256);
-      const target = resolveAllowlistedTarget(proofGroupId());
       await guardedSender(peer.session).send(target, {
         document: bytes,
         fileName: "whatsappd-proof.bin",
         mimetype: "application/octet-stream",
       });
-      sent = { kind: "document", sha256: sha256(bytes), byteLength: bytes.byteLength };
+      documentSent = { kind: "document", sha256: sha256(bytes), byteLength: bytes.byteLength };
     } else if (mode === "seed-pages") {
       const target = resolveAllowlistedTarget(proofGroupId());
       const bodyHashes: string[] = [];
@@ -788,6 +786,7 @@ async function peerChild(): Promise<void> {
       },
       link: peer.link,
       ...(sent && { sent }),
+      ...(documentSent && { documentSent }),
     };
     process.stdout.write(JSON.stringify(result));
   } finally {
@@ -995,14 +994,14 @@ async function subjectRun(): Promise<void> {
       client: subject.client,
       chatId,
       async send() {
-        textPeer = await runPeerProcess({ mode: "send-text", addressHashSalt: salt });
-        if (textPeer.sent?.kind !== "text") {
-          throw new Error("the peer returned no text-send proof");
+        textPeer = await runPeerProcess({ mode: "send-text-and-document", addressHashSalt: salt });
+        if (textPeer.sent?.kind !== "text" || !textPeer.documentSent) {
+          throw new Error("the peer returned no text-and-document send proof");
         }
         return textPeer.sent;
       },
     });
-    let documentPeer: PeerProcessResult | undefined;
+    const documentPeer = textPeer;
     proofStage = "inbound-document";
     const document = await observeInboundDocument({
       accountId: "android",
@@ -1010,11 +1009,10 @@ async function subjectRun(): Promise<void> {
       media: subject.media,
       chatId,
       async send() {
-        documentPeer = await runPeerProcess({ mode: "send-document", addressHashSalt: salt });
-        if (documentPeer.sent?.kind !== "document") {
+        if (documentPeer?.documentSent?.kind !== "document") {
           throw new Error("the peer returned no document-send proof");
         }
-        return documentPeer.sent;
+        return documentPeer.documentSent;
       },
     });
     proofStage = "page-seed";
@@ -1080,9 +1078,7 @@ async function subjectRun(): Promise<void> {
       textPeer.pid === process.pid ||
       documentPeer.pid === process.pid ||
       pageSeedPeer?.pid === process.pid ||
-      textPeer.pid === documentPeer.pid ||
       pageSeedPeer?.pid === textPeer.pid ||
-      pageSeedPeer?.pid === documentPeer.pid ||
       peerAddressHash === undefined ||
       documentPeer.addressHash !== peerAddressHash ||
       (pageSeedPeer?.addressHash !== undefined && pageSeedPeer.addressHash !== peerAddressHash) ||
@@ -1146,13 +1142,8 @@ async function subjectRun(): Promise<void> {
         mode: "second-account-own-process",
         linkMode: textPeer.link.linkMode,
         challengeEventCount:
-          textPeer.link.challengeEventCount +
-          documentPeer.link.challengeEventCount +
-          (pageSeedPeer?.link?.challengeEventCount ?? 0),
-        qrDisplayed:
-          textPeer.link.qrDisplayed ||
-          documentPeer.link.qrDisplayed ||
-          (pageSeedPeer?.link?.qrDisplayed ?? false),
+          textPeer.link.challengeEventCount + (pageSeedPeer?.link?.challengeEventCount ?? 0),
+        qrDisplayed: textPeer.link.qrDisplayed || (pageSeedPeer?.link?.qrDisplayed ?? false),
       },
       inboundText: text,
       inboundDocument: document,

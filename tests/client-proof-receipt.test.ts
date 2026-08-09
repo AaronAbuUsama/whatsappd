@@ -36,7 +36,7 @@ function completeStore(): ClientProofObservationStore {
       stdoutContainedChallenge: false,
       subjectPid: 10,
       peerPid: 11,
-      documentPeerPid: 12,
+      documentPeerPid: 11,
       replacementPid: 13,
       subjectAddressHash: "2".repeat(64),
       peerAddressHash: "3".repeat(64),

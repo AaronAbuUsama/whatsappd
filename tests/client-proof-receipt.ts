@@ -311,11 +311,10 @@ function requireSummary(store: ClientProofObservationStore): ClientProofSummary 
   const pids = [
     summary.subjectPid,
     summary.peerPid,
-    summary.documentPeerPid,
     ...(summary.pageSeedPeerPid === undefined ? [] : [summary.pageSeedPeerPid]),
     summary.replacementPid,
   ];
-  if (new Set(pids).size !== pids.length) {
+  if (summary.documentPeerPid !== summary.peerPid || new Set(pids).size !== pids.length) {
     throw new Error("refusing receipt: proof processes are not distinct");
   }
   if (
