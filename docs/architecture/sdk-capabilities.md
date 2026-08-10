@@ -24,7 +24,11 @@ createWhatsAppClient`, observed inbound text through both Client read seams,
   stored pages, and reconstructed equal durable state without live state in a
   distinct process.
 - Live sends, pairing as a feature, and unlink: **not run** — #108, #109, #111.
-- Browser React: **not run**
+- Browser React: **run** — issue #159's private Next.js proof application passed
+  24 Playwright runs across desktop, tablet, and mobile. The retained local P5
+  report covers every WC feature id with semantic/interaction assertions,
+  console and network health, screenshots, video, and a clean privacy scan;
+  implementation head `8367989`.
 - OpenTUI: **not run**
 
 Automated tests do not establish real-account or rendered behavior. A P4 run at
