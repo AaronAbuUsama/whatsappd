@@ -313,7 +313,7 @@ const connectionViews = Object.fromEntries(
   STATE_LAB_COVERAGE.connectionPhases.map((phase) => [
     phase,
     {
-      ...stateLabDirectory,
+      ...stateLabConversation,
       account: {
         name: "State Lab",
         connection: {

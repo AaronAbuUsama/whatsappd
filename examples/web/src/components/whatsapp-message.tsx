@@ -308,7 +308,7 @@ function MessageActions({
   };
   return (
     <div
-      className={`invisible absolute top-0 z-20 flex rounded-md bg-background/90 shadow-sm backdrop-blur group-hover/message:visible group-focus-within/message:visible ${message.fromMe ? "right-full mr-1" : "left-full ml-1"}`}
+      className={`invisible absolute top-0 z-20 flex rounded-md bg-background/90 shadow-sm backdrop-blur group-hover/message:visible group-focus-within/message:visible [@media(pointer:coarse)]:visible ${message.fromMe ? "right-full mr-1" : "left-full ml-1"}`}
     >
       <Popover
         open={reactionOpen}
