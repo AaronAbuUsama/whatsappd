@@ -12,6 +12,7 @@ const proof = await mkdtemp(path.join(tmpdir(), "whatsappd-packed-renderers-"));
 const archives = path.join(proof, "archives");
 const web = path.join(proof, "web");
 const opentui = path.join(proof, "opentui");
+const webOnly = process.argv.includes("--web");
 
 try {
   await mkdir(archives);
@@ -30,11 +31,12 @@ try {
     recursive: true,
     filter: (source) => !["node_modules", ".next"].includes(path.basename(source)),
   });
-  await cp(path.join(root, "examples/opentui"), opentui, {
-    recursive: true,
-    filter: (source) => !["node_modules", ".next"].includes(path.basename(source)),
-  });
-  for (const directory of [web, opentui]) {
+  if (!webOnly)
+    await cp(path.join(root, "examples/opentui"), opentui, {
+      recursive: true,
+      filter: (source) => !["node_modules", ".next"].includes(path.basename(source)),
+    });
+  for (const directory of webOnly ? [web] : [web, opentui]) {
     const target = path.join(directory, "package.json");
     const manifest = JSON.parse(await readFile(target, "utf8")) as {
       dependencies: Record<string, string>;
@@ -45,7 +47,7 @@ try {
   }
   await writeFile(
     path.join(proof, "pnpm-workspace.yaml"),
-    'packages:\n  - "web"\n  - "opentui"\nallowBuilds:\n  baileys: false\n  esbuild: true\n  ffmpeg-static: true\n  protobufjs: false\n',
+    `packages:\n  - "web"\n${webOnly ? "" : '  - "opentui"\n'}allowBuilds:\n  baileys: false\n  esbuild: true\n  ffmpeg-static: true\n  protobufjs: false\n`,
   );
   await execFile("pnpm", ["install"], { cwd: proof });
 
@@ -66,14 +68,16 @@ try {
   await execFile("pnpm", ["exec", "next", "build"], { cwd: web });
   await execFile("pnpm", ["test:storybook"], { cwd: web });
 
-  await execFile(
-    process.execPath,
-    ["--experimental-strip-types", "--test", "tests/application.test.ts"],
-    { cwd: opentui },
-  );
-  await execFile("bun", ["tests/app.tui.test.tsx"], { cwd: opentui });
+  if (!webOnly) {
+    await execFile(
+      process.execPath,
+      ["--experimental-strip-types", "--test", "tests/application.test.ts"],
+      { cwd: opentui },
+    );
+    await execFile("bun", ["tests/app.tui.test.tsx"], { cwd: opentui });
+  }
   console.log(
-    `Packed renderer proof: web browser and OpenTUI native interactions passed at ${installedCore.version}`,
+    `Packed renderer proof: web browser${webOnly ? "" : " and OpenTUI native interactions"} passed at ${installedCore.version}`,
   );
 } finally {
   await rm(proof, { recursive: true, force: true });
