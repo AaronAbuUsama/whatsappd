@@ -113,6 +113,28 @@ try {
   );
   assert.match(stdout, new RegExp(`whatsappd@${core.version.replaceAll(".", "\\.")}`));
   assert.match(stdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
+
+  const { stdout: opentuiStdout } = await execFile(
+    "pnpm",
+    [
+      "--filter",
+      "@whatsappd/docs",
+      "exec",
+      "shadcn",
+      "add",
+      `AaronAbuUsama/whatsappd/whatsapp-tui-inbox#${ref}`,
+      "--dry-run",
+      "--yes",
+      "--cwd",
+      consumer,
+    ],
+    { cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
+  );
+  assert.match(opentuiStdout, /whatsapp-inbox\.tsx/u);
+  assert.match(
+    opentuiStdout,
+    new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`),
+  );
 } finally {
   await rm(consumer, { recursive: true, force: true });
 }

@@ -9,6 +9,7 @@
       "description": "Terminal snapshots and commands projected from the public WhatsApp Client.",
       "type": "registry:lib",
       "dependencies": ["@whatsappd/react@0.3.0", "whatsappd@0.3.0"],
+      "devDependencies": ["@types/node@>=20.0.0"],
       "files": [
         {
           "path": "src/lib/whatsapp-terminal.ts",
@@ -24,6 +25,7 @@
       "description": "Terminal-native account identity and connection phase presentation.",
       "type": "registry:component",
       "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
       "files": [
         {
           "path": "src/components/whatsapp-account-state.tsx",
@@ -39,6 +41,7 @@
       "description": "Terminal-native chat rows, selection, previews, groups, and send availability.",
       "type": "registry:component",
       "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
       "registryDependencies": ["@whatsappd/whatsapp-tui-contract"],
       "files": [
         {
@@ -55,6 +58,7 @@
       "description": "Queued, sending, failed, and outcome-unknown operation presentation.",
       "type": "registry:component",
       "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
       "registryDependencies": ["@whatsappd/whatsapp-tui-contract"],
       "files": [
         {
@@ -71,6 +75,7 @@
       "description": "Terminal-native message and attachment summary with reactions and receipts.",
       "type": "registry:component",
       "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
       "registryDependencies": [
         "@whatsappd/whatsapp-tui-contract",
         "@whatsappd/whatsapp-tui-operation-status"
@@ -90,6 +95,7 @@
       "description": "Terminal-native allowlist-aware text composer.",
       "type": "registry:component",
       "dependencies": ["@opentui/core@^0.4.5", "@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
       "files": [
         {
           "path": "src/components/whatsapp-composer.tsx",
@@ -105,6 +111,7 @@
       "description": "Terminal-native history paging, transcript, operation states, and composer.",
       "type": "registry:component",
       "dependencies": ["@opentui/core@^0.4.5", "@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
       "registryDependencies": [
         "@whatsappd/whatsapp-tui-composer",
         "@whatsappd/whatsapp-tui-contract",
@@ -130,6 +137,7 @@
         "@whatsappd/react@0.3.0",
         "react@>=19.2.0"
       ],
+      "devDependencies": ["@types/react@^19"],
       "registryDependencies": [
         "@whatsappd/whatsapp-tui-account-state",
         "@whatsappd/whatsapp-tui-chat-list",

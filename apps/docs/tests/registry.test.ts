@@ -188,6 +188,7 @@ void test("OpenTUI items are version locked and the example consumes their exact
       assert.equal(installed, source, `${item.name}:${file.target} drifted from registry source`);
       assert.doesNotMatch(source, /WHATSAPPD_|\/api\/|react-dom|next\//u);
     }
+    assert.ok(item.devDependencies?.length, `${item.name} has no devDependencies`);
   }
 
   const contract = registry.items.find(({ name }) => name === "whatsapp-tui-contract");
@@ -407,8 +408,6 @@ export const app = <WhatsAppTui application={application} />;
         type: "module",
         dependencies: { react: "19.2.8" },
         devDependencies: {
-          "@types/node": "^26.1.1",
-          "@types/react": "^19",
           typescript: "^6.0.3",
         },
       }),
@@ -457,6 +456,19 @@ export const app = <WhatsAppTui application={application} />;
     );
     await execFile("pnpm", ["install", "--ignore-scripts"], { cwd: consumer });
     try {
+      const { stdout } = await execFile(
+        path.join(docsRoot, "node_modules/.bin/shadcn"),
+        ["add", "@whatsappd/whatsapp-tui-inbox", "--dry-run", "--yes", "--cwd", consumer],
+        {
+          env: {
+            NODE_ENV: "test",
+            PATH: process.env.PATH ?? "",
+            PNPM_HOME: process.env.PNPM_HOME ?? "",
+          },
+        },
+      );
+      assert.match(stdout, /whatsapp-inbox\.tsx/u);
+      assert.match(stdout, /@opentui\/react/u);
       await execFile(
         path.join(docsRoot, "node_modules/.bin/shadcn"),
         ["add", "@whatsappd/whatsapp-tui-inbox", "--yes", "--cwd", consumer],
