@@ -20,7 +20,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "whatsappd": ["../../packages/whatsappd/src/index.ts"],
+      "whatsappd/testing": ["../../packages/whatsappd/src/testing.ts"]
     }
   },
   "include": [
