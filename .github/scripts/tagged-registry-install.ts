@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -66,7 +67,7 @@ async function assertTaggedRendererRegistry(family: "web" | "opentui"): Promise<
           `https://raw.githubusercontent.com/AaronAbuUsama/whatsappd/${ref}/registry/${family}/${file.path}`,
         );
         assert.equal(source.ok, true, `tagged ${item.name} source returned ${source.status}`);
-        return { ...file, content: await source.text() };
+        return { ...file, path: `registry/${family}/${file.path}`, content: await source.text() };
       }),
     );
     assert.deepEqual(
@@ -80,6 +81,23 @@ async function assertTaggedRendererRegistry(family: "web" | "opentui"): Promise<
 await assertTaggedRendererRegistry("web");
 await assertTaggedRendererRegistry("opentui");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-tagged-registry-"));
+const registryServer = createServer(async (request, response) => {
+  try {
+    const name = path.basename(new URL(request.url ?? "/", "http://registry.local").pathname);
+    assert.match(name, /^[a-z0-9-]+\.json$/u);
+    response.setHeader("content-type", "application/json");
+    response.end(await readFile(path.join(root, "apps/docs/public/r", name)));
+  } catch {
+    response.statusCode = 404;
+    response.end();
+  }
+});
+await new Promise<void>((resolve, reject) => {
+  registryServer.once("error", reject);
+  registryServer.listen(0, "127.0.0.1", resolve);
+});
+const address = registryServer.address();
+assert.ok(address && typeof address === "object");
 
 try {
   await mkdir(path.join(consumer, "app"));
@@ -111,6 +129,9 @@ try {
         ui: "@/components/ui",
         lib: "@/lib",
         hooks: "@/hooks",
+      },
+      registries: {
+        "@whatsappd": `http://127.0.0.1:${address.port}/{name}.json`,
       },
     }),
   );
@@ -150,7 +171,7 @@ try {
     ],
     { cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
   );
-  assert.match(webStdout, /whatsapp-inbox\.tsx/u);
+  assert.match(webStdout, /whatsapp-shell\.tsx/u);
   assert.match(webStdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
 
   const { stdout: opentuiStdout } = await execFile(
@@ -175,5 +196,8 @@ try {
     new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`),
   );
 } finally {
+  await new Promise<void>((resolve, reject) =>
+    registryServer.close((error) => (error ? reject(error) : resolve())),
+  );
   await rm(consumer, { recursive: true, force: true });
 }
