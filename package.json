@@ -7,6 +7,7 @@
     "dev": "pnpm --filter whatsappd dev",
     "example:web": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/example-web dev",
     "example:web:build": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/example-web build",
+    "example:opentui": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/example-opentui dev",
     "example:qr": "node --experimental-strip-types examples/qr-cli/index.ts",
     "test": "node --experimental-strip-types --experimental-test-module-mocks --test packages/whatsappd/tests/*.test.ts .github/scripts/*.test.ts",
     "test:coverage": "node --experimental-strip-types --experimental-test-module-mocks --experimental-test-coverage --test-coverage-exclude='packages/whatsappd/tests/**' --test-coverage-exclude='.github/**' --test-coverage-lines=94 --test-coverage-branches=85 --test-coverage-functions=88 --test packages/whatsappd/tests/*.test.ts .github/scripts/*.test.ts",

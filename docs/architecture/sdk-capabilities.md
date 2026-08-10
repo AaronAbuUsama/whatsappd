@@ -28,8 +28,13 @@ createWhatsAppClient`, observed inbound text through both Client read seams,
   24 Playwright runs across desktop, tablet, and mobile. The retained local P5
   report covers every WC feature id with semantic/interaction assertions,
   console and network health, screenshots, video, and a clean privacy scan;
-  implementation head `8367989`.
-- OpenTUI: **not run**
+  implementation head `7aef5e4`.
+- OpenTUI: **run at the deterministic renderer seam** — issue #160's private
+  OpenTUI React consumer composes the public Client, projects saved/live and
+  optimistic state, and passed native-renderer checks for desktop and compact
+  layouts, older-page anchoring, keyboard composition, durable send dispatch,
+  attachments, and queued/failed/outcome-unknown presentation. No linked
+  account was opened for this proof.
 
 Automated tests do not establish real-account or rendered behavior. A P4 run at
 one layer establishes nothing about another: the Session-layer history proof and

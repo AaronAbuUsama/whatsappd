@@ -3,8 +3,9 @@
 The [SDK capability catalogue](docs/architecture/sdk-capabilities.md) lists what Baileys
 offers, what whatsappd exposes today, and what remains planned. It is a
 human-maintained guide, not a product authority or merge gate. Automated tests
-and the linked-account Client proof have been run; browser React and OpenTUI
-have not.
+and the linked-account Client proof have been run. Browser React and the
+deterministic OpenTUI renderer proof have also run; OpenTUI has not been run
+against a linked account.
 
 A typed WhatsApp session engine for Node.js. It normalizes Baileys events,
 awaits application handlers in source order, and keeps credentials behind an
@@ -151,8 +152,9 @@ two commands.
 
 Typing is deliberately live rather than durable:
 `await client.messages.setTyping(chatId, true)` reaches only the current
-Session and is never replayed after a restart. Pairing/unlink, React/OpenTUI
-bindings, and automatic history policy remain later work.
+Session and is never replayed after a restart. Pairing/unlink, reusable
+React/OpenTUI bindings, and automatic history policy remain later work; the
+private web and terminal examples keep their bindings application-local.
 
 A local `file:` database is opened in WAL, so `whatsapp.db-wal` and
 `whatsapp.db-shm` sit beside it — move, copy, or delete the three together. WAL
