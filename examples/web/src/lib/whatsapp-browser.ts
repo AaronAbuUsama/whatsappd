@@ -1,6 +1,5 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
 import type {
   WhatsAppApplicationCommand,
   WhatsAppApplicationCommandResult,
@@ -118,10 +117,6 @@ export function createWhatsAppBrowser(initial: WhatsAppApplicationView): WhatsAp
       ),
     refresh: reload,
   };
-}
-
-export function useWhatsAppBrowser(browser: WhatsAppBrowser): WhatsAppBrowserSnapshot {
-  return useSyncExternalStore(browser.subscribe, browser.getSnapshot, browser.getServerSnapshot);
 }
 
 function errorFrom(value: unknown): string {

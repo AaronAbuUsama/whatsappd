@@ -1,0 +1,41 @@
+{
+  "name": "@whatsappd/react",
+  "version": "0.3.0",
+  "description": "Renderer-neutral React bindings for whatsappd.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AaronAbuUsama/whatsappd.git",
+    "directory": "packages/react"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "prepublishOnly": "vp run build"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "react": "19.2.8",
+    "whatsappd": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "whatsappd": ">=0.3.0 <1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

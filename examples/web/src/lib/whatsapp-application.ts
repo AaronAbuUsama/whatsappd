@@ -9,6 +9,7 @@ import {
   type OptimisticMessage,
   type WhatsAppOperation,
 } from "whatsappd";
+import { subscribeWhatsAppClient } from "@whatsappd/react";
 import {
   avatarUrl,
   chatName,
@@ -154,13 +155,7 @@ export function createWhatsAppApplication(
     revision += 1;
     for (const listener of listeners) listener();
   };
-  const subscriptions = [
-    client.account.subscribe(announce),
-    client.chats.subscribe(announce),
-    client.contacts.subscribe(announce),
-    client.groups.subscribe(announce),
-    client.messages.subscribe(announce),
-  ];
+  const unsubscribeClient = subscribeWhatsAppClient(client, announce);
 
   const page = (chatId: string): Promise<void> => {
     const current = client.messages.get(chatId);
@@ -721,7 +716,7 @@ export function createWhatsAppApplication(
     async close() {
       if (closed) return;
       closed = true;
-      for (const unsubscribe of subscriptions) unsubscribe();
+      unsubscribeClient();
       listeners.clear();
     },
   };

@@ -153,8 +153,11 @@ two commands.
 Typing is deliberately live rather than durable:
 `await client.messages.setTyping(chatId, true)` reaches only the current
 Session and is never replayed after a restart. Pairing/unlink, reusable
-React/OpenTUI bindings, and automatic history policy remain later work; the
-private web and terminal examples keep their bindings application-local.
+selection workflows, and automatic history policy remain later work. The
+`@whatsappd/react` package now supplies typed renderer-neutral Provider/hooks
+from `createWhatsAppBindings()` plus the shared Client subscription lifetime
+proven by both private examples; each example retains its own transport,
+selection model, scrolling, focus, and presentation.
 
 A local `file:` database is opened in WAL, so `whatsapp.db-wal` and
 `whatsapp.db-shm` sit beside it — move, copy, or delete the three together. WAL

@@ -6,6 +6,7 @@ import type {
   OptimisticMessage,
   WhatsAppClient,
 } from "whatsappd";
+import { subscribeWhatsAppClient } from "@whatsappd/react";
 
 export type TerminalChat = {
   readonly id: string;
@@ -204,13 +205,7 @@ export function createTerminalApplication(
     snapshot = build();
     listeners.forEach((listener) => listener());
   };
-  const unsubscribe = [
-    client.account,
-    client.chats,
-    client.contacts,
-    client.groups,
-    client.messages,
-  ].map((namespace) => namespace.subscribe(announce));
+  const unsubscribeClient = subscribeWhatsAppClient(client, announce);
   snapshot = build();
 
   return {
@@ -261,7 +256,7 @@ export function createTerminalApplication(
     },
     close() {
       closed = true;
-      unsubscribe.forEach((stop) => stop());
+      unsubscribeClient();
       listeners.clear();
     },
   };

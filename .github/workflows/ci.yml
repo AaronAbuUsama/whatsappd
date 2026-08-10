@@ -36,6 +36,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+      - uses: oven-sh/setup-bun@v2
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       # Coverage thresholds sit just under the measured numbers (95.81 lines /
@@ -103,3 +104,10 @@ jobs:
       # build should fail as a broken build, not as a packed-check failure two
       # steps later.
       - run: pnpm test:pack
+      # Both permanent consumers resolve @whatsappd/react through its package
+      # exports, never a source alias. This therefore exercises the same built
+      # entry point that the packed-consumer proof installs from the tarball.
+      - run: pnpm --filter @whatsappd/example-web test
+      - run: pnpm --filter @whatsappd/example-web exec playwright install --with-deps chromium
+      - run: pnpm --filter @whatsappd/example-web test:storybook
+      - run: pnpm --filter @whatsappd/example-opentui test

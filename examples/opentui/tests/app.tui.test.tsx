@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { testRender } from "@opentui/react/test-utils";
-import { act } from "react";
+import { useKeyboard } from "@opentui/react";
+import { act, useState } from "react";
+import { createWhatsAppBindings, type WhatsAppStore } from "@whatsappd/react";
 import { WhatsAppTui } from "../src/app.tsx";
 import type { TerminalApplication, TerminalSnapshot } from "../src/application.ts";
 
@@ -63,15 +65,61 @@ const snapshot: TerminalSnapshot = {
 
 const sent: string[] = [];
 let olderLoads = 0;
+let activeSubscriptions = 0;
 const application: TerminalApplication = {
   getSnapshot: () => snapshot,
-  subscribe: () => () => undefined,
+  subscribe: () => {
+    activeSubscriptions += 1;
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      activeSubscriptions -= 1;
+    };
+  },
   selectChat: () => undefined,
   selectOffset: () => undefined,
   loadOlder: () => ((olderLoads += 1), "stored"),
   sendText: async (text) => void sent.push(text),
   close: () => undefined,
 };
+
+type CountingStore = WhatsAppStore<string> & { readonly active: () => number };
+
+const { WhatsAppProvider, useWhatsAppSnapshot } = createWhatsAppBindings<string, CountingStore>();
+
+const countingStore = (value: string): CountingStore => {
+  let subscriptions = 0;
+  return {
+    active: () => subscriptions,
+    getSnapshot: () => value,
+    subscribe: () => {
+      subscriptions += 1;
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        subscriptions -= 1;
+      };
+    },
+  };
+};
+
+function SnapshotProbe() {
+  return <text>{useWhatsAppSnapshot()}</text>;
+}
+
+function ReplacementProbe({ first, second }: { first: CountingStore; second: CountingStore }) {
+  const [store, setStore] = useState<CountingStore>(first);
+  useKeyboard((key) => {
+    if (key.name === "r") setStore(second);
+  });
+  return (
+    <WhatsAppProvider store={store}>
+      <SnapshotProbe />
+    </WhatsAppProvider>
+  );
+}
 
 async function desktopProof(): Promise<void> {
   const view = await testRender(<WhatsAppTui application={application} />, {
@@ -88,6 +136,7 @@ async function desktopProof(): Promise<void> {
     assert.match(frame, /failed · network rejected/);
   } finally {
     await act(async () => view.renderer.destroy());
+    assert.equal(activeSubscriptions, 0);
   }
 }
 
@@ -104,6 +153,7 @@ async function compactProof(): Promise<void> {
     assert.doesNotMatch(frame, /durable hello/);
   } finally {
     await act(async () => view.renderer.destroy());
+    assert.equal(activeSubscriptions, 0);
   }
 }
 
@@ -136,10 +186,39 @@ async function keyboardProof(): Promise<void> {
     assert.deepEqual(sent, ["terminal hello"]);
   } finally {
     await act(async () => view.renderer.destroy());
+    assert.equal(activeSubscriptions, 0);
+  }
+}
+
+async function replacementProof(): Promise<void> {
+  const first = countingStore("first");
+  const second = countingStore("second");
+  const view = await testRender(<ReplacementProbe first={first} second={second} />, {
+    width: 30,
+    height: 4,
+  });
+  try {
+    await view.flush();
+    assert.equal(first.active(), 1);
+    assert.equal(second.active(), 0);
+    await act(async () => {
+      view.mockInput.pressKey("r");
+      await view.flush();
+    });
+    assert.equal(first.active(), 0);
+    assert.equal(second.active(), 1);
+    await view.waitFor(() => view.captureCharFrame().includes("second"));
+  } finally {
+    await act(async () => view.renderer.destroy());
+    assert.equal(first.active(), 0);
+    assert.equal(second.active(), 0);
   }
 }
 
 await desktopProof();
 await compactProof();
 await keyboardProof();
-console.log("OpenTUI proof: desktop, compact, paging, composer, and operation states passed");
+await replacementProof();
+console.log(
+  "OpenTUI proof: desktop, compact, paging, composer, operations, and Provider lifetime passed",
+);

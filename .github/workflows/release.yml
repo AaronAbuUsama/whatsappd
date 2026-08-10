@@ -31,13 +31,20 @@ jobs:
       # pull requests and not releases (#119). It runs on the publishing commit,
       # so the artifact is proven on the exact commit that publishes it.
       - run: pnpm test:pack
-      - name: Publish to npm (skip if this version is already published)
+      - name: Publish package family to npm (skip versions already published)
         run: |
-          VERSION="$(node -p "require('./packages/whatsappd/package.json').version")"
-          if ( cd "$RUNNER_TEMP" && npm view "whatsappd@$VERSION" version ) >/dev/null 2>&1; then
-            echo "whatsappd@$VERSION is already on npm — skipping publish."
-          else
-            pnpm --filter whatsappd pack --pack-destination "$RUNNER_TEMP"
-            cd "$RUNNER_TEMP"
-            npm publish "whatsappd-$VERSION.tgz" --provenance --access public
-          fi
+          publish() {
+            package="$1"
+            directory="$2"
+            archive="$3"
+            version="$(node -p "require('./packages/$directory/package.json').version")"
+            if ( cd "$RUNNER_TEMP" && npm view "$package@$version" version ) >/dev/null 2>&1; then
+              echo "$package@$version is already on npm — skipping publish."
+              return
+            fi
+            pnpm --filter "$package" pack --pack-destination "$RUNNER_TEMP"
+            npm publish "$RUNNER_TEMP/$archive-$version.tgz" --provenance --access public
+          }
+
+          publish whatsappd whatsappd whatsappd
+          publish @whatsappd/react react whatsappd-react
