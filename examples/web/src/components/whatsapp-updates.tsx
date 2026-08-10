@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { CircleDashedIcon } from "lucide-react";
 import { WhatsAppMessageContent } from "@/components/whatsapp-message";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { WhatsAppAvatar } from "@/components/whatsapp-avatar";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Empty,
@@ -48,16 +48,12 @@ export function WhatsAppUpdates({
                 <CardHeader>
                   <Item size="xs" className="border-0 p-0">
                     <ItemMedia>
-                      <Avatar size="lg">
-                        {update.avatar && (
-                          <AvatarImage
-                            src={`/api/avatar/${update.avatar}`}
-                            alt={update.sender}
-                            loading="lazy"
-                          />
-                        )}
-                        <AvatarFallback>{update.initials}</AvatarFallback>
-                      </Avatar>
+                      <WhatsAppAvatar
+                        name={update.sender}
+                        initials={update.initials}
+                        token={update.avatar}
+                        size="lg"
+                      />
                     </ItemMedia>
                     <ItemContent className="min-w-0 gap-0">
                       <ItemTitle className="w-full truncate">{update.sender}</ItemTitle>

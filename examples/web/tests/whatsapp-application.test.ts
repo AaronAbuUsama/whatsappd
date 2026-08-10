@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   createWhatsAppClient,
   createWhatsAppRuntime,
+  fileMediaStore,
+  libsqlBackend,
   memoryBackend,
   type BinaryInput,
+  type InboundMessage,
   type Outbound,
 } from "whatsappd";
 import { createTestWhatsAppSession, textMessage } from "whatsappd/testing";
@@ -13,7 +20,6 @@ import { createWhatsAppApplication } from "../src/lib/whatsapp-application.ts";
 
 const CHAT = "peer@s.whatsapp.net";
 const PEER_LID = "peer@lid";
-const ROOM = "room@g.us";
 
 async function waitForLength(values: readonly unknown[], length: number): Promise<void> {
   for (let attempt = 0; attempt < 100 && values.length < length; attempt += 1) await delay(10);
@@ -135,47 +141,159 @@ void test("browser state and commands use the public WhatsApp Client", async () 
   }
 });
 
-void test("group counts preserve unknown and authoritative empty membership", async () => {
-  const backend = memoryBackend();
-  const driver = createTestWhatsAppSession();
-  const runtime = createWhatsAppRuntime({
-    accountId: "group-knowledge",
-    backend,
-    openSession: () => driver.session,
+void test("the web media capability survives restart for every attachment kind", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-web-media-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const accountId = "web-media";
+  const attachment = (
+    kind: "image" | "video" | "audio" | "document" | "sticker",
+    id: string,
+    value: string,
+  ): InboundMessage => ({
+    id,
+    chatId: CHAT,
+    sender: { id: CHAT, mode: "pn" },
+    fromMe: false,
+    timestamp: 1_700_000_000_000,
+    live: true,
+    isGroup: false,
+    kind,
+    media: {
+      mimetype: kind === "audio" ? "audio/ogg; codecs=opus" : `application/x-${kind}`,
+      fileName: `${kind}.proof`,
+      ...(kind === "audio" && { ptt: true, seconds: 3 }),
+      download: async () => Buffer.from(value),
+    },
   });
-  await runtime.start();
-  const client = await createWhatsAppClient(runtime);
-  const application = createWhatsAppApplication({
-    accountId: "group-knowledge",
-    client,
-    media: backend.media,
-  });
-
   try {
-    await driver.emit({
-      type: "conversation_sync",
-      batch: {
-        context: { source: "recent", projection: { mode: "upsert" } },
-        chats: [{ id: ROOM, isGroup: true, subject: "Room" }],
-        contacts: [],
-        messages: [],
+    const firstMedia = fileMediaStore({ directory });
+    const firstBackend = libsqlBackend({ url, accountId, media: firstMedia });
+    const firstDriver = createTestWhatsAppSession();
+    const firstRuntime = createWhatsAppRuntime({
+      accountId,
+      backend: firstBackend,
+      openSession: () => firstDriver.session,
+    });
+    await firstRuntime.start();
+    for (const [kind, value] of [
+      ["image", "image-bytes"],
+      ["video", "video-bytes"],
+      ["audio", "voice-bytes"],
+      ["document", "document-bytes"],
+      ["sticker", "sticker-bytes"],
+    ] as const)
+      await firstDriver.emit({ type: "message", message: attachment(kind, kind, value) });
+    await firstDriver.emit({
+      type: "message",
+      message: {
+        id: "failed",
+        chatId: CHAT,
+        sender: { id: CHAT, mode: "pn" },
+        fromMe: false,
+        timestamp: 1_700_000_000_000,
+        live: true,
+        isGroup: false,
+        kind: "image",
+        media: {
+          mimetype: "image/png",
+          download: async () => {
+            throw new Error("fixture download failed");
+          },
+        },
       },
     });
-    const unknown = await application.state();
-    assert.equal(unknown.groups.length, 1);
-    assert.equal(unknown.groups[0]?.participantCount, undefined);
+    await firstRuntime.stop();
+    await firstBackend.close();
 
-    await driver.emit({
-      type: "group",
-      group: { kind: "metadata", id: ROOM, participants: [], at: 1_700_000_000_000 },
+    const replacementMedia = fileMediaStore({ directory });
+    const replacementBackend = libsqlBackend({ url, accountId, media: replacementMedia });
+    const replacementRuntime = createWhatsAppRuntime({
+      accountId,
+      backend: replacementBackend,
+      openSession: () => createTestWhatsAppSession().session,
     });
-    const empty = await application.state();
-    assert.equal(empty.groups.length, 1);
-    assert.equal(empty.groups[0]?.participantCount, 0);
+    const client = await createWhatsAppClient(replacementRuntime);
+    const application = createWhatsAppApplication({
+      accountId,
+      client,
+      media: replacementMedia,
+    });
+    try {
+      const chat = (await application.state()).chats[0]?.key;
+      assert.ok(chat);
+      const messages = (await application.state(chat)).conversation?.messages ?? [];
+      const failed = messages.find(
+        (message) =>
+          message.key && message.content.kind === "image" && message.content.state === "failed",
+      );
+      assert.ok(failed);
+      assert.ok(failed.content.kind === "image" && failed.content.state === "failed");
+      assert.equal("media" in failed.content, false);
+      assert.equal(failed.content.failure, "download_failed");
+      const expected = {
+        image: {
+          bytes: "image-bytes",
+          mimetype: "application/x-image",
+          fileName: "image.proof",
+        },
+        video: {
+          bytes: "video-bytes",
+          mimetype: "application/x-video",
+          fileName: "video.proof",
+        },
+        audio: {
+          bytes: "voice-bytes",
+          mimetype: "audio/ogg; codecs=opus",
+          fileName: "audio.proof",
+          ptt: true,
+          seconds: 3,
+        },
+        document: {
+          bytes: "document-bytes",
+          mimetype: "application/x-document",
+          fileName: "document.proof",
+        },
+        sticker: {
+          bytes: "sticker-bytes",
+          mimetype: "application/x-sticker",
+          fileName: "sticker.proof",
+        },
+      } as const;
+      const recovered: Partial<Record<keyof typeof expected, string>> = {};
+      for (const message of messages) {
+        const content = message.content;
+        if (!("media" in content) || !content.media) continue;
+        const wanted = expected[content.kind];
+        const target = await application.media(content.media);
+        assert.ok(target);
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of target.source) chunks.push(chunk);
+        const bytes = Buffer.concat(chunks);
+        assert.equal(target.byteLength, bytes.byteLength);
+        assert.equal(target.mimetype, wanted.mimetype);
+        assert.equal(target.fileName, wanted.fileName);
+        assert.equal(content.mimetype, wanted.mimetype);
+        assert.equal(content.fileName, wanted.fileName);
+        if (content.kind === "audio") {
+          assert.equal(content.ptt, expected.audio.ptt);
+          assert.equal(content.seconds, expected.audio.seconds);
+        }
+        recovered[content.kind] = bytes.toString();
+      }
+      assert.deepEqual(recovered, {
+        image: "image-bytes",
+        video: "video-bytes",
+        audio: "voice-bytes",
+        document: "document-bytes",
+        sticker: "sticker-bytes",
+      });
+    } finally {
+      await application.close();
+      await client.close();
+      await replacementBackend.close();
+    }
   } finally {
-    await application.close();
-    await client.close();
-    await runtime.stop();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { WhatsAppComposer } from "@/components/whatsapp-composer";
+import { WhatsAppAvatar } from "@/components/whatsapp-avatar";
 import { WhatsAppGroupCreate, WhatsAppGroupDetails } from "@/components/whatsapp-groups";
 import { WhatsAppMessage } from "@/components/whatsapp-message";
 import {
@@ -22,7 +23,6 @@ import {
 } from "@/components/whatsapp-navigation";
 import { WhatsAppUpdates } from "@/components/whatsapp-updates";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -109,23 +109,6 @@ const participantLabel = (count: number | undefined): string =>
     ? "Participants unavailable"
     : `${count} participant${count === 1 ? "" : "s"}`;
 
-function AvatarView({
-  name,
-  initials,
-  token,
-}: {
-  readonly name: string;
-  readonly initials: string;
-  readonly token?: string;
-}) {
-  return (
-    <Avatar size="lg">
-      {token && <AvatarImage src={`/api/avatar/${token}`} alt={name} loading="lazy" />}
-      <AvatarFallback>{initials}</AvatarFallback>
-    </Avatar>
-  );
-}
-
 type ListEntry = Pick<ApplicationChat, "key" | "name" | "initials" | "avatar" | "canSend"> & {
   readonly description?: string;
   readonly lastMessageAt?: number;
@@ -197,7 +180,12 @@ function DirectoryList({
               onClick={() => void browser.select(entry.key)}
             >
               <ItemMedia>
-                <AvatarView name={entry.name} initials={entry.initials} token={entry.avatar} />
+                <WhatsAppAvatar
+                  name={entry.name}
+                  initials={entry.initials}
+                  token={entry.avatar}
+                  size="lg"
+                />
               </ItemMedia>
               <ItemContent className="min-w-0 gap-0">
                 <ItemTitle className="w-full truncate text-base">{entry.name}</ItemTitle>
@@ -262,7 +250,7 @@ function ConversationDetails({
       </SheetTrigger>
       <SheetContent>
         <SheetHeader>
-          <AvatarView
+          <WhatsAppAvatar
             name={conversation.chat.name}
             initials={conversation.chat.initials}
             token={conversation.chat.avatar}
@@ -283,9 +271,10 @@ function ConversationDetails({
             {conversation.participants?.map((participant, index) => (
               <Item key={`${participant.name}-${index}`}>
                 <ItemMedia>
-                  <Avatar>
-                    <AvatarFallback>{participant.name.slice(0, 2).toUpperCase()}</AvatarFallback>
-                  </Avatar>
+                  <WhatsAppAvatar
+                    name={participant.name}
+                    initials={participant.name.slice(0, 2).toUpperCase()}
+                  />
                 </ItemMedia>
                 <ItemContent>
                   <ItemTitle>{participant.name}</ItemTitle>
@@ -345,7 +334,7 @@ function Conversation({
         >
           <ArrowLeftIcon />
         </Button>
-        <AvatarView
+        <WhatsAppAvatar
           name={conversation.chat.name}
           initials={conversation.chat.initials}
           token={conversation.chat.avatar}

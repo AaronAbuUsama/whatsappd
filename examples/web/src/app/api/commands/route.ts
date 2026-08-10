@@ -191,7 +191,7 @@ export async function PUT(request: Request): Promise<Response> {
     let source = uploaded;
     let normalized = metadata;
     if (metadata.type === "send_audio" && metadata.ptt) {
-      const voice = await transcodeVoiceNote(uploaded);
+      const voice = await transcodeVoiceNote(uploaded, request.signal);
       source = voice.source;
       cleanup = () => voice.cleanup();
       normalized = { ...metadata, mimetype: "audio/ogg; codecs=opus" };

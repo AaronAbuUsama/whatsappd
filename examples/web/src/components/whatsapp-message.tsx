@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   CheckCheckIcon,
@@ -53,10 +53,16 @@ function shortTime(timestamp: number): string {
 
 function Receipt({ receipt }: { readonly receipt: ApplicationMessage["receipt"] }) {
   if (!receipt) return null;
-  if (receipt === "pending") return <Clock3Icon aria-label="Pending" />;
-  if (receipt === "error") return <CircleAlertIcon aria-label="Failed" />;
-  if (receipt === "server_ack") return <CheckIcon aria-label="Sent" />;
-  return <CheckCheckIcon aria-label={receipt} />;
+  if (receipt.participants.length)
+    return (
+      <span>
+        {receipt.participants.map(({ status, count }) => `${count} ${status}`).join(" · ")}
+      </span>
+    );
+  if (receipt.status === "pending") return <Clock3Icon aria-label="Pending" />;
+  if (receipt.status === "error") return <CircleAlertIcon aria-label="Failed" />;
+  if (receipt.status === "server_ack") return <CheckIcon aria-label="Sent" />;
+  return receipt.status ? <CheckCheckIcon aria-label={receipt.status} /> : null;
 }
 
 function OperationState({
@@ -118,17 +124,34 @@ function MediaContent({
 }: {
   readonly content: Extract<ApplicationMessageContent, { state: unknown }>;
 }) {
-  if (content.state === "failed" || !content.media)
+  const [loadFailed, setLoadFailed] = useState(false);
+  useEffect(() => setLoadFailed(false), [content.media]);
+  const unavailable =
+    content.state === "failed"
+      ? {
+          title: "Media download failed",
+          description: content.failure ?? "WhatsApp media could not be saved.",
+        }
+      : !content.media
+        ? {
+            title: "Media reference missing",
+            description: "This stored message has no media reference.",
+          }
+        : loadFailed
+          ? {
+              title: "Stored media missing",
+              description: "The saved media file could not be reopened.",
+            }
+          : undefined;
+  if (unavailable)
     return (
       <Attachment state="error">
         <AttachmentMedia>
           <CircleAlertIcon />
         </AttachmentMedia>
         <AttachmentContent>
-          <AttachmentTitle>Media unavailable</AttachmentTitle>
-          <AttachmentDescription>
-            {content.failure ?? "The media was not saved."}
-          </AttachmentDescription>
+          <AttachmentTitle>{unavailable.title}</AttachmentTitle>
+          <AttachmentDescription>{unavailable.description}</AttachmentDescription>
         </AttachmentContent>
       </Attachment>
     );
@@ -138,7 +161,11 @@ function MediaContent({
       <Attachment orientation="vertical">
         <AttachmentMedia variant="image">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={url} alt={content.text ?? content.fileName ?? content.kind} />
+          <img
+            src={url}
+            alt={content.text ?? content.fileName ?? content.kind}
+            onError={() => setLoadFailed(true)}
+          />
         </AttachmentMedia>
         {content.text && (
           <AttachmentContent>
@@ -147,8 +174,26 @@ function MediaContent({
         )}
       </Attachment>
     );
-  if (content.kind === "video") return <video controls preload="metadata" src={url} />;
-  if (content.kind === "audio") return <audio controls preload="metadata" src={url} />;
+  if (content.kind === "video")
+    return (
+      <video
+        controls
+        preload="metadata"
+        src={url}
+        aria-label={content.text ?? "Video message"}
+        onError={() => setLoadFailed(true)}
+      />
+    );
+  if (content.kind === "audio")
+    return (
+      <audio
+        controls
+        preload="metadata"
+        src={url}
+        aria-label={content.ptt ? "Voice message" : "Audio message"}
+        onError={() => setLoadFailed(true)}
+      />
+    );
   return (
     <Attachment>
       <AttachmentMedia>

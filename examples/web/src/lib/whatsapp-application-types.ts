@@ -77,6 +77,11 @@ export type ApplicationMessageContent =
   | { readonly kind: "unsupported"; readonly rawType: string }
   | { readonly kind: "revoked"; readonly revokedAt?: number };
 
+export type ApplicationReceipt = {
+  readonly status?: ReceiptStatus;
+  readonly participants: readonly { readonly status: ReceiptStatus; readonly count: number }[];
+};
+
 export type ApplicationMessage = {
   readonly key: string;
   readonly fromMe: boolean;
@@ -85,7 +90,7 @@ export type ApplicationMessage = {
   readonly edited: boolean;
   readonly ephemeral: boolean;
   readonly viewOnce: boolean;
-  readonly receipt?: ReceiptStatus;
+  readonly receipt?: ApplicationReceipt;
   readonly reactions: readonly { readonly emoji: string; readonly count: number }[];
   readonly quote?: { readonly key?: string; readonly sender?: string; readonly text?: string };
   readonly mentions: readonly string[];
@@ -243,6 +248,7 @@ export type WhatsAppApplication = {
   media(token: string): Promise<
     | {
         readonly source: AsyncIterable<Uint8Array>;
+        readonly byteLength: number;
         readonly mimetype: string;
         readonly fileName?: string;
       }

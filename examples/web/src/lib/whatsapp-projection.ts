@@ -11,6 +11,7 @@ import type {
 import type {
   ApplicationConnection,
   ApplicationMessageContent,
+  ApplicationReceipt,
 } from "./whatsapp-application-types.ts";
 
 export const firstName = (contact?: ContactRecord): string | undefined =>
@@ -70,12 +71,19 @@ const receiptRank: Record<ReceiptStatus, number> = {
   error: 5,
 };
 
-export function receiptOf(message: MessageRecord): ReceiptStatus | undefined {
-  return message.receipts.reduce<ReceiptStatus | undefined>(
-    (best, receipt) =>
-      !best || receiptRank[receipt.status] > receiptRank[best] ? receipt.status : best,
-    undefined,
-  );
+export function receiptOf(message: MessageRecord): ApplicationReceipt | undefined {
+  const aggregate = message.receipts.find((receipt) => receipt.subject === "aggregate")?.status;
+  const counts = new Map<ReceiptStatus, number>();
+  for (const receipt of message.receipts) {
+    if (receipt.subject === "aggregate") continue;
+    counts.set(receipt.status, (counts.get(receipt.status) ?? 0) + 1);
+  }
+  const participants = [...counts]
+    .sort(([left], [right]) => receiptRank[left] - receiptRank[right])
+    .map(([status, count]) => ({ status, count }));
+  return aggregate || participants.length
+    ? { ...(aggregate && { status: aggregate }), participants }
+    : undefined;
 }
 
 export function reactionsOf(

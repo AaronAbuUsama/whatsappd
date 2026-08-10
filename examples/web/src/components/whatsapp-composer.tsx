@@ -19,8 +19,10 @@ import {
   ReplyIcon,
   SendIcon,
   SmileIcon,
+  SquareIcon,
   VideoIcon,
   UsersIcon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import EmojiPicker, { EmojiStyle, Theme } from "emoji-picker-react";
@@ -97,12 +99,15 @@ export function WhatsAppComposer({
 }) {
   const [text, setText] = useState("");
   const [attachment, setAttachment] = useState<PendingAttachment>();
-  const [recording, setRecording] = useState(false);
+  const [recording, setRecording] = useState<"idle" | "requesting" | "recording">("idle");
   const [mentions, setMentions] = useState<string[]>([]);
   const [contactOpen, setContactOpen] = useState(false);
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const recorder = useRef<MediaRecorder | undefined>(undefined);
+  const recordingStream = useRef<MediaStream | undefined>(undefined);
+  const recordingCancelled = useRef(false);
+  const recordingAttempt = useRef(0);
   const recordingStarted = useRef(0);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const input = useRef<HTMLInputElement>(null);
@@ -111,6 +116,10 @@ export function WhatsAppComposer({
   useEffect(
     () => () => {
       if (typingTimer.current) clearTimeout(typingTimer.current);
+      recordingAttempt.current += 1;
+      recordingCancelled.current = true;
+      if (recorder.current?.state === "recording") recorder.current.stop();
+      recordingStream.current?.getTracks().forEach((track) => track.stop());
       if (canSend)
         void browser.command({ type: "typing", chat: chat.key, on: false }).catch(() => {});
     },
@@ -230,30 +239,71 @@ export function WhatsAppComposer({
       (error) => toast.error(error.message),
     );
   const toggleRecording = async (): Promise<void> => {
-    if (recording) return recorder.current?.stop();
+    if (recording === "recording") return recorder.current?.stop();
+    if (recording === "requesting") return cancelRecording();
+    const attempt = ++recordingAttempt.current;
+    recordingCancelled.current = false;
+    setRecording("requesting");
+    let acquired: MediaStream | undefined;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+      const stream = (acquired = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1 },
+      }));
+      if (attempt !== recordingAttempt.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const mediaRecorder = new MediaRecorder(stream);
       const chunks: Blob[] = [];
+      recordingStream.current = stream;
       mediaRecorder.ondataavailable = ({ data }) => chunks.push(data);
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
-        setAttachment({
-          file: new File([blob], "recording.webm", { type: blob.type }),
-          type: "send_audio",
-          ptt: true,
-          seconds: Math.max(1, Math.round((Date.now() - recordingStarted.current) / 1_000)),
-        });
+        const current = attempt === recordingAttempt.current;
+        if (current && !recordingCancelled.current) {
+          const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
+          setAttachment({
+            file: new File([blob], "recording.webm", { type: blob.type }),
+            type: "send_audio",
+            ptt: true,
+            seconds: Math.max(1, Math.round((Date.now() - recordingStarted.current) / 1_000)),
+          });
+        }
         stream.getTracks().forEach((track) => track.stop());
-        setRecording(false);
+        recordingStream.current = undefined;
+        recorder.current = undefined;
+        if (current) setRecording("idle");
+      };
+      mediaRecorder.onerror = () => {
+        recordingCancelled.current = true;
+        stream.getTracks().forEach((track) => track.stop());
+        recordingStream.current = undefined;
+        recorder.current = undefined;
+        if (attempt === recordingAttempt.current) {
+          setRecording("idle");
+          toast.error("Recording failed");
+        }
       };
       recorder.current = mediaRecorder;
       recordingStarted.current = Date.now();
       mediaRecorder.start();
-      setRecording(true);
+      setRecording("recording");
     } catch (error) {
+      acquired?.getTracks().forEach((track) => track.stop());
+      recordingStream.current = undefined;
+      recorder.current = undefined;
+      if (attempt !== recordingAttempt.current) return;
+      setRecording("idle");
       toast.error(error instanceof Error ? error.message : "Microphone unavailable");
     }
+  };
+  const cancelRecording = (): void => {
+    recordingAttempt.current += 1;
+    recordingCancelled.current = true;
+    if (recorder.current?.state === "recording") recorder.current.stop();
+    recordingStream.current?.getTracks().forEach((track) => track.stop());
+    recordingStream.current = undefined;
+    recorder.current = undefined;
+    setRecording("idle");
   };
 
   const sendContact = async (): Promise<void> => {
@@ -464,14 +514,33 @@ export function WhatsAppComposer({
                 />
               </PopoverContent>
             </Popover>
-            {!text && !attachment ? (
+            {recording !== "idle" ? (
+              <>
+                <InputGroupButton
+                  type="button"
+                  onClick={cancelRecording}
+                  aria-label="Cancel recording"
+                >
+                  <XIcon />
+                </InputGroupButton>
+                {recording === "recording" && (
+                  <InputGroupButton
+                    type="button"
+                    onClick={() => void toggleRecording()}
+                    aria-label="Stop recording"
+                  >
+                    <SquareIcon className="text-destructive" />
+                  </InputGroupButton>
+                )}
+              </>
+            ) : !text && !attachment ? (
               <InputGroupButton
                 type="button"
                 disabled={!canSend}
                 onClick={() => void toggleRecording()}
-                aria-label={recording ? "Stop recording" : "Record audio"}
+                aria-label="Record audio"
               >
-                <MicIcon className={recording ? "text-destructive" : undefined} />
+                <MicIcon />
               </InputGroupButton>
             ) : (
               <InputGroupButton type="submit" disabled={!canSend} aria-label="Send">

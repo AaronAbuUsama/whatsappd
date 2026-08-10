@@ -109,6 +109,7 @@ export function createWhatsAppApplication(
   const operations = registry<string>();
   const mediaRefs = registry<{
     readonly ref: string;
+    readonly byteLength: number;
     readonly mimetype?: string;
     readonly fileName?: string;
   }>();
@@ -192,6 +193,7 @@ export function createWhatsAppApplication(
     return mediaRefs.token(
       {
         ref: message.media.ref,
+        byteLength: message.media.byteLength,
         ...(message.media.mimetype && { mimetype: message.media.mimetype }),
         ...(message.media.fileName && { fileName: message.media.fileName }),
       },
@@ -631,6 +633,7 @@ export function createWhatsAppApplication(
       if (!source) return undefined;
       return {
         source,
+        byteLength: target.byteLength,
         mimetype: target.mimetype ?? "application/octet-stream",
         ...(target.fileName && { fileName: target.fileName }),
       };
