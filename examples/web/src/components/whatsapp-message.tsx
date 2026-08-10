@@ -247,6 +247,7 @@ function MessageActions({
   readonly browser: WhatsAppBrowser;
   readonly onReply: () => void;
 }) {
+  if (message.operation) return null;
   const run = (command: Parameters<WhatsAppBrowser["command"]>[0]): void => {
     void browser
       .command(command)
@@ -297,14 +298,18 @@ function MessageActions({
               Edit
             </DropdownMenuItem>
           )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            variant="destructive"
-            onSelect={() => run({ type: "revoke", message: message.key })}
-          >
-            <Trash2Icon />
-            Delete
-          </DropdownMenuItem>
+          {message.fromMe && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => run({ type: "revoke", message: message.key })}
+              >
+                <Trash2Icon />
+                Delete for everyone
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

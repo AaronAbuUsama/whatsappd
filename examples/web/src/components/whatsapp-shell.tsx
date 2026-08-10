@@ -266,6 +266,16 @@ function DirectoryList({
 function ConnectionAlert({ view }: { readonly view: WhatsAppApplicationView }) {
   const connection = view.account.connection;
   if (!connection || connection.phase === "online") return null;
+  if (connection.phase === "stale")
+    return (
+      <Alert className="rounded-none border-x-0 border-t-0">
+        <CircleAlertIcon />
+        <AlertTitle>Connection status is stale</AlertTitle>
+        <AlertDescription>
+          No recent live status was observed. Durable sends remain available.
+        </AlertDescription>
+      </Alert>
+    );
   const terminal =
     connection.phase === "closed" ||
     connection.phase === "logged_out" ||

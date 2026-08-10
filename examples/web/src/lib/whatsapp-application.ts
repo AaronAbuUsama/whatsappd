@@ -402,7 +402,7 @@ export function createWhatsAppApplication(
           const nativeId =
             contact.nativeIds.find(canSend) ?? contact.nativeIds[0] ?? contact.contactId;
           const groupIds = contact.nativeIds.filter(canCreateGroupWith);
-          const groupId = groupIds[0];
+          const groupId = groupIds.find((id) => id.endsWith("@s.whatsapp.net")) ?? groupIds[0];
           const name = firstName(contact) ?? nativeId.split("@")[0] ?? "Unknown contact";
           const source = avatarUrl(contact.imgUrl);
           const avatar = source ? avatars.token(source, source) : undefined;
