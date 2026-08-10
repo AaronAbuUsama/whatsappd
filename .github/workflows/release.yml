@@ -20,6 +20,7 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: pnpm
+      - uses: oven-sh/setup-bun@v2
       - run: npm install --global npm@11.5.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
@@ -34,6 +35,7 @@ jobs:
       # one artifact the packed proof never inspected — the proof would guard
       # pull requests and not releases (#119). It runs on the publishing commit,
       # so the artifact is proven on the exact commit that publishes it.
+      - run: pnpm --filter @whatsappd/example-web exec playwright install --with-deps chromium
       - run: pnpm test:pack
       - name: Publish package family to npm (skip versions already published)
         run: |
@@ -47,7 +49,12 @@ jobs:
               return
             fi
             pnpm --filter "$package" pack --pack-destination "$RUNNER_TEMP"
-            npm publish "$RUNNER_TEMP/$archive-$version.tgz" --provenance --access public
+            if [[ "$version" == *-* ]]; then
+              prerelease="${version#*-}"
+              npm publish "$RUNNER_TEMP/$archive-$version.tgz" --provenance --access public --tag "${prerelease%%.*}"
+            else
+              npm publish "$RUNNER_TEMP/$archive-$version.tgz" --provenance --access public
+            fi
           }
 
           publish whatsappd whatsappd whatsappd

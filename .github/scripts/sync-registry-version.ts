@@ -8,8 +8,8 @@ const version = JSON.parse(
   await readFile(path.join(root, "packages/whatsappd/package.json"), "utf8"),
 ).version as string;
 const files = ["registry.json", "registry/web/registry.json", "registry/opentui/registry.json"];
-const versionPattern = /(?<=(?:whatsappd|@whatsappd\/react)@)\d+\.\d+\.\d+/gu;
-const metadataPattern = /(?<="version": ")\d+\.\d+\.\d+(?=")/gu;
+const versionPattern = /(?<=(?:whatsappd|@whatsappd\/react)@)\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/gu;
+const metadataPattern = /(?<="version": ")\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?=")/gu;
 const check = process.argv.includes("--check");
 
 for (const file of files) {

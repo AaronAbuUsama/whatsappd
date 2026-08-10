@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0-alpha.0
+
+### Minor Changes
+
+- 2a67c63: Keep conversation addresses out of contacts and distinguish unknown group rosters from authoritatively empty rosters.
+- 9291dca: Add typed renderer-neutral React Provider/hooks and the shared Client subscription lifetime used by the web and OpenTUI examples.
+- 2cbd857: Add the static documentation site and version-locked source registry delivery for the package family.
+- 5b56770: Publish the editable OpenTUI components and complete inbox block through the
+  version-locked source registry.
+- 10cc549: Publish the editable web chat components and complete inbox block through the version-locked source registry.
+
+### Patch Changes
+
+- ef3fc1c: Keep reaction, edit, revoke, and protocol control envelopes out of
+  message transcripts, including when reconstructing historical batches.
+
 ## 0.3.0
 
 ### Minor Changes
