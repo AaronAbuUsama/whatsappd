@@ -1,5 +1,11 @@
 # @whatsappd/react
 
+## 0.4.0-alpha.2
+
+### Patch Changes
+
+- Publish the package family from outside the pnpm-only workspace root.
+
 ## 0.4.0-alpha.1
 
 ### Patch Changes
