@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- SQL adapter stays cohesive; split only with a second SQL backend. */
 import type { Client, Row, Transaction } from "@libsql/client";
 import type { ContactUpdate } from "../model/contact.ts";
 import type { GroupUpdate } from "../model/group.ts";
@@ -154,7 +155,35 @@ const migrations = [
         ON wa_operations (account_id, sequence);
     `,
   },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS wa_pending_message_updates (
+        account_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        PRIMARY KEY (account_id, chat_id, message_id)
+      );
+    `,
+  },
 ] as const;
+
+async function replaceEmptyLegacyOperationTable(transaction: Transaction): Promise<void> {
+  const columns = await transaction.execute("PRAGMA table_info(wa_operations)");
+  const names = new Set(columns.rows.map((row) => (typeof row.name === "string" ? row.name : "")));
+  if (!names.has("input_json") || names.has("operation_json")) return;
+
+  const count = await transaction.execute("SELECT COUNT(*) AS count FROM wa_operations");
+  if (integer(count.rows[0]?.count, "legacy operation count") !== 0) {
+    throw new Error("legacy wa_operations contains durable rows and cannot be replaced safely");
+  }
+
+  await transaction.executeMultiple(`
+    DROP TABLE wa_operations;
+    DELETE FROM wa_schema_migrations WHERE version >= 2;
+  `);
+}
 
 async function migrate(client: Client): Promise<void> {
   const transaction = await client.transaction("write");
@@ -166,6 +195,7 @@ async function migrate(client: Client): Promise<void> {
       )`,
       args: [],
     });
+    await replaceEmptyLegacyOperationTable(transaction);
     const applied = await transaction.execute({
       sql: "SELECT version FROM wa_schema_migrations",
       args: [],
@@ -313,13 +343,18 @@ function participants(value: unknown): readonly { readonly id: string; readonly 
 
 function groupRecord(value: unknown): GroupRecord {
   const record = object(value, "group record");
+  const participantsKnown =
+    record.participantsKnown === undefined
+      ? Array.isArray(record.participants) && record.participants.length > 0
+      : boolean(record.participantsKnown, "group.participantsKnown");
+  const roster = participantsKnown ? participants(record.participants) : undefined;
   return {
     accountId: string(record.accountId, "group.accountId"),
     groupId: string(record.groupId, "group.groupId"),
     ...(optionalString(record.subject, "group.subject") !== undefined && {
       subject: string(record.subject, "group.subject"),
     }),
-    participants: participants(record.participants),
+    ...(roster !== undefined && { participants: roster }),
   };
 }
 
@@ -451,14 +486,27 @@ function messageRecord(value: unknown): MessageRecord {
           };
         }),
       };
-    case "poll":
+    case "poll": {
+      const votes = record.votes;
+      if (votes !== undefined && !Array.isArray(votes))
+        throw new Error("invalid libSQL message.votes");
       return {
         ...base,
         kind: "poll",
         name: string(record.name, "message.name"),
         options: strings(record.options, "message.options"),
         selectableCount: number(record.selectableCount, "message.selectableCount"),
+        ...(votes !== undefined && {
+          votes: votes.map((value, index) => {
+            const vote = object(value, `message.votes[${index}]`);
+            return {
+              option: string(vote.option, `message.votes[${index}].option`),
+              voters: strings(vote.voters, `message.votes[${index}].voters`),
+            };
+          }),
+        }),
       };
+    }
     case "unsupported":
       return { ...base, kind: "unsupported", rawType: string(record.rawType, "message.rawType") };
     case "revoked": {
@@ -687,6 +735,25 @@ function durableUpdate(value: unknown, label: string): DurableUpdate {
       const by = optionalString(update.by, `${label}.by`);
       return { ...base, kind: "revoke", ...(by !== undefined && { by }) };
     }
+    case "poll_votes": {
+      if (!Array.isArray(update.votes)) throw new Error(`invalid libSQL ${label}.votes`);
+      return {
+        ...base,
+        kind: "poll_votes",
+        votes: update.votes.map((value, index) => {
+          const vote = object(value, `${label}.votes[${index}]`);
+          const voteAt = optionalNumber(vote.at, `${label}.votes[${index}].at`);
+          return {
+            by: string(vote.by, `${label}.votes[${index}].by`),
+            selectedOptionIds: strings(
+              vote.selectedOptionIds,
+              `${label}.votes[${index}].selectedOptionIds`,
+            ),
+            ...(voteAt !== undefined && { at: voteAt }),
+          };
+        }),
+      };
+    }
     default:
       throw new Error(`invalid libSQL ${label}.kind`);
   }
@@ -773,7 +840,8 @@ function conversationSync(value: unknown, label: string): DurableConversationSyn
   if (
     !Array.isArray(batch.chats) ||
     !Array.isArray(batch.contacts) ||
-    !Array.isArray(batch.messages)
+    !Array.isArray(batch.messages) ||
+    (batch.updates !== undefined && !Array.isArray(batch.updates))
   )
     throw new Error(`invalid libSQL ${label}`);
   const isLatest =
@@ -839,6 +907,9 @@ function conversationSync(value: unknown, label: string): DurableConversationSyn
     }),
     messages: batch.messages.map((message, index) =>
       durableMessage(message, `${label}.messages[${index}]`),
+    ),
+    updates: (batch.updates ?? []).map((update, index) =>
+      durableUpdate(update, `${label}.updates[${index}]`),
     ),
   };
 }
@@ -1134,6 +1205,18 @@ function projectionRecords(
         (record) => record.chatId === chatId && record.messageId === messageId,
         "message",
       ),
+    async pendingUpdates(chatId, messageId) {
+      const result = await transaction.execute({
+        sql: `SELECT data_json FROM wa_pending_message_updates
+          WHERE account_id = ? AND chat_id = ? AND message_id = ?`,
+        args: [accountId, chatId, messageId],
+      });
+      const value = result.rows[0]?.data_json;
+      if (value === undefined) return [];
+      const updates = parsed(value, "pending message updates data_json");
+      if (!Array.isArray(updates)) throw new Error("invalid libSQL pending message updates");
+      return updates.map((update, index) => durableUpdate(update, `pending updates[${index}]`));
+    },
   };
 }
 
@@ -1142,6 +1225,23 @@ async function applyMutation(
   accountId: string,
   mutation: CurrentMirrorMutation,
 ): Promise<void> {
+  if (mutation.type === "pending_updates") {
+    if (mutation.updates.length === 0) {
+      await transaction.execute({
+        sql: `DELETE FROM wa_pending_message_updates
+          WHERE account_id = ? AND chat_id = ? AND message_id = ?`,
+        args: [accountId, mutation.chatId, mutation.messageId],
+      });
+    } else {
+      await transaction.execute({
+        sql: `INSERT INTO wa_pending_message_updates (account_id, chat_id, message_id, data_json)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(account_id, chat_id, message_id) DO UPDATE SET data_json = excluded.data_json`,
+        args: [accountId, mutation.chatId, mutation.messageId, json(mutation.updates)],
+      });
+    }
+    return;
+  }
   if (mutation.type === "contact_alias") {
     await transaction.execute({
       sql: `INSERT INTO wa_contact_aliases (account_id, native_id, contact_id) VALUES (?, ?, ?)
@@ -1183,7 +1283,14 @@ async function applyMutation(
       await transaction.execute({
         sql: `INSERT INTO wa_groups (account_id, group_id, data_json) VALUES (?, ?, ?)
           ON CONFLICT(account_id, group_id) DO UPDATE SET data_json = excluded.data_json`,
-        args: [accountId, record.group.groupId, json(record.group)],
+        args: [
+          accountId,
+          record.group.groupId,
+          json({
+            ...record.group,
+            participantsKnown: record.group.participants !== undefined,
+          }),
+        ],
       });
       return;
     case "message":

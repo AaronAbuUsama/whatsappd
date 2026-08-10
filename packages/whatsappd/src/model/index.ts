@@ -20,6 +20,8 @@ export type {
   GroupMetadata,
   GroupParticipant,
   GroupParticipantAction,
+  GroupParticipantUpdateResult,
+  GroupSetting,
   GroupUpdate,
 } from "./group.ts";
 export type {

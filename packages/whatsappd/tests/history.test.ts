@@ -36,6 +36,88 @@ test("conversation sync messages map as non-live batch messages", () => {
   expect(message?.kind).toBe("text");
 });
 
+test("conversation sync decrypts a poll vote into an update for its poll", () => {
+  const batch = toConversationSyncBatch(
+    {
+      chats: [],
+      contacts: [],
+      messages: [
+        {
+          key: {
+            remoteJid: "room@g.us",
+            participant: "creator@s.whatsapp.net",
+            fromMe: false,
+            id: "POLL1",
+          },
+          messageTimestamp: 1_700_000_000,
+          message: {
+            messageContextInfo: {
+              messageSecret: Buffer.from(
+                "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+                "hex",
+              ),
+            },
+            pollCreationMessage: {
+              name: "Lunch?",
+              options: [{ optionName: "Waakye" }, { optionName: "Jollof" }],
+              selectableOptionsCount: 1,
+            },
+          },
+        },
+        {
+          key: {
+            remoteJid: "room@g.us",
+            participant: "voter@s.whatsapp.net",
+            fromMe: false,
+            id: "VOTE1",
+          },
+          messageTimestamp: 1_700_000_001,
+          message: {
+            pollUpdateMessage: {
+              pollCreationMessageKey: {
+                remoteJid: "room@g.us",
+                participant: "creator@s.whatsapp.net",
+                fromMe: false,
+                id: "POLL1",
+              },
+              vote: {
+                encIv: Buffer.from("000102030405060708090a0b", "hex"),
+                encPayload: Buffer.from(
+                  "c35ede711e4cbcb6184519d5af449b8f97d33bd3c07ce66c078b7efc69172b73cc411bd2f7a099058af081ddbbfd9f9c2ca5",
+                  "hex",
+                ),
+              },
+              senderTimestampMs: 1_700_000_001_000,
+            },
+          },
+        },
+      ],
+    },
+    SELF,
+  );
+
+  expect(batch.messages.length).toBe(1);
+  expect(batch.messages[0]).toMatchObject({ id: "POLL1", kind: "poll" });
+  expect(batch.updates).toEqual([
+    {
+      kind: "poll_votes",
+      ref: {
+        chatId: "room@g.us",
+        id: "POLL1",
+        fromMe: false,
+        participant: "creator@s.whatsapp.net",
+      },
+      votes: [
+        {
+          by: "voter@s.whatsapp.net",
+          selectedOptionIds: ["d18003aabfd6c7e9c5cba811355a4a6061237d3463652a59cf12af00b656c027"],
+          at: 1_700_000_001_000,
+        },
+      ],
+    },
+  ]);
+});
+
 test("conversation sync chats and contacts map without leaking Baileys types", () => {
   const batch = toConversationSyncBatch(
     {
@@ -55,6 +137,7 @@ test("conversation sync chats and contacts map without leaking Baileys types", (
         } as HistoryPayload["chats"][number],
       ],
       contacts: [
+        { id: "123-456@g.us", name: "Funding Group" },
         { id: "1555@s.whatsapp.net", name: "Alice" },
         { id: "1666@s.whatsapp.net", notify: "Bob" },
       ] as HistoryPayload["contacts"],
@@ -76,6 +159,23 @@ test("conversation sync chats and contacts map without leaking Baileys types", (
     { id: "1666@s.whatsapp.net", nativeIds: ["1666@s.whatsapp.net"], displayName: "Bob" },
   ]);
   expect(batch.messages).toEqual([]);
+});
+
+test("WC-11 conversation sync preserves absent and authoritative empty group rosters", () => {
+  const batch = toConversationSyncBatch(
+    {
+      chats: [
+        { id: "unknown@g.us", name: "Unknown" },
+        { id: "empty@g.us", name: "Empty", participants: [] },
+      ] as HistoryPayload["chats"],
+      contacts: [],
+      messages: [],
+    },
+    SELF,
+  );
+
+  expect(Object.hasOwn(batch.chats[0] ?? {}, "participants")).toBe(false);
+  expect(batch.chats[1]?.participants).toEqual([]);
 });
 
 test("conversation sync contacts retain every PN and LID form Baileys delivered", () => {

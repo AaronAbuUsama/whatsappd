@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "./_expect.ts";
 import {
+  createWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
@@ -93,6 +94,17 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
     await firstRuntime.start();
     await firstBackend.credentials.write({ registration: "durable" });
     await firstSession.emit({
+      type: "contact",
+      contact: {
+        id: CHAT,
+        nativeIds: [CHAT, "55555@lid"],
+        displayName: "Ada Display",
+        profileName: "Ada Profile",
+        verifiedName: "Ada Verified",
+        username: "ada",
+      },
+    });
+    await firstSession.emit({
       type: "message",
       message: textMessage({ id: "m1", chatId: CHAT, text: "Hello", timestamp: AT }),
     });
@@ -141,6 +153,20 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
         name: "Lunch?",
         options: ["Waakye", "Jollof"],
         selectableCount: 1,
+      },
+    });
+    await firstSession.emit({
+      type: "update",
+      update: {
+        kind: "poll_votes",
+        ref: { id: "poll-1", chatId: CHAT, fromMe: false },
+        votes: [
+          {
+            by: CHAT,
+            selectedOptionIds: ["d18003aabfd6c7e9c5cba811355a4a6061237d3463652a59cf12af00b656c027"],
+            at: AT + 4,
+          },
+        ],
       },
     });
     await firstSession.emit({
@@ -254,7 +280,17 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
     const replacementClient = createRuntimeMirrorReader(replacementRuntime);
 
     await replacementRuntime.start();
-    expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);
+    const reconstructed = await firstSnapshot(replacementClient);
+    expect(reconstructed).toEqual(expectedSnapshot);
+    expect(reconstructed.contacts.find(({ contactId }) => contactId === CHAT)).toEqual({
+      accountId: ACCOUNT,
+      contactId: CHAT,
+      nativeIds: [CHAT, "55555@lid"],
+      displayName: "Ada Display",
+      profileName: "Ada Profile",
+      verifiedName: "Ada Verified",
+      username: "ada",
+    });
     expect(await replacementClient.messages(CHAT)).toEqual(expectedPage);
     expect(await replacementClient.messages(ROOM)).toEqual(expectedGroupPage);
     expect(
@@ -286,6 +322,17 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
       "location",
       "text",
     ]);
+    expect(
+      (await replacementClient.messages(CHAT)).messages.find(
+        ({ messageId }) => messageId === "poll-1",
+      ),
+    ).toMatchObject({
+      kind: "poll",
+      votes: [
+        { option: "Waakye", voters: [CHAT] },
+        { option: "Jollof", voters: [] },
+      ],
+    });
     expect(
       (await replacementClient.messages(CHAT)).messages.find(
         ({ messageId }) => messageId === "updated",
@@ -320,6 +367,246 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
 
     await replacementRuntime.stop();
     await replacementBackend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("historical controls wait durably for targets in a later process", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-controls-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const liveChat = "1777@s.whatsapp.net";
+  const actor = "1888@s.whatsapp.net";
+
+  try {
+    const firstBackend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    const firstSession = createTestWhatsAppSession();
+    const firstRuntime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: firstBackend,
+      openSession: () => firstSession.session,
+    });
+    await firstRuntime.start();
+    await firstSession.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "recent", projection: { mode: "upsert" } },
+        chats: [],
+        contacts: [],
+        messages: [],
+        updates: [
+          {
+            kind: "reaction",
+            ref: { id: "reaction-target", chatId: CHAT, fromMe: false },
+            emoji: "👍",
+            by: actor,
+            removed: false,
+            at: AT + 1,
+          },
+          {
+            kind: "edit",
+            ref: { id: "edit-target", chatId: CHAT, fromMe: false },
+            at: AT + 2,
+            message: textMessage({
+              id: "edit-envelope",
+              chatId: CHAT,
+              text: "After",
+              timestamp: AT,
+            }),
+          },
+          {
+            kind: "revoke",
+            ref: { id: "revoke-target", chatId: CHAT, fromMe: false },
+            by: actor,
+            at: AT + 3,
+          },
+        ],
+      },
+    });
+    for (const message of [
+      textMessage({ id: "reaction-target", chatId: liveChat, text: "React", timestamp: AT }),
+      textMessage({ id: "edit-target", chatId: liveChat, text: "Before", timestamp: AT }),
+      textMessage({ id: "revoke-target", chatId: liveChat, text: "Remove", timestamp: AT }),
+    ])
+      await firstSession.emit({ type: "message", message });
+    for (const update of [
+      {
+        kind: "reaction" as const,
+        ref: { id: "reaction-target", chatId: liveChat, fromMe: false },
+        emoji: "👍",
+        by: actor,
+        removed: false,
+        at: AT + 1,
+      },
+      {
+        kind: "edit" as const,
+        ref: { id: "edit-target", chatId: liveChat, fromMe: false },
+        at: AT + 2,
+        message: textMessage({
+          id: "edit-envelope",
+          chatId: liveChat,
+          text: "After",
+          timestamp: AT,
+        }),
+      },
+      {
+        kind: "revoke" as const,
+        ref: { id: "revoke-target", chatId: liveChat, fromMe: false },
+        by: actor,
+        at: AT + 3,
+      },
+    ])
+      await firstSession.emit({ type: "update", update });
+    await firstRuntime.stop();
+    await firstBackend.close();
+
+    const replacementBackend = libsqlBackend({
+      url,
+      accountId: ACCOUNT,
+      media: memoryMediaStore(),
+    });
+    const replacementSession = createTestWhatsAppSession();
+    const replacementRuntime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: replacementBackend,
+      openSession: () => replacementSession.session,
+    });
+    const replacementClient = createRuntimeMirrorReader(replacementRuntime);
+    await replacementRuntime.start();
+    await replacementSession.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "recent", projection: { mode: "upsert" } },
+        chats: [{ id: CHAT, isGroup: false }],
+        contacts: [],
+        messages: [
+          textMessage({ id: "reaction-target", chatId: CHAT, text: "React", timestamp: AT }),
+          textMessage({ id: "edit-target", chatId: CHAT, text: "Before", timestamp: AT }),
+          textMessage({ id: "revoke-target", chatId: CHAT, text: "Remove", timestamp: AT }),
+        ],
+      },
+    });
+
+    const messages = await replacementClient.messages(CHAT);
+    const byId = new Map(messages.messages.map((message) => [message.messageId, message]));
+    expect(byId.get("reaction-target")?.reactions).toEqual([
+      { subject: actor, emoji: "👍", by: actor, at: AT + 1 },
+    ]);
+    expect(byId.get("edit-target")).toMatchObject({
+      kind: "text",
+      text: "After",
+      editedAt: AT + 2,
+    });
+    expect(byId.get("revoke-target")).toMatchObject({
+      kind: "revoked",
+      revokedBy: actor,
+      revokedAt: AT + 3,
+    });
+    const semantics = (chatId: string) =>
+      replacementClient.messages(chatId).then(({ messages }) =>
+        messages
+          .map((message) => ({
+            messageId: message.messageId,
+            kind: message.kind,
+            reactions: message.reactions,
+            ...(message.kind === "text" && { text: message.text, editedAt: message.editedAt }),
+            ...(message.kind === "revoked" && {
+              revokedAt: message.revokedAt,
+              revokedBy: message.revokedBy,
+            }),
+          }))
+          .sort((left, right) => left.messageId.localeCompare(right.messageId)),
+      );
+    expect(await semantics(CHAT)).toEqual(await semantics(liveChat));
+
+    await replacementRuntime.stop();
+    await replacementBackend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("WC-11 a libSQL restart preserves unknown and authoritative empty group membership", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-groups-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const emptyRoom = "empty@g.us";
+  const legacyRoom = "legacy@g.us";
+  const legacyPopulatedRoom = "legacy-populated@g.us";
+
+  try {
+    const first = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    await first.data.accept(
+      ACCOUNT,
+      [
+        {
+          observedAt: AT,
+          event: {
+            type: "conversation_sync",
+            batch: {
+              context: { source: "recent", projection: { mode: "upsert" } },
+              chats: [
+                { id: ROOM, isGroup: true, subject: "Unknown" },
+                { id: emptyRoom, isGroup: true, subject: "Empty", participants: [] },
+              ],
+              contacts: [],
+              messages: [],
+            },
+          },
+        },
+      ],
+      1,
+    );
+    await first.close();
+
+    const raw = createClient({ url });
+    await raw.execute({
+      sql: "INSERT INTO wa_groups (account_id, group_id, data_json) VALUES (?, ?, ?)",
+      args: [
+        ACCOUNT,
+        legacyRoom,
+        JSON.stringify({
+          accountId: ACCOUNT,
+          groupId: legacyRoom,
+          subject: "Legacy unknown",
+          participants: [],
+        }),
+      ],
+    });
+    await raw.execute({
+      sql: "INSERT INTO wa_groups (account_id, group_id, data_json) VALUES (?, ?, ?)",
+      args: [
+        ACCOUNT,
+        legacyPopulatedRoom,
+        JSON.stringify({
+          accountId: ACCOUNT,
+          groupId: legacyPopulatedRoom,
+          subject: "Legacy populated",
+          participants: [{ id: CHAT }],
+        }),
+      ],
+    });
+    raw.close();
+
+    const replacement = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    const runtime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: replacement,
+      openSession: () => {
+        throw new Error("restart proof does not open WhatsApp");
+      },
+    });
+    const client = await createWhatsAppClient(runtime);
+    try {
+      const groups = new Map(client.groups.list().map((group) => [group.groupId, group]));
+      expect(groups.get(ROOM)?.participants).toBe(undefined);
+      expect(groups.get(emptyRoom)?.participants).toEqual([]);
+      expect(groups.get(legacyRoom)?.participants).toBe(undefined);
+      expect(groups.get(legacyPopulatedRoom)?.participants).toEqual([{ id: CHAT }]);
+    } finally {
+      await client.close();
+      await runtime.stop();
+      await replacement.close();
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -558,6 +845,62 @@ test("a patch stored before aliases were carried still resolves addresses", asyn
       await upgraded.close();
     }
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an empty legacy operation table upgrades without blocking the saved mirror", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-legacy-operations-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const created = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  await created.data.snapshot(ACCOUNT);
+  await created.close();
+
+  const legacy = createClient({ url });
+  await legacy.executeMultiple(`
+    DROP TABLE wa_operations;
+    DELETE FROM wa_schema_migrations WHERE version = 3;
+    CREATE TABLE wa_operations (
+      operation_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      input_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempt_id TEXT,
+      lease_expires_at INTEGER,
+      started_at INTEGER,
+      result_json TEXT,
+      error_json TEXT,
+      unknown_reason TEXT,
+      submitted_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      PRIMARY KEY (account_id, operation_id)
+    );
+  `);
+  legacy.close();
+
+  const upgraded = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+  try {
+    expect(await upgraded.operations.list(ACCOUNT)).toEqual([]);
+    expect((await upgraded.data.snapshot(ACCOUNT)).chats).toEqual([]);
+  } finally {
+    await upgraded.close();
+  }
+
+  const inspected = createClient({ url });
+  try {
+    const columns = await inspected.execute("PRAGMA table_info(wa_operations)");
+    expect(columns.rows.map((row) => row.name)).toEqual([
+      "account_id",
+      "operation_id",
+      "idempotency_key",
+      "submitted_at",
+      "operation_json",
+      "sequence",
+    ]);
+  } finally {
+    inspected.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

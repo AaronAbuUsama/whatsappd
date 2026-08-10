@@ -12,6 +12,10 @@
  * content lands in the same normalized shape as a message handler receives.
  */
 import {
+  decryptPollVote,
+  getKeyAuthor,
+  jidNormalizedUser,
+  normalizeMessageContent,
   proto,
   type WAMessage,
   type WAMessageKey,
@@ -19,6 +23,7 @@ import {
   type MessageUserReceiptUpdate,
 } from "baileys";
 import type { WhatsAppAddress } from "../model/message.ts";
+import type { MessageRef } from "../model/outbound.ts";
 import type { ReceiptStatus, Update } from "../model/update.ts";
 import type { DownloadThunk } from "./download.ts";
 import { keyToRef } from "./outbound.ts";
@@ -32,6 +37,11 @@ function secsToMs(v: number | { toNumber(): number } | null | undefined): number
   if (v == null) return undefined;
   const n = typeof v === "number" ? v : v.toNumber();
   return n * 1000;
+}
+
+function millis(v: number | { toNumber(): number } | null | undefined): number | undefined {
+  if (v == null) return undefined;
+  return typeof v === "number" ? v : v.toNumber();
 }
 
 /** WebMessageInfo.Status enum → our ladder. SERVER_ACK is "sent to server". */
@@ -65,6 +75,7 @@ export function mapMessageUpdate(
   u: WAMessageUpdate,
   self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
+  live = true,
 ): Update | undefined {
   const ref = keyToRef(u.key);
   const up = u.update;
@@ -85,16 +96,135 @@ export function mapMessageUpdate(
       message: edited,
       messageTimestamp: up.messageTimestamp ?? undefined,
     } as WAMessage;
-    const message = toInbound(synthetic, true, self, makeDownload);
+    const message = toInbound(synthetic, live, self, makeDownload);
     if (!message) return undefined;
     return { kind: "edit", ref, message };
   }
+
+  const pollVotes = (up.pollUpdates ?? []).flatMap((poll) => {
+    const by = poll.pollUpdateMessageKey && getKeyAuthor(poll.pollUpdateMessageKey, self.id);
+    if (!by || !poll.vote) return [];
+    const at = millis(poll.senderTimestampMs);
+    return [
+      {
+        by,
+        selectedOptionIds: (poll.vote.selectedOptions ?? []).map((option) =>
+          Buffer.from(option).toString("hex"),
+        ),
+        ...(at !== undefined && { at }),
+      },
+    ];
+  });
+  if (pollVotes.length) return { kind: "poll_votes", ref, votes: pollVotes };
 
   // RECEIPT — plain per-message status change (the 1:1 case).
   const status = statusOf(up.status);
   if (status) return { kind: "receipt", ref, status };
 
   return undefined;
+}
+
+function mapPollControl(
+  raw: WAMessage,
+  poll: proto.Message.IPollUpdateMessage,
+  self: WhatsAppAddress,
+  resolveMessage?: (ref: MessageRef) => WAMessage | undefined,
+): { readonly update?: Update } {
+  const creationKey = poll.pollCreationMessageKey;
+  const creation = creationKey?.id ? resolveMessage?.(keyToRef(creationKey)) : undefined;
+  const pollEncKey = normalizeMessageContent(creation?.message)?.messageContextInfo?.messageSecret;
+  const pollCreatorJid = getKeyAuthor(creationKey, jidNormalizedUser(self.id));
+  const voterJid = getKeyAuthor(raw.key, jidNormalizedUser(self.id));
+  if (!creationKey?.id || !poll.vote || !pollEncKey || !pollCreatorJid || !voterJid) return {};
+  try {
+    const vote = decryptPollVote(poll.vote, {
+      pollCreatorJid: jidNormalizedUser(pollCreatorJid),
+      pollMsgId: creationKey.id,
+      pollEncKey,
+      voterJid: jidNormalizedUser(voterJid),
+    });
+    const at = millis(poll.senderTimestampMs);
+    return {
+      update: {
+        kind: "poll_votes",
+        ref: keyToRef(creationKey),
+        votes: [
+          {
+            by: voterJid,
+            selectedOptionIds: (vote.selectedOptions ?? []).map((option) =>
+              Buffer.from(option).toString("hex"),
+            ),
+            ...(at !== undefined && { at }),
+          },
+        ],
+      },
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** Turn a raw control envelope into the same update Baileys emits separately. */
+export function mapMessageControl(
+  raw: WAMessage,
+  live: boolean,
+  self: WhatsAppAddress,
+  makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
+  resolveMessage?: (ref: MessageRef) => WAMessage | undefined,
+): { readonly update?: Update } | undefined {
+  const content = normalizeMessageContent(raw.message);
+  const reaction = content?.reactionMessage;
+  if (reaction?.key?.id && reaction.key.remoteJid) {
+    return { update: mapReaction({ key: reaction.key, reaction: { ...reaction, key: raw.key } }) };
+  }
+  if (reaction) return {};
+
+  const poll = content?.pollUpdateMessage;
+  if (poll) return mapPollControl(raw, poll, self, resolveMessage);
+
+  const protocol = content?.protocolMessage;
+  if (!protocol) return undefined;
+  if (!protocol.key?.id || !raw.key.remoteJid) return {};
+  const key = { ...raw.key, id: protocol.key.id };
+  if (protocol.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+    const update = mapMessageUpdate(
+      {
+        key,
+        update: {
+          message: null,
+          messageStubType: proto.WebMessageInfo.StubType.REVOKE,
+          key: raw.key,
+        },
+      },
+      self,
+      makeDownload,
+      live,
+    );
+    return update ? { update } : {};
+  }
+  if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT && protocol.editedMessage) {
+    const timestampMs = protocol.timestampMs;
+    const timestamp =
+      timestampMs == null
+        ? raw.messageTimestamp
+        : Math.floor(
+            (typeof timestampMs === "number" ? timestampMs : timestampMs.toNumber()) / 1000,
+          );
+    const update = mapMessageUpdate(
+      {
+        key,
+        update: {
+          message: { editedMessage: { message: protocol.editedMessage } },
+          messageTimestamp: timestamp,
+        },
+      },
+      self,
+      makeDownload,
+      live,
+    );
+    return update ? { update } : {};
+  }
+  return {};
 }
 
 /** Map a per-participant receipt (`message-receipt.update`, the group case). */

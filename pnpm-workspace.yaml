@@ -5,6 +5,8 @@ packages:
 
 allowBuilds:
   baileys: false
+  esbuild: true
+  ffmpeg-static: true
   protobufjs: false
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.2
@@ -12,7 +14,11 @@ catalog:
 minimumReleaseAgeExclude:
   - baileys@7.0.0-rc14
 overrides:
+  "@vitest/browser": 4.1.9
+  "@vitest/browser-playwright": 4.1.9
+  "@vitest/browser-preview": 4.1.9
   vite: "catalog:"
+  vitest: 4.1.9
 peerDependencyRules:
   allowAny:
     - vite

@@ -1868,9 +1868,7 @@ test("everything a live account delivers alongside a message keeps the runtime u
       profileName: "Someone Else",
     },
   ]);
-  expect(snapshot.groups).toEqual([
-    { accountId: "personal", groupId: ROOM, subject: "The Room", participants: [] },
-  ]);
+  expect(snapshot.groups).toEqual([{ accountId: "personal", groupId: ROOM, subject: "The Room" }]);
   // The receipt has no projection yet, but it is still a durable observation.
   const accepted = await backend.data.accepted("personal", 0);
   expect(accepted.map((batch) => batch.events[0]?.event.type)).toEqual([

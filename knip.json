@@ -11,7 +11,27 @@
     }
   },
 
-  "ignoreDependencies": ["@typescript/native-preview", "vite"],
+  "ignore": ["examples/web/src/components/ui/**"],
+
+  "ignoreDependencies": [
+    "@base-ui/react",
+    "@typescript/native-preview",
+    "cmdk",
+    "date-fns",
+    "embla-carousel-react",
+    "input-otp",
+    "react-day-picker",
+    "react-resizable-panels",
+    "recharts",
+    "use-stick-to-bottom",
+    "vaul",
+    "vite"
+  ],
+
+  "ignoreIssues": {
+    "examples/web/src/components/ai-elements/**": ["exports", "types"],
+    "examples/web/src/components/ui/**": ["exports", "types"]
+  },
 
   "ignoreExportsUsedInFile": true,
   "includeEntryExports": false

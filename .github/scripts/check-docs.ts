@@ -48,6 +48,8 @@ const DOCS = [
   "docs/runbooks/delivery/release.md",
   "docs/runbooks/operations/ci-alerts.md",
   "docs/runbooks/development/real-account-testing.md",
+  "docs/architecture/web-client-feature-contract.md",
+  ".agents/prompts/web-client-goal.md",
 ];
 
 /**
@@ -133,6 +135,25 @@ assert.doesNotMatch(
   "README examples must not infer a real send target from the first chat",
 );
 
+const webClientContractPath = "docs/architecture/web-client-feature-contract.md";
+const webClientContract = await readFile(path.join(root, webClientContractPath), "utf8");
+const webClientFeatures = [...webClientContract.matchAll(/^### (WC-\d+) — .+$/gm)];
+assert.ok(webClientFeatures.length > 0, `${webClientContractPath}: contains no WC features`);
+assert.equal(
+  new Set(webClientFeatures.map((match) => match[1])).size,
+  webClientFeatures.length,
+  `${webClientContractPath}: WC ids must be unique`,
+);
+
+for (const [index, feature] of webClientFeatures.entries()) {
+  const id = feature[1];
+  const start = feature.index ?? 0;
+  const end = webClientFeatures[index + 1]?.index ?? webClientContract.length;
+  const section = webClientContract.slice(start, end);
+  assert.match(section, /\*\*Concrete tests\*\*\n\n1\./, `${id}: needs numbered concrete tests`);
+  assert.match(section, /\*\*Definition of Done\*\*/, `${id}: needs a Definition of Done`);
+}
+
 for (const doc of DOCS) {
   const absolute = path.join(root, doc);
   if (!existsSync(absolute)) {
@@ -185,4 +206,6 @@ assert.deepEqual(
     .join("\n")}\n`,
 );
 
-console.log(`docs-references: ${DOCS.length} documents, every path and pnpm script resolves`);
+console.log(
+  `docs-references: ${DOCS.length} documents resolve; ${webClientFeatures.length} WC features have tests and DoD`,
+);

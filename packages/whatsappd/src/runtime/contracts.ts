@@ -73,8 +73,9 @@ type WithDurableMedia<Message> = Message extends { readonly media: MediaHandle }
 export type DurableInboundMessage = WithDurableMedia<InboundMessage>;
 
 /** A conversation-sync batch whose media handles have all been consumed. */
-export type DurableConversationSyncBatch = Omit<ConversationSyncBatch, "messages"> & {
+export type DurableConversationSyncBatch = Omit<ConversationSyncBatch, "messages" | "updates"> & {
   readonly messages: readonly DurableInboundMessage[];
+  readonly updates?: readonly DurableUpdate[];
 };
 
 type EditUpdate = Extract<Update, { kind: "edit" }>;
@@ -171,6 +172,10 @@ export type MessageRecord = MessageRecordBase &
         readonly name: string;
         readonly options: readonly string[];
         readonly selectableCount: number;
+        readonly votes?: readonly {
+          readonly option: string;
+          readonly voters: readonly string[];
+        }[];
       }
     | { readonly kind: "unsupported"; readonly rawType: string }
     | { readonly kind: "revoked"; readonly revokedAt?: number; readonly revokedBy?: string }
@@ -225,7 +230,8 @@ export interface GroupRecord {
   readonly accountId: string;
   readonly groupId: string;
   readonly subject?: string;
-  readonly participants: readonly GroupParticipant[];
+  /** Absent until WhatsApp has supplied an authoritative roster; an empty array is known-empty. */
+  readonly participants?: readonly GroupParticipant[];
 }
 
 /**

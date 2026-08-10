@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { GroupParticipant, GroupUpdate } from "../model/group.ts";
 import type { HistoryChat } from "../model/history.ts";
@@ -26,12 +27,19 @@ export interface CurrentMirrorRecords {
   contactId(nativeId: string): Promise<string | undefined>;
   group(groupId: string): Promise<GroupRecord | undefined>;
   message(chatId: string, messageId: string): Promise<MessageRecord | undefined>;
+  pendingUpdates(chatId: string, messageId: string): Promise<readonly DurableUpdate[]>;
 }
 
 export type CurrentMirrorMutation =
   | { readonly type: "upsert"; readonly record: MirrorRecord }
   | { readonly type: "delete"; readonly record: MirrorDelete }
-  | { readonly type: "contact_alias"; readonly nativeId: string; readonly contactId: string };
+  | { readonly type: "contact_alias"; readonly nativeId: string; readonly contactId: string }
+  | {
+      readonly type: "pending_updates";
+      readonly chatId: string;
+      readonly messageId: string;
+      readonly updates: readonly DurableUpdate[];
+    };
 
 export interface CurrentMirrorProjection {
   readonly upserts: readonly MirrorRecord[];
@@ -48,6 +56,8 @@ interface ProjectionState {
   contactId(nativeId: string): Promise<string | undefined>;
   group(groupId: string): Promise<GroupRecord | undefined>;
   message(chatId: string, messageId: string): Promise<MessageRecord | undefined>;
+  pendingUpdates(chatId: string, messageId: string): Promise<readonly DurableUpdate[]>;
+  setPendingUpdates(chatId: string, messageId: string, updates: readonly DurableUpdate[]): void;
   upsert(record: MirrorRecord): void;
   delete(record: MirrorDelete): void;
   alias(nativeId: string, contactId: string): Promise<void>;
@@ -66,6 +76,7 @@ function projectionState(
   const contactIds = new Map<string, string | undefined>();
   const groups = new Map<string, GroupRecord | undefined>();
   const messages = new Map<string, MessageRecord | undefined>();
+  const pendingUpdates = new Map<string, readonly DurableUpdate[]>();
   const messageKey = (chatId: string, messageId: string): string => `${chatId}\0${messageId}`;
 
   return {
@@ -92,6 +103,16 @@ function projectionState(
       const key = messageKey(chatId, messageId);
       if (!messages.has(key)) messages.set(key, await records.message(chatId, messageId));
       return messages.get(key);
+    },
+    async pendingUpdates(chatId, messageId) {
+      const key = messageKey(chatId, messageId);
+      if (!pendingUpdates.has(key))
+        pendingUpdates.set(key, await records.pendingUpdates(chatId, messageId));
+      return pendingUpdates.get(key)!;
+    },
+    setPendingUpdates(chatId, messageId, updates) {
+      pendingUpdates.set(messageKey(chatId, messageId), updates);
+      mutations.push({ type: "pending_updates", chatId, messageId, updates });
     },
     upsert(record) {
       switch (record.type) {
@@ -226,11 +247,12 @@ async function projectSyncedChat(
     lastMessageAt: chat.lastMessageAt ?? 0,
   });
   if (!chat.isGroup) return;
+  const participants = chat.participants ?? (await state.group(chat.id))?.participants;
   await projectGroup(state, {
     accountId,
     groupId: chat.id,
     ...(chat.subject !== undefined && { subject: chat.subject }),
-    participants: chat.participants ?? (await state.group(chat.id))?.participants ?? [],
+    ...(participants !== undefined && { participants }),
   });
 }
 
@@ -348,6 +370,9 @@ async function projectMessage(
       reactions: [],
     };
     state.upsert({ type: "message", message: withCurrentContent(base, message) });
+    const pending = await state.pendingUpdates(message.chatId, message.id);
+    for (const update of pending) await projectMessageUpdate(state, update);
+    if (pending.length > 0) state.setPendingUpdates(message.chatId, message.id, []);
   }
   await projectChat(state, {
     accountId,
@@ -357,26 +382,56 @@ async function projectMessage(
   });
 }
 
+function withPollVotes(
+  existing: Extract<MessageRecord, { readonly kind: "poll" }>,
+  update: Extract<DurableUpdate, { readonly kind: "poll_votes" }>,
+): MessageRecord {
+  const optionIds = new Map(
+    existing.options.map((option) => [option, createHash("sha256").update(option).digest("hex")]),
+  );
+  let votes = existing.votes ?? existing.options.map((option) => ({ option, voters: [] }));
+  for (const vote of update.votes) {
+    const selected = new Set(vote.selectedOptionIds);
+    votes = votes.map(({ option, voters }) => {
+      const next = voters.filter((voter) => voter !== vote.by);
+      if (selected.has(optionIds.get(option)!)) next.push(vote.by);
+      return { option, voters: next };
+    });
+  }
+  return { ...existing, votes };
+}
+
+function withReceipt(
+  existing: MessageRecord,
+  update: Extract<DurableUpdate, { readonly kind: "receipt" }>,
+): MessageRecord {
+  const subject = update.by === undefined ? "aggregate" : `participant:${update.by}`;
+  const receipt = {
+    subject,
+    status: update.status,
+    ...(update.by !== undefined && { by: update.by }),
+    ...(update.at !== undefined && { at: update.at }),
+  };
+  const index = existing.receipts.findIndex((current) => current.subject === subject);
+  const receipts =
+    index === -1
+      ? [...existing.receipts, receipt]
+      : existing.receipts.map((current, currentIndex) =>
+          currentIndex === index ? receipt : current,
+        );
+  return { ...existing, receipts };
+}
+
 async function projectMessageUpdate(state: ProjectionState, update: DurableUpdate): Promise<void> {
   const existing = await state.message(update.ref.chatId, update.ref.id);
-  if (!existing) return;
+  if (!existing) {
+    const pending = await state.pendingUpdates(update.ref.chatId, update.ref.id);
+    state.setPendingUpdates(update.ref.chatId, update.ref.id, [...pending, update]);
+    return;
+  }
 
   if (update.kind === "receipt") {
-    const subject = update.by === undefined ? "aggregate" : `participant:${update.by}`;
-    const receipt = {
-      subject,
-      status: update.status,
-      ...(update.by !== undefined && { by: update.by }),
-      ...(update.at !== undefined && { at: update.at }),
-    };
-    const index = existing.receipts.findIndex((current) => current.subject === subject);
-    const receipts =
-      index === -1
-        ? [...existing.receipts, receipt]
-        : existing.receipts.map((current, currentIndex) =>
-            currentIndex === index ? receipt : current,
-          );
-    const message = { ...existing, receipts };
+    const message = withReceipt(existing, update);
     if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
     return;
   }
@@ -409,6 +464,13 @@ async function projectMessageUpdate(state: ProjectionState, update: DurableUpdat
                 : current,
             );
     const message = { ...existing, reactions };
+    if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
+    return;
+  }
+
+  if (update.kind === "poll_votes") {
+    if (existing.kind !== "poll") return;
+    const message = withPollVotes(existing, update);
     if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
     return;
   }
@@ -473,7 +535,7 @@ async function projectEvent(
     case "update":
       return projectMessageUpdate(state, event.update);
     case "conversation_sync": {
-      const { context, chats, contacts, messages } = event.batch;
+      const { context, chats, contacts, messages, updates } = event.batch;
       if (context.projection.mode !== "upsert")
         throw new UnsupportedDurableEventError("an authoritative conversation-sync replacement");
       for (const chat of chats) await projectSyncedChat(state, accountId, chat);
@@ -485,6 +547,7 @@ async function projectEvent(
           ...(contact.displayName !== undefined && { displayName: contact.displayName }),
         });
       for (const message of messages) await projectMessage(state, accountId, message);
+      for (const update of updates ?? []) await projectMessageUpdate(state, update);
       return;
     }
     case "contact": {
@@ -503,16 +566,17 @@ async function projectEvent(
     }
     case "group": {
       const { group } = event;
-      const roster = (await state.group(group.id))?.participants ?? [];
+      const roster = (await state.group(group.id))?.participants;
       const renamed = group.kind === "metadata" && group.subject !== undefined;
+      const participants =
+        group.kind === "participants"
+          ? roster && rosterAfter(roster, group)
+          : (group.participants ?? roster);
       await projectGroup(state, {
         accountId,
         groupId: group.id,
         ...(renamed && { subject: group.subject }),
-        participants:
-          group.kind === "participants"
-            ? rosterAfter(roster, group)
-            : (group.participants ?? roster),
+        ...(participants !== undefined && { participants }),
       });
       if (renamed)
         await projectChat(state, {

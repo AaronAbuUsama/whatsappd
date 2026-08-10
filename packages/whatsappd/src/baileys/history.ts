@@ -4,11 +4,14 @@ import type {
   HistoryChat,
   HistoryContact,
   InboundMessage,
+  Update,
   WhatsAppAddress,
 } from "../model/index.ts";
+import { isContactNativeId } from "../model/contact.ts";
 import { contactNativeIds } from "./contacts.ts";
 import { noDownloader, type DownloadThunk } from "./download.ts";
 import { toInbound } from "./inbound.ts";
+import { mapMessageControl } from "./updates.ts";
 
 type HistoryPayload = BaileysEventMap["messaging-history.set"];
 type ConversationSyncPayload = Pick<HistoryPayload, "chats" | "contacts" | "messages"> &
@@ -54,7 +57,7 @@ function toHistoryParticipants(
       ...(participant.admin ? { role: participant.admin } : {}),
     });
   }
-  return out.length > 0 ? out : undefined;
+  return out.length > 0 || participants.length === 0 ? out : undefined;
 }
 
 function toHistoryChat(chat: HistoryPayload["chats"][number]): HistoryChat | undefined {
@@ -76,7 +79,7 @@ function toHistoryChat(chat: HistoryPayload["chats"][number]): HistoryChat | und
 function toHistoryContact(contact: HistoryPayload["contacts"][number]): HistoryContact | undefined {
   const nativeIds = contactNativeIds(contact);
   const id = nativeIds[0];
-  if (!id) return undefined;
+  if (!id || !nativeIds.every(isContactNativeId)) return undefined;
   const displayName = firstText(
     contact.name,
     contact.notify,
@@ -103,7 +106,7 @@ export function toConversationSyncBatch(
     const mapped = toHistoryContact(contact);
     return mapped ? [mapped] : [];
   });
-  const messages = toConversationSyncMessages(payload.messages, self, makeDownload);
+  const { messages, updates } = toConversationSyncMessages(payload.messages, self, makeDownload);
   const source = (() => {
     switch (payload.syncType) {
       case proto.HistorySync.HistorySyncType.INITIAL_BOOTSTRAP:
@@ -134,6 +137,7 @@ export function toConversationSyncBatch(
     chats,
     contacts,
     messages,
+    updates,
   };
 }
 
@@ -141,9 +145,18 @@ function toConversationSyncMessages(
   messages: readonly WAMessage[],
   self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
-): InboundMessage[] {
-  return messages.flatMap((raw) => {
+): { messages: InboundMessage[]; updates: Update[] } {
+  const normalized: InboundMessage[] = [];
+  const updates: Update[] = [];
+  const rawById = new Map(messages.flatMap((raw) => (raw.key.id ? [[raw.key.id, raw]] : [])));
+  for (const raw of messages) {
+    const control = mapMessageControl(raw, false, self, makeDownload, (ref) => rawById.get(ref.id));
+    if (control) {
+      if (control.update) updates.push(control.update);
+      continue;
+    }
     const msg = toInbound(raw, false, self, makeDownload);
-    return msg ? [msg] : [];
-  });
+    if (msg) normalized.push(msg);
+  }
+  return { messages: normalized, updates };
 }

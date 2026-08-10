@@ -23,6 +23,9 @@ import { settle } from "../outcome.ts";
 import {
   addressOf,
   type GroupMetadata,
+  type GroupParticipantAction,
+  type GroupParticipantUpdateResult,
+  type GroupSetting,
   type GroupUpdate,
   type ConversationSyncBatch,
   type InboundMessage,
@@ -35,12 +38,14 @@ import { mapContactUpdates } from "./contacts.ts";
 import { mapGroupMetadataUpdates, mapGroupParticipantsUpdate } from "./groups.ts";
 import { toConversationSyncBatch } from "./history.ts";
 import { toInbound } from "./inbound.ts";
-import { mapMessageUpdate, mapReaction, mapReceiptUpdate } from "./updates.ts";
+import { mapMessageControl, mapMessageUpdate, mapReaction, mapReceiptUpdate } from "./updates.ts";
 import { mapPresenceUpdate } from "./presence.ts";
 import { mediaDownloader, noDownloader, type DownloadThunk } from "./download.ts";
 import { keyToRef, refToKey, toContent, toOptions } from "./outbound.ts";
 
-/** How many recent raw messages to retain for quote resolution. */
+/** How many recent raw messages to retain for quote and poll-key resolution.
+ * ponytail: add a private durable poll-key capability only if votes older than
+ * this live cache are required; never expose message secrets in the mirror. */
 const RECENT_CAP = 500;
 import type { BaileysAuth } from "./auth-state.ts";
 
@@ -68,7 +73,7 @@ export type RawEvent =
   | { t: "conversation_sync_complete" } // RECENT history status complete/paused or progress===100
   | { t: "conversation_sync"; sync: ConversationSyncBatch }
   | { t: "message"; msg: InboundMessage }
-  | { t: "update"; update: Update } // receipt / reaction / edit / revoke
+  | { t: "update"; update: Update } // receipt / reaction / edit / revoke / poll result
   | { t: "contact"; contact: import("../model/contact.ts").ContactUpdate }
   | { t: "group"; group: GroupUpdate }
   | { t: "presence"; presence: import("../model/presence.ts").PresenceUpdate }
@@ -87,6 +92,20 @@ export interface BaileysConn {
   setTyping(chatId: string, on: boolean): Promise<void>;
   /** Fetch normalized group metadata for a group JID. */
   groupMetadata(chatId: string): Promise<GroupMetadata>;
+  groupCreate(subject: string, participants: string[]): Promise<GroupMetadata>;
+  groupLeave(chatId: string): Promise<void>;
+  groupUpdateSubject(chatId: string, subject: string): Promise<void>;
+  groupUpdateDescription(chatId: string, description?: string): Promise<void>;
+  groupParticipantsUpdate(
+    chatId: string,
+    participants: string[],
+    action: GroupParticipantAction,
+  ): Promise<readonly GroupParticipantUpdateResult[]>;
+  groupSettingUpdate(chatId: string, setting: GroupSetting): Promise<void>;
+  groupInviteCode(chatId: string): Promise<string | undefined>;
+  groupRevokeInvite(chatId: string): Promise<string | undefined>;
+  groupUpdatePicture(chatId: string, image: Uint8Array): Promise<void>;
+  groupRemovePicture(chatId: string): Promise<void>;
   /** Fetch the profile picture URL for a contact, account, or group JID. */
   profilePictureUrl(jid: string, type?: "image" | "preview"): Promise<string | undefined>;
   /**
@@ -99,6 +118,39 @@ export interface BaileysConn {
   identity(): WaIdentity | undefined;
   /** Intentional teardown — the resulting close is classified `intentional`. */
   end(): void | Promise<void>;
+}
+
+function toGroupMetadata(
+  metadata: {
+    id?: string;
+    subject?: string;
+    desc?: string;
+    announce?: boolean;
+    restrict?: boolean;
+    participants: readonly {
+      id: string;
+      phoneNumber?: string;
+      lid?: string;
+      admin?: string | null;
+    }[];
+  },
+  fallbackId: string,
+): GroupMetadata {
+  return {
+    id: metadata.id ?? fallbackId,
+    ...(metadata.subject ? { subject: metadata.subject } : {}),
+    ...(metadata.desc ? { description: metadata.desc } : {}),
+    ...(metadata.announce !== undefined ? { announcement: metadata.announce } : {}),
+    ...(metadata.restrict !== undefined ? { locked: metadata.restrict } : {}),
+    participants: metadata.participants.map((participant) => ({
+      id: participant.id,
+      ...(participant.phoneNumber && {
+        phoneJid: jidNormalizedUser(participant.phoneNumber),
+      }),
+      ...(participant.lid && { lid: jidNormalizedUser(participant.lid) }),
+      ...(participant.admin ? { role: participant.admin } : {}),
+    })),
+  };
 }
 
 type MessagesUpsertPayload = BaileysEventMap["messages.upsert"];
@@ -134,6 +186,7 @@ export function toMessagesUpsertEvents(
   payload: MessagesUpsertPayload,
   self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
+  resolveMessage?: (ref: MessageRef) => WAMessage | undefined,
 ): RawEvent[] {
   if (payload.type !== "notify") {
     const sync = toConversationSyncBatch(
@@ -141,10 +194,19 @@ export function toMessagesUpsertEvents(
       self,
       makeDownload,
     );
-    return sync.messages.length > 0 ? [{ t: "conversation_sync", sync }] : [];
+    return sync.messages.length > 0 || (sync.updates?.length ?? 0) > 0
+      ? [{ t: "conversation_sync", sync }]
+      : [];
   }
 
-  return payload.messages.flatMap((raw) => {
+  return payload.messages.flatMap((raw): RawEvent[] => {
+    const control = mapMessageControl(raw, true, self, makeDownload, resolveMessage);
+    // Baileys 7.0.0-rc14 does not emit a decrypted messages.update for poll
+    // votes, so the raw envelope is the one live path that must publish here.
+    if (control?.update?.kind === "poll_votes") return [{ t: "update", update: control.update }];
+    // Baileys emits the matching messages.update/messages.reaction event for
+    // the other live controls. Drop only those duplicate upsert envelopes.
+    if (control) return [];
     const msg = toInbound(raw, true, self, makeDownload);
     return msg ? [{ t: "message", msg } satisfies RawEvent] : [];
   });
@@ -161,7 +223,12 @@ export function toMessagingHistoryEvents(
     events.push({ t: "conversation_sync_progress", progress: payload.progress });
   }
   const sync = toConversationSyncBatch(payload, self, makeDownload);
-  if (sync.chats.length > 0 || sync.contacts.length > 0 || sync.messages.length > 0) {
+  if (
+    sync.chats.length > 0 ||
+    sync.contacts.length > 0 ||
+    sync.messages.length > 0 ||
+    (sync.updates?.length ?? 0) > 0
+  ) {
     events.push({ t: "conversation_sync", sync });
   }
   if (complete) events.push({ t: "conversation_sync_complete" });
@@ -403,8 +470,8 @@ export async function openSocketWith(
   // Media bytes are pulled on demand via this factory — never buffered here.
   const makeDownload = mediaDownloader(sock, logger);
 
-  // Recent raw messages, kept only so quote/reply can resolve a MessageRef back
-  // to the original WAMessage without that proto ever crossing the surface.
+  // Recent raw messages let quote/reply and encrypted poll votes resolve their
+  // target without a Baileys proto ever crossing the public surface.
   const recent = new Map<string, WAMessage>();
   const resolveQuoted = (ref: MessageRef): WAMessage | undefined => recent.get(ref.id);
 
@@ -413,7 +480,12 @@ export async function openSocketWith(
   // before the account it names exists.
   sock.ev.on("messages.upsert", (payload) => {
     rememberRecent(recent, payload.messages);
-    for (const event of toMessagesUpsertEvents(payload, selfAddress(sock), makeDownload)) {
+    for (const event of toMessagesUpsertEvents(
+      payload,
+      selfAddress(sock),
+      makeDownload,
+      resolveQuoted,
+    )) {
       queue.push(event);
     }
   });
@@ -505,24 +577,45 @@ export async function openSocketWith(
     setTyping: (chatId, on) => sock.sendPresenceUpdate(on ? "composing" : "paused", chatId),
     groupMetadata: async (chatId) => {
       const metadata = await sock.groupMetadata(chatId);
-      return {
-        id: metadata.id ?? chatId,
-        ...(metadata.subject ? { subject: metadata.subject } : {}),
-        participants: metadata.participants.map((participant) => ({
-          id: participant.id,
-          ...(participant.admin ? { role: participant.admin } : {}),
-        })),
-      };
+      return toGroupMetadata(metadata, chatId);
     },
+    groupCreate: async (subject, participants) =>
+      toGroupMetadata(await sock.groupCreate(subject, participants), ""),
+    groupLeave: (chatId) => sock.groupLeave(chatId),
+    groupUpdateSubject: (chatId, subject) => sock.groupUpdateSubject(chatId, subject),
+    groupUpdateDescription: (chatId, description) =>
+      sock.groupUpdateDescription(chatId, description),
+    groupParticipantsUpdate: async (chatId, participants, action) =>
+      (await sock.groupParticipantsUpdate(chatId, participants, action)).map((result) => ({
+        ...(result.jid ? { id: result.jid } : {}),
+        status: result.status,
+      })),
+    groupSettingUpdate: (chatId, setting) => sock.groupSettingUpdate(chatId, setting),
+    groupInviteCode: (chatId) => sock.groupInviteCode(chatId),
+    groupRevokeInvite: (chatId) => sock.groupRevokeInvite(chatId),
+    groupUpdatePicture: (chatId, image) => sock.updateProfilePicture(chatId, Buffer.from(image)),
+    groupRemovePicture: (chatId) => sock.removeProfilePicture(chatId),
     profilePictureUrl: (jid, type) => sock.profilePictureUrl(jid, type),
     requestHistory: (count, ref, timestampMs) =>
       sock.fetchMessageHistory(count, refToKey(ref), timestampMs),
     identity: () => {
       const u = sock.user;
       if (!u?.id) return undefined;
-      const digits = u.id.split(/[:@]/)[0] ?? "";
+      const phoneJid = u.phoneNumber
+        ? jidNormalizedUser(u.phoneNumber)
+        : u.id.endsWith("@s.whatsapp.net")
+          ? jidNormalizedUser(u.id)
+          : undefined;
+      const lid = u.lid ? jidNormalizedUser(u.lid) : undefined;
+      const digits = phoneJid?.split("@", 1)[0] ?? "";
       const phoneE164 = /^\d+$/.test(digits) ? `+${digits}` : undefined;
-      return { jid: u.id, pushName: u.name ?? undefined, phoneE164 };
+      return {
+        jid: u.id,
+        ...(phoneJid && { phoneJid }),
+        ...(lid && { lid }),
+        pushName: u.name ?? undefined,
+        phoneE164,
+      };
     },
     end,
   };

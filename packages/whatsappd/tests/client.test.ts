@@ -29,6 +29,7 @@ import { createTestWhatsAppSession, textMessage } from "../src/testing.ts";
 const PERSON = "person@s.whatsapp.net";
 const PERSON_LID = "77701@lid";
 const ROOM = "room@g.us";
+const SILENT = "silent@s.whatsapp.net";
 const SELF = "15551230000@s.whatsapp.net";
 const AT = 1_700_000_000_000;
 
@@ -761,6 +762,56 @@ test("PN/LID consolidation, alias lookup and contact deletion apply from patch d
   }
 });
 
+test("WC-10 the contact namespace excludes conversation-shaped mirror records", async () => {
+  const worker = await lane({
+    before: async (_runtime, backend) => {
+      await backend.data.accept(
+        "personal",
+        [
+          {
+            observedAt: AT,
+            event: {
+              type: "contact",
+              contact: { id: ROOM, nativeIds: [ROOM], displayName: "Not a contact" },
+            },
+          },
+          {
+            observedAt: AT,
+            event: {
+              type: "contact",
+              contact: {
+                id: "status@broadcast",
+                nativeIds: ["status@broadcast"],
+                displayName: "Not a contact",
+              },
+            },
+          },
+          {
+            observedAt: AT,
+            event: {
+              type: "contact",
+              contact: {
+                id: "news@newsletter",
+                nativeIds: ["news@newsletter"],
+                displayName: "Not a contact",
+              },
+            },
+          },
+        ],
+        1,
+      );
+    },
+  });
+  try {
+    expect(contactIds(worker.client.contacts.list())).toEqual([]);
+    expect(worker.client.contacts.resolve(ROOM)).toBe(undefined);
+    expect(worker.client.contacts.resolve("status@broadcast")).toBe(undefined);
+    expect(worker.client.contacts.resolve("news@newsletter")).toBe(undefined);
+  } finally {
+    await worker.stop();
+  }
+});
+
 // ── 6. Gap recovery through the reused pull loop ──────────────────────────
 
 test("a dropped revision replaces the core state from a fresh snapshot", async () => {
@@ -793,7 +844,7 @@ test("a dropped revision replaces the core state from a fresh snapshot", async (
           observedAt: AT,
           event: {
             type: "contact",
-            contact: { id: ROOM, nativeIds: [ROOM], displayName: "Silent" },
+            contact: { id: SILENT, nativeIds: [SILENT], displayName: "Silent" },
           },
         },
         {
@@ -832,7 +883,7 @@ test("a dropped revision replaces the core state from a fresh snapshot", async (
     // carried it, and the silently consolidated one is gone because the fresh
     // snapshot did not — which merging over what the client already held could
     // never have achieved.
-    expect(contactIds(worker.client.contacts.list()).sort()).toEqual([PERSON, ROOM, SELF].sort());
+    expect(contactIds(worker.client.contacts.list()).sort()).toEqual([PERSON, SELF, SILENT].sort());
     expect(worker.client.contacts.list().length).toBe(3);
     // The alias the recovery brought with it still resolves to the survivor.
     expect(worker.client.contacts.resolve(PERSON_LID)?.contactId).toBe(PERSON);
@@ -1714,7 +1765,7 @@ test("committed values are client-owned and unaffected by mutating what a caller
     expect([...(after?.nativeIds ?? [])]).toEqual([PERSON]);
     expect(after?.username).toBe("person");
     expect(groupIds(worker.client.groups.list())).toEqual([ROOM]);
-    expect(worker.client.groups.list()[0]?.participants.length).toBe(1);
+    expect(worker.client.groups.list()[0]?.participants?.length).toBe(1);
   } finally {
     await worker.stop();
   }
@@ -1796,6 +1847,8 @@ test("an identity a session builds from anything is still copied safely", async 
     ...driver.session,
     identity: () => ({
       jid: "15551230000:7@s.whatsapp.net",
+      phoneJid: "15551230000@s.whatsapp.net",
+      lid: "123456789@lid",
       pushName: "Me",
       // Not part of `WaIdentity`, and not structured-cloneable.
       refresh: () => {},
@@ -1821,6 +1874,8 @@ test("an identity a session builds from anything is still copied safely", async 
     expect(notified).toBe(1);
     expect(client.account.get().identity?.jid).toBe("15551230000:7@s.whatsapp.net");
     expect(client.account.get().identity?.pushName).toBe("Me");
+    expect(client.account.get().identity?.phoneJid).toBe("15551230000@s.whatsapp.net");
+    expect(client.account.get().identity?.lid).toBe("123456789@lid");
     // Only the contract's fields are carried across.
     expect("refresh" in (client.account.get().identity ?? {})).toBe(false);
   } finally {
@@ -2174,7 +2229,7 @@ test("a page that resolves after a revision gap commits nothing", async () => {
           observedAt: AT,
           event: {
             type: "contact",
-            contact: { id: ROOM, nativeIds: [ROOM], displayName: "Silent" },
+            contact: { id: SILENT, nativeIds: [SILENT], displayName: "Silent" },
           },
         },
       ],
@@ -2187,7 +2242,7 @@ test("a page that resolves after a revision gap commits nothing", async () => {
     // Waiting on the *silently accepted* record, because only a fresh snapshot
     // can carry it: a patch applied over the hole would never produce it, so
     // this is the gap firing rather than an ordinary transition.
-    await until(() => contactIds(worker.client.contacts.list()).includes(ROOM));
+    await until(() => contactIds(worker.client.contacts.list()).includes(SILENT));
     // A snapshot carries no messages (ADR-0010), so recovery empties the chat.
     expect(worker.client.messages.get(PERSON).messages).toEqual([]);
 
@@ -2380,7 +2435,7 @@ test("a dropped revision clears retained messages", async () => {
           observedAt: AT,
           event: {
             type: "contact",
-            contact: { id: ROOM, nativeIds: [ROOM], displayName: "Silent" },
+            contact: { id: SILENT, nativeIds: [SILENT], displayName: "Silent" },
           },
         },
       ],
@@ -2390,7 +2445,7 @@ test("a dropped revision clears retained messages", async () => {
       type: "contact",
       contact: { id: SELF, nativeIds: [SELF], displayName: "Me" },
     });
-    await until(() => contactIds(worker.client.contacts.list()).includes(ROOM));
+    await until(() => contactIds(worker.client.contacts.list()).includes(SILENT));
 
     // A `reset()` that notified without clearing would leave all three here.
     expect(worker.client.messages.get(PERSON).messages).toEqual([]);

@@ -58,6 +58,10 @@ export function isOnline(status: Status): boolean {
 export interface WaIdentity {
   /** the account's own jid (e.g. `15551234567:12@s.whatsapp.net`). */
   readonly jid: string;
+  /** The account's normalized phone-number JID, when WhatsApp supplied it. */
+  readonly phoneJid?: string;
+  /** The account's normalized LID, when WhatsApp supplied it. */
+  readonly lid?: string;
   readonly pushName?: string;
   /** E.164, derived from the jid's number part when it is purely numeric. */
   readonly phoneE164?: string;

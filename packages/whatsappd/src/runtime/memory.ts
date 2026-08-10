@@ -31,6 +31,7 @@ import {
   type AccountRecord,
   type ChatRecord,
   type ContactRecord,
+  type DurableUpdate,
   type GroupRecord,
   type MediaStore,
   type MessageRecord,
@@ -51,6 +52,7 @@ interface AccountMirror {
   contactKeys: Map<string, string>;
   groups: Map<string, GroupRecord>;
   messages: Map<string, MessageRecord>;
+  pendingUpdates: Map<string, readonly DurableUpdate[]>;
   batches: AcceptedWhatsAppBatch[];
 }
 
@@ -103,6 +105,7 @@ export function memoryDataStore(): WhatsAppDataStore {
       contactKeys: new Map(),
       groups: new Map(),
       messages: new Map(),
+      pendingUpdates: new Map(),
       batches: [],
     };
     accounts.set(accountId, created);
@@ -125,6 +128,7 @@ export function memoryDataStore(): WhatsAppDataStore {
     contactKeys: new Map(mirror.contactKeys),
     groups: new Map(mirror.groups),
     messages: new Map(mirror.messages),
+    pendingUpdates: new Map(mirror.pendingUpdates),
   });
 
   const view = (accountId: string, mirror: AccountMirror): MirrorView => ({
@@ -200,6 +204,8 @@ export function memoryDataStore(): WhatsAppDataStore {
             group: async (groupId) => mirror.groups.get(groupId),
             message: async (chatId, messageId) =>
               mirror.messages.get(messageKey(chatId, messageId)),
+            pendingUpdates: async (chatId, messageId) =>
+              mirror.pendingUpdates.get(messageKey(chatId, messageId)) ?? [],
           },
           accountId,
           ownedEvents,
@@ -225,6 +231,12 @@ export function memoryDataStore(): WhatsAppDataStore {
           },
         };
         for (const mutation of mutations) {
+          if (mutation.type === "pending_updates") {
+            const key = messageKey(mutation.chatId, mutation.messageId);
+            if (mutation.updates.length === 0) mirror.pendingUpdates.delete(key);
+            else mirror.pendingUpdates.set(key, mutation.updates);
+            continue;
+          }
           if (mutation.type === "contact_alias") {
             mirror.contactKeys.set(mutation.nativeId, mutation.contactId);
             continue;
