@@ -79,6 +79,23 @@ test("conversation sync chats and contacts map without leaking Baileys types", (
   expect(batch.messages).toEqual([]);
 });
 
+test("conversation sync preserves absent and authoritative empty group rosters", () => {
+  const batch = toConversationSyncBatch(
+    {
+      chats: [
+        { id: "unknown@g.us", name: "Unknown" },
+        { id: "empty@g.us", name: "Empty", participants: [] },
+      ] as HistoryPayload["chats"],
+      contacts: [],
+      messages: [],
+    },
+    SELF,
+  );
+
+  expect(Object.hasOwn(batch.chats[0] ?? {}, "participants")).toBe(false);
+  expect(batch.chats[1]?.participants).toEqual([]);
+});
+
 test("conversation sync contacts retain every PN and LID form Baileys delivered", () => {
   const batch = toConversationSyncBatch(
     {

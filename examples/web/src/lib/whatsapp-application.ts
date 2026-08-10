@@ -396,6 +396,7 @@ export function createWhatsAppApplication(
         const optimistic = retained.outgoing.map((message, index) =>
           optimisticMessage(message, Date.now() + index),
         );
+        const participantRecords = (group ?? storedGroup)?.participants;
         conversation = {
           chat: chatView(selected, true),
           messages: [...projected, ...optimistic],
@@ -407,12 +408,13 @@ export function createWhatsAppApplication(
               ...(group.locked !== undefined && { locked: group.locked }),
             },
           }),
-          participants:
-            (group ?? storedGroup)?.participants.map((participant) => ({
+          ...(participantRecords !== undefined && {
+            participants: participantRecords.map((participant) => ({
               key: chats.token(participant.id, participant.id),
               name: directName(client, participant.id),
               ...(participant.role && { role: participant.role }),
-            })) ?? [],
+            })),
+          }),
         };
       }
       return {
@@ -463,7 +465,9 @@ export function createWhatsAppApplication(
             name,
             initials: initials(name),
             ...(avatar && { avatar }),
-            participantCount: group.participants.length,
+            ...(group.participants !== undefined && {
+              participantCount: group.participants.length,
+            }),
             canSend: canSend(group.groupId),
           };
         }),

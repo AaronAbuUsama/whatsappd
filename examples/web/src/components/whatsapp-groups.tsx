@@ -244,7 +244,14 @@ export function WhatsAppGroupDetails({
           Add {contact.name}
         </Button>
       ))}
-      {conversation.participants.map((participant) => (
+      {conversation.participants === undefined && (
+        <Item>
+          <ItemContent>
+            <ItemDescription>Participant list unavailable.</ItemDescription>
+          </ItemContent>
+        </Item>
+      )}
+      {conversation.participants?.map((participant) => (
         <Item key={participant.key}>
           <ItemContent>
             <ItemTitle>{participant.name}</ItemTitle>

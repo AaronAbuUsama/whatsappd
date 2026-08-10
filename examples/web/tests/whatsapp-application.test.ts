@@ -13,6 +13,7 @@ import { createWhatsAppApplication } from "../src/lib/whatsapp-application.ts";
 
 const CHAT = "peer@s.whatsapp.net";
 const PEER_LID = "peer@lid";
+const ROOM = "room@g.us";
 
 async function waitForLength(values: readonly unknown[], length: number): Promise<void> {
   for (let attempt = 0; attempt < 100 && values.length < length; attempt += 1) await delay(10);
@@ -127,6 +128,50 @@ void test("browser state and commands use the public WhatsApp Client", async () 
     assert.equal(submitted.type, "operation");
     await waitForLength(driver.commands.sent, 1);
     assert.deepEqual(driver.commands.sent[0]?.content, { text: "hello back" });
+  } finally {
+    await application.close();
+    await client.close();
+    await runtime.stop();
+  }
+});
+
+void test("group counts preserve unknown and authoritative empty membership", async () => {
+  const backend = memoryBackend();
+  const driver = createTestWhatsAppSession();
+  const runtime = createWhatsAppRuntime({
+    accountId: "group-knowledge",
+    backend,
+    openSession: () => driver.session,
+  });
+  await runtime.start();
+  const client = await createWhatsAppClient(runtime);
+  const application = createWhatsAppApplication({
+    accountId: "group-knowledge",
+    client,
+    media: backend.media,
+  });
+
+  try {
+    await driver.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "recent", projection: { mode: "upsert" } },
+        chats: [{ id: ROOM, isGroup: true, subject: "Room" }],
+        contacts: [],
+        messages: [],
+      },
+    });
+    const unknown = await application.state();
+    assert.equal(unknown.groups.length, 1);
+    assert.equal(unknown.groups[0]?.participantCount, undefined);
+
+    await driver.emit({
+      type: "group",
+      group: { kind: "metadata", id: ROOM, participants: [], at: 1_700_000_000_000 },
+    });
+    const empty = await application.state();
+    assert.equal(empty.groups.length, 1);
+    assert.equal(empty.groups[0]?.participantCount, 0);
   } finally {
     await application.close();
     await client.close();

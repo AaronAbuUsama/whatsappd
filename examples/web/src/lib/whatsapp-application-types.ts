@@ -115,7 +115,7 @@ export type ApplicationConversation = {
     readonly announcement?: boolean;
     readonly locked?: boolean;
   };
-  readonly participants: readonly {
+  readonly participants?: readonly {
     readonly key: string;
     readonly name: string;
     readonly role?: string;
@@ -145,7 +145,7 @@ export type WhatsAppApplicationView = {
     readonly name: string;
     readonly initials: string;
     readonly avatar?: string;
-    readonly participantCount: number;
+    readonly participantCount?: number;
     readonly canSend: boolean;
   }[];
   readonly conversation?: ApplicationConversation;

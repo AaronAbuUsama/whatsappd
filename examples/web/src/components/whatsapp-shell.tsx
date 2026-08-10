@@ -104,6 +104,10 @@ const listTime = (timestamp: number): string => {
     year: "2-digit",
   }).format(timestamp);
 };
+const participantLabel = (count: number | undefined): string =>
+  count === undefined
+    ? "Participants unavailable"
+    : `${count} participant${count === 1 ? "" : "s"}`;
 
 function AvatarView({
   name,
@@ -148,7 +152,7 @@ function DirectoryList({
     if (section === "groups")
       return view.groups.map((group) => ({
         ...group,
-        description: `${group.participantCount} participants`,
+        description: participantLabel(group.participantCount),
       }));
     return view.chats.map((chat) => ({
       ...chat,
@@ -266,7 +270,7 @@ function ConversationDetails({
           <SheetTitle>{conversation.chat.name}</SheetTitle>
           <SheetDescription>
             {conversation.chat.isGroup
-              ? `${conversation.participants.length} participants`
+              ? participantLabel(conversation.participants?.length)
               : (conversation.chat.presence ?? "Contact")}
           </SheetDescription>
         </SheetHeader>
@@ -276,7 +280,7 @@ function ConversationDetails({
           </ScrollArea>
         ) : conversation.chat.isGroup ? (
           <ScrollArea className="min-h-0 flex-1 px-2">
-            {conversation.participants.map((participant, index) => (
+            {conversation.participants?.map((participant, index) => (
               <Item key={`${participant.name}-${index}`}>
                 <ItemMedia>
                   <Avatar>
@@ -351,7 +355,7 @@ function Conversation({
           <p className="truncate text-sm text-muted-foreground">
             {conversation.chat.presence ??
               (conversation.chat.isGroup
-                ? `${conversation.participants.length} participants`
+                ? participantLabel(conversation.participants?.length)
                 : "WhatsApp contact")}
           </p>
         </div>
@@ -396,7 +400,7 @@ function Conversation({
         chat={conversation.chat}
         reply={reply}
         clearReply={() => setReply(undefined)}
-        participants={conversation.participants}
+        participants={conversation.participants ?? []}
       />
     </section>
   );

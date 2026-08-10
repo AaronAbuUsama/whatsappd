@@ -226,11 +226,12 @@ async function projectSyncedChat(
     lastMessageAt: chat.lastMessageAt ?? 0,
   });
   if (!chat.isGroup) return;
+  const participants = chat.participants ?? (await state.group(chat.id))?.participants;
   await projectGroup(state, {
     accountId,
     groupId: chat.id,
     ...(chat.subject !== undefined && { subject: chat.subject }),
-    participants: chat.participants ?? (await state.group(chat.id))?.participants ?? [],
+    ...(participants !== undefined && { participants }),
   });
 }
 
@@ -503,16 +504,17 @@ async function projectEvent(
     }
     case "group": {
       const { group } = event;
-      const roster = (await state.group(group.id))?.participants ?? [];
+      const roster = (await state.group(group.id))?.participants;
       const renamed = group.kind === "metadata" && group.subject !== undefined;
+      const participants =
+        group.kind === "participants"
+          ? roster && rosterAfter(roster, group)
+          : (group.participants ?? roster);
       await projectGroup(state, {
         accountId,
         groupId: group.id,
         ...(renamed && { subject: group.subject }),
-        participants:
-          group.kind === "participants"
-            ? rosterAfter(roster, group)
-            : (group.participants ?? roster),
+        ...(participants !== undefined && { participants }),
       });
       if (renamed)
         await projectChat(state, {

@@ -1765,7 +1765,7 @@ test("committed values are client-owned and unaffected by mutating what a caller
     expect([...(after?.nativeIds ?? [])]).toEqual([PERSON]);
     expect(after?.username).toBe("person");
     expect(groupIds(worker.client.groups.list())).toEqual([ROOM]);
-    expect(worker.client.groups.list()[0]?.participants.length).toBe(1);
+    expect(worker.client.groups.list()[0]?.participants?.length).toBe(1);
   } finally {
     await worker.stop();
   }

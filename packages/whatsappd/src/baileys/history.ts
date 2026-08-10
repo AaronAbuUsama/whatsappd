@@ -55,7 +55,7 @@ function toHistoryParticipants(
       ...(participant.admin ? { role: participant.admin } : {}),
     });
   }
-  return out.length > 0 ? out : undefined;
+  return out.length > 0 || participants.length === 0 ? out : undefined;
 }
 
 function toHistoryChat(chat: HistoryPayload["chats"][number]): HistoryChat | undefined {

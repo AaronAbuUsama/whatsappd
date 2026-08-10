@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, test } from "./_expect.ts";
 import {
+  createWhatsAppClient,
   createWhatsAppRuntime,
   fileMediaStore,
   libsqlBackend,
@@ -320,6 +321,92 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
 
     await replacementRuntime.stop();
     await replacementBackend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a libSQL restart preserves unknown and authoritative empty group membership", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-groups-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const emptyRoom = "empty@g.us";
+  const legacyRoom = "legacy@g.us";
+  const legacyPopulatedRoom = "legacy-populated@g.us";
+
+  try {
+    const first = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    await first.data.accept(
+      ACCOUNT,
+      [
+        {
+          observedAt: AT,
+          event: {
+            type: "conversation_sync",
+            batch: {
+              context: { source: "recent", projection: { mode: "upsert" } },
+              chats: [
+                { id: ROOM, isGroup: true, subject: "Unknown" },
+                { id: emptyRoom, isGroup: true, subject: "Empty", participants: [] },
+              ],
+              contacts: [],
+              messages: [],
+            },
+          },
+        },
+      ],
+      1,
+    );
+    await first.close();
+
+    const raw = createClient({ url });
+    await raw.execute({
+      sql: "INSERT INTO wa_groups (account_id, group_id, data_json) VALUES (?, ?, ?)",
+      args: [
+        ACCOUNT,
+        legacyRoom,
+        JSON.stringify({
+          accountId: ACCOUNT,
+          groupId: legacyRoom,
+          subject: "Legacy unknown",
+          participants: [],
+        }),
+      ],
+    });
+    await raw.execute({
+      sql: "INSERT INTO wa_groups (account_id, group_id, data_json) VALUES (?, ?, ?)",
+      args: [
+        ACCOUNT,
+        legacyPopulatedRoom,
+        JSON.stringify({
+          accountId: ACCOUNT,
+          groupId: legacyPopulatedRoom,
+          subject: "Legacy populated",
+          participants: [{ id: CHAT }],
+        }),
+      ],
+    });
+    raw.close();
+
+    const replacement = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    const runtime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: replacement,
+      openSession: () => {
+        throw new Error("restart proof does not open WhatsApp");
+      },
+    });
+    const client = await createWhatsAppClient(runtime);
+    try {
+      const groups = new Map(client.groups.list().map((group) => [group.groupId, group]));
+      expect(groups.get(ROOM)?.participants).toBe(undefined);
+      expect(groups.get(emptyRoom)?.participants).toEqual([]);
+      expect(groups.get(legacyRoom)?.participants).toBe(undefined);
+      expect(groups.get(legacyPopulatedRoom)?.participants).toEqual([{ id: CHAT }]);
+    } finally {
+      await client.close();
+      await runtime.stop();
+      await replacement.close();
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

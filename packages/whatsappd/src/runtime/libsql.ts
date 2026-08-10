@@ -330,13 +330,18 @@ function participants(value: unknown): readonly { readonly id: string; readonly 
 
 function groupRecord(value: unknown): GroupRecord {
   const record = object(value, "group record");
+  const participantsKnown =
+    record.participantsKnown === undefined
+      ? Array.isArray(record.participants) && record.participants.length > 0
+      : boolean(record.participantsKnown, "group.participantsKnown");
+  const roster = participantsKnown ? participants(record.participants) : undefined;
   return {
     accountId: string(record.accountId, "group.accountId"),
     groupId: string(record.groupId, "group.groupId"),
     ...(optionalString(record.subject, "group.subject") !== undefined && {
       subject: string(record.subject, "group.subject"),
     }),
-    participants: participants(record.participants),
+    ...(roster !== undefined && { participants: roster }),
   };
 }
 
@@ -1200,7 +1205,14 @@ async function applyMutation(
       await transaction.execute({
         sql: `INSERT INTO wa_groups (account_id, group_id, data_json) VALUES (?, ?, ?)
           ON CONFLICT(account_id, group_id) DO UPDATE SET data_json = excluded.data_json`,
-        args: [accountId, record.group.groupId, json(record.group)],
+        args: [
+          accountId,
+          record.group.groupId,
+          json({
+            ...record.group,
+            participantsKnown: record.group.participants !== undefined,
+          }),
+        ],
       });
       return;
     case "message":

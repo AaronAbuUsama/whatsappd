@@ -225,7 +225,8 @@ export interface GroupRecord {
   readonly accountId: string;
   readonly groupId: string;
   readonly subject?: string;
-  readonly participants: readonly GroupParticipant[];
+  /** Absent until WhatsApp has supplied an authoritative roster; an empty array is known-empty. */
+  readonly participants?: readonly GroupParticipant[];
 }
 
 /**

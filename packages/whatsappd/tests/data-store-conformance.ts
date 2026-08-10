@@ -211,6 +211,60 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
     }
   });
 
+  test(`[${name}] group membership distinguishes unknown, empty, and populated rosters`, async () => {
+    const resource = await create();
+    try {
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "conversation_sync",
+            batch: {
+              context: { source: "recent", projection: { mode: "upsert" } },
+              chats: [{ id: ROOM, isGroup: true, subject: "Room" }],
+              contacts: [],
+              messages: [],
+            },
+          }),
+        ],
+        1,
+      );
+      const unknown = (await resource.data.snapshot(ACCOUNT)).groups;
+      expect(unknown.length).toBe(1);
+      expect(unknown[0]?.participants).toBe(undefined);
+
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "group",
+            group: { kind: "metadata", id: ROOM, participants: [], at: AT },
+          }),
+        ],
+        1,
+      );
+      const empty = (await resource.data.snapshot(ACCOUNT)).groups;
+      expect(empty.length).toBe(1);
+      expect(empty[0]?.participants).toEqual([]);
+
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "group",
+            group: { kind: "metadata", id: ROOM, participants: [{ id: PN }], at: AT + 1 },
+          }),
+        ],
+        1,
+      );
+      const populated = (await resource.data.snapshot(ACCOUNT)).groups;
+      expect(populated.length).toBe(1);
+      expect(populated[0]?.participants).toEqual([{ id: PN }]);
+    } finally {
+      await resource.close();
+    }
+  });
+
   test(`[${name}] every durable media kind and outcome crosses source and current codecs`, async () => {
     const resource = await create();
     try {
