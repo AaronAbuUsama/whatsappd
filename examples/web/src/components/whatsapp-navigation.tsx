@@ -23,7 +23,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type WhatsAppSection = "chats" | "updates" | "contacts" | "groups" | "settings";
 
@@ -88,24 +88,24 @@ export function WhatsAppNavigation({ section, setSection }: NavigationProps) {
 
 export function WhatsAppMobileNavigation({ section, setSection }: NavigationProps) {
   const item = (value: WhatsAppSection, label: string, Icon: LucideIcon) => (
-    <TabsTrigger value={value} aria-label={label}>
+    <ToggleGroupItem value={value} aria-label={label} className="h-11 min-w-11 flex-1">
       <Icon />
       <span className="hidden min-[420px]:inline">{label}</span>
-    </TabsTrigger>
+    </ToggleGroupItem>
   );
   return (
-    <Tabs
+    <ToggleGroup
+      type="single"
       value={section}
-      onValueChange={(value) => setSection(value as WhatsAppSection)}
-      className="md:hidden"
+      onValueChange={(value) => value && setSection(value as WhatsAppSection)}
+      className="grid h-12 w-full grid-cols-5 gap-1 rounded-none border-b px-2 md:hidden"
+      aria-label="Application sections"
     >
-      <TabsList variant="line" className="grid h-12 w-full grid-cols-5 border-b px-2">
-        {item("chats", "Chats", MessageCircleIcon)}
-        {item("updates", "Updates", CircleDashedIcon)}
-        {item("contacts", "Contacts", ContactRoundIcon)}
-        {item("groups", "Groups", UsersIcon)}
-        {item("settings", "Settings", SettingsIcon)}
-      </TabsList>
-    </Tabs>
+      {item("chats", "Chats", MessageCircleIcon)}
+      {item("updates", "Updates", CircleDashedIcon)}
+      {item("contacts", "Contacts", ContactRoundIcon)}
+      {item("groups", "Groups", UsersIcon)}
+      {item("settings", "Settings", SettingsIcon)}
+    </ToggleGroup>
   );
 }

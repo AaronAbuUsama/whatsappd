@@ -7,7 +7,10 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start",
-    "test": "pnpm --filter whatsappd build && node --experimental-strip-types --test tests/*.test.ts"
+    "test": "pnpm --filter whatsappd build && node --experimental-strip-types --test tests/*.test.ts",
+    "storybook": "STORYBOOK_DISABLE_TELEMETRY=true storybook dev -p 6006 --no-open",
+    "storybook:build": "STORYBOOK_DISABLE_TELEMETRY=true storybook build -o ../../.artifacts/storybook",
+    "test:storybook": "vitest run --project=storybook"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -41,12 +44,20 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@storybook/addon-a11y": "^10.5.7",
+    "@storybook/addon-vitest": "^10.5.7",
+    "@storybook/nextjs-vite": "^10.5.7",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^26.1.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/browser": "4.1.9",
+    "@vitest/browser-playwright": "^4.1.9",
     "shadcn": "^4.16.2",
+    "storybook": "^10.5.7",
     "tailwindcss": "^4",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
   }
 }

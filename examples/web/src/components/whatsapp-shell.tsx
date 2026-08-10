@@ -177,6 +177,8 @@ function DirectoryList({
         <div className="relative">
           <SearchIcon className="absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            type="search"
+            aria-label={`Search ${section}`}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={`Search ${section}`}
@@ -482,11 +484,13 @@ function Paging({
 export function WhatsAppShell({
   initial,
   sidebarOpen = false,
+  browser: suppliedBrowser,
 }: {
   readonly initial: WhatsAppApplicationView;
   readonly sidebarOpen?: boolean;
+  readonly browser?: WhatsAppBrowser;
 }) {
-  const [browser] = useState(() => createWhatsAppBrowser(initial));
+  const [browser] = useState(() => suppliedBrowser ?? createWhatsAppBrowser(initial));
   const { view, selected, pending, error } = useWhatsAppBrowser(browser);
   const [section, setSection] = useState<WhatsAppSection>("chats");
   useEffect(() => {
