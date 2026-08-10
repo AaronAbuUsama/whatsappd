@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import {
   CheckCheckIcon,
   CheckIcon,
@@ -167,7 +169,11 @@ function MediaContent({
   );
 }
 
-function Content({ content }: { readonly content: ApplicationMessageContent }) {
+export function WhatsAppMessageContent({
+  content,
+}: {
+  readonly content: ApplicationMessageContent;
+}) {
   switch (content.kind) {
     case "text":
       return <p className="whitespace-pre-wrap">{content.text}</p>;
@@ -247,6 +253,8 @@ function MessageActions({
   readonly browser: WhatsAppBrowser;
   readonly onReply: () => void;
 }) {
+  const [reactionOpen, setReactionOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   if (message.operation) return null;
   const run = (command: Parameters<WhatsAppBrowser["command"]>[0]): void => {
     void browser
@@ -254,23 +262,62 @@ function MessageActions({
       .catch((error) => toast.error(error instanceof Error ? error.message : "Command failed"));
   };
   return (
-    <div className="invisible absolute top-0 right-2 flex group-hover/message:visible group-focus-within/message:visible">
-      <Popover>
+    <div
+      className={`invisible absolute top-0 z-20 flex rounded-md bg-background/90 shadow-sm backdrop-blur group-hover/message:visible group-focus-within/message:visible ${message.fromMe ? "right-full mr-1" : "left-full ml-1"}`}
+    >
+      <Popover
+        open={reactionOpen}
+        onOpenChange={(open) => {
+          setReactionOpen(open);
+          if (!open) setExpanded(false);
+        }}
+      >
         <PopoverTrigger asChild>
           <Button variant="ghost" size="icon-xs" aria-label="React">
             <SmileIcon />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-auto p-0" align="end">
-          <EmojiPicker
-            theme={Theme.AUTO}
-            emojiStyle={EmojiStyle.NATIVE}
-            lazyLoadEmojis
-            reactionsDefaultOpen
-            allowExpandReactions
-            onEmojiClick={({ emoji }) => run({ type: "react", message: message.key, emoji })}
-            onReactionClick={({ emoji }) => run({ type: "react", message: message.key, emoji })}
-          />
+        <PopoverContent className="w-auto p-1" side="top" align={message.fromMe ? "end" : "start"}>
+          {expanded ? (
+            <EmojiPicker
+              width="min(320px, calc(100vw - 2rem))"
+              height={360}
+              theme={Theme.AUTO}
+              emojiStyle={EmojiStyle.NATIVE}
+              lazyLoadEmojis
+              onEmojiClick={({ emoji }) => {
+                run({ type: "react", message: message.key, emoji });
+                setReactionOpen(false);
+              }}
+            />
+          ) : (
+            <div className="flex items-center gap-0.5">
+              {["👍", "❤️", "😂", "😮", "😢", "🙏"].map((emoji) => (
+                <Button
+                  key={emoji}
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-base"
+                  onClick={() => {
+                    run({ type: "react", message: message.key, emoji });
+                    setReactionOpen(false);
+                  }}
+                >
+                  {emoji}
+                </Button>
+              ))}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="More reactions"
+                onClick={() => setExpanded(true)}
+              >
+                +
+              </Button>
+            </div>
+          )}
         </PopoverContent>
       </Popover>
       <DropdownMenu>
@@ -279,7 +326,7 @@ function MessageActions({
             <ChevronDownIcon />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align={message.fromMe ? "start" : "end"}>
           <DropdownMenuItem onSelect={onReply}>
             <ReplyIcon />
             Reply
@@ -342,14 +389,16 @@ export function WhatsAppMessage({
                 </ItemContent>
               </Item>
             )}
-            <Content content={message.content} />
+            <WhatsAppMessageContent content={message.content} />
           </BubbleContent>
+          <MessageActions message={message} browser={browser} onReply={onReply} />
           {message.reactions.length > 0 && (
             <BubbleReactions align={message.fromMe ? "end" : "start"}>
               {message.reactions.map(({ emoji, count }) => (
                 <button
                   key={emoji}
                   type="button"
+                  className="rounded-full px-1 py-0.5 text-xs hover:bg-accent"
                   onClick={() => void browser.command({ type: "unreact", message: message.key })}
                 >
                   {emoji}
@@ -359,7 +408,6 @@ export function WhatsAppMessage({
             </BubbleReactions>
           )}
         </Bubble>
-        <MessageActions message={message} browser={browser} onReply={onReply} />
         <MessageFooter>
           {message.viewOnce && <span>View once ·&nbsp;</span>}
           {message.ephemeral && <span>Disappearing ·&nbsp;</span>}

@@ -2,23 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArchiveIcon,
   ArrowLeftIcon,
   CircleAlertIcon,
-  ContactRoundIcon,
   LoaderCircleIcon,
   MessageCircleIcon,
   MoreHorizontalIcon,
   PhoneIcon,
   SearchIcon,
-  SettingsIcon,
-  UsersIcon,
   VideoIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { WhatsAppComposer } from "@/components/whatsapp-composer";
 import { WhatsAppGroupCreate, WhatsAppGroupDetails } from "@/components/whatsapp-groups";
 import { WhatsAppMessage } from "@/components/whatsapp-message";
+import {
+  WhatsAppMobileNavigation,
+  WhatsAppNavigation,
+  type WhatsAppSection,
+} from "@/components/whatsapp-navigation";
+import { WhatsAppUpdates } from "@/components/whatsapp-updates";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -64,19 +66,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarHeader,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  SidebarProvider,
-} from "@/components/ui/sidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import {
   createWhatsAppBrowser,
@@ -88,8 +78,6 @@ import type {
   ApplicationMessage,
   WhatsAppApplicationView,
 } from "@/lib/whatsapp-application";
-
-type Section = "chats" | "contacts" | "groups";
 
 const shortTime = (timestamp: number): string =>
   timestamp
@@ -106,6 +94,16 @@ const sameDay = (left: number, right: number): boolean => {
     a.getDate() === b.getDate()
   );
 };
+const listTime = (timestamp: number): string => {
+  const now = Date.now();
+  if (sameDay(timestamp, now)) return shortTime(timestamp);
+  if (sameDay(timestamp, now - 86_400_000)) return "Yesterday";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+  }).format(timestamp);
+};
 
 function AvatarView({
   name,
@@ -118,69 +116,9 @@ function AvatarView({
 }) {
   return (
     <Avatar size="lg">
-      {token && <AvatarImage src={`/api/avatar/${token}`} alt={name} />}
+      {token && <AvatarImage src={`/api/avatar/${token}`} alt={name} loading="lazy" />}
       <AvatarFallback>{initials}</AvatarFallback>
     </Avatar>
-  );
-}
-
-function Navigation({
-  section,
-  setSection,
-}: {
-  readonly section: Section;
-  readonly setSection: (section: Section) => void;
-}) {
-  const item = (value: Section, label: string, Icon: typeof MessageCircleIcon) => (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        isActive={section === value}
-        tooltip={label}
-        onClick={() => setSection(value)}
-      >
-        <Icon />
-        <span>{label}</span>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
-  );
-  return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader>
-        <SidebarMenu>{item("chats", "Chats", MessageCircleIcon)}</SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {item("contacts", "Contacts", ContactRoundIcon)}
-              {item("groups", "Groups", UsersIcon)}
-              <SidebarMenuItem>
-                <SidebarMenuButton disabled tooltip="Archive is not exposed by the SDK">
-                  <ArchiveIcon />
-                  <span>Archived</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton disabled tooltip="Calls are not exposed by the SDK">
-                  <PhoneIcon />
-                  <span>Calls</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton disabled tooltip="Settings">
-              <SettingsIcon />
-              <span>Settings</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-    </Sidebar>
   );
 }
 
@@ -193,10 +131,12 @@ function DirectoryList({
   browser,
   view,
   section,
+  setSection,
 }: {
   readonly browser: WhatsAppBrowser;
   readonly view: WhatsAppApplicationView;
-  readonly section: Section;
+  readonly section: WhatsAppSection;
+  readonly setSection: (section: WhatsAppSection) => void;
 }) {
   const [query, setQuery] = useState("");
   const entries = useMemo<readonly ListEntry[]>(() => {
@@ -221,9 +161,12 @@ function DirectoryList({
     : entries;
   return (
     <section className="flex h-svh min-w-0 flex-col">
-      <header className="border-b p-3">
+      <WhatsAppMobileNavigation section={section} setSection={setSection} />
+      <header className="border-b px-4 py-3">
         <div className="mb-3 flex items-center justify-between">
-          <h1 className="text-lg font-semibold">{section[0]!.toUpperCase() + section.slice(1)}</h1>
+          <h1 className="text-2xl font-semibold lg:text-lg">
+            {section[0]!.toUpperCase() + section.slice(1)}
+          </h1>
           {section === "groups" && <WhatsAppGroupCreate browser={browser} view={view} />}
         </div>
         <div className="relative">
@@ -242,18 +185,24 @@ function DirectoryList({
             key={entry.key}
             asChild
             variant={entry.key === view.conversation?.chat.key ? "muted" : "default"}
+            className="relative min-h-16 flex-nowrap rounded-none border-0 px-4 py-2 after:absolute after:right-0 after:bottom-0 after:left-[4.5rem] after:border-b after:border-border/60 hover:bg-muted/70 focus-visible:bg-muted/70 [content-visibility:auto] [contain-intrinsic-size:64px]"
           >
-            <button type="button" className="w-full" onClick={() => void browser.select(entry.key)}>
+            <button
+              type="button"
+              className="w-full min-w-0 text-left"
+              onClick={() => void browser.select(entry.key)}
+            >
               <ItemMedia>
                 <AvatarView name={entry.name} initials={entry.initials} token={entry.avatar} />
               </ItemMedia>
-              <ItemContent>
-                <ItemTitle>{entry.name}</ItemTitle>
-                <ItemDescription>{entry.description}</ItemDescription>
+              <ItemContent className="min-w-0 gap-0">
+                <ItemTitle className="w-full truncate text-base">{entry.name}</ItemTitle>
+                <ItemDescription className="line-clamp-1 leading-snug">
+                  {entry.description}
+                </ItemDescription>
               </ItemContent>
-              <ItemActions>
-                {entry.lastMessageAt ? <time>{shortTime(entry.lastMessageAt)}</time> : null}
-                {!entry.canSend && <Badge variant="outline">Read only</Badge>}
+              <ItemActions className="ml-auto shrink-0 self-start pt-0.5 text-xs text-muted-foreground">
+                {entry.lastMessageAt ? <time>{listTime(entry.lastMessageAt)}</time> : null}
               </ItemActions>
             </button>
           </Item>
@@ -520,13 +469,28 @@ function Paging({
 export function WhatsAppShell({ initial }: { readonly initial: WhatsAppApplicationView }) {
   const [browser] = useState(() => createWhatsAppBrowser(initial));
   const { view, selected, pending, error } = useWhatsAppBrowser(browser);
-  const [section, setSection] = useState<Section>("chats");
+  const [section, setSection] = useState<WhatsAppSection>("chats");
   useEffect(() => {
     if (error) toast.error(error);
   }, [error]);
+  const changeSection = (next: WhatsAppSection): void => {
+    setSection(next);
+    void browser.select();
+  };
+  const directory =
+    section === "updates" ? (
+      <WhatsAppUpdates
+        view={view}
+        navigation={<WhatsAppMobileNavigation section={section} setSection={changeSection} />}
+      />
+    ) : (
+      <DirectoryList browser={browser} view={view} section={section} setSection={changeSection} />
+    );
   return (
     <SidebarProvider defaultOpen={false}>
-      <Navigation section={section} setSection={setSection} />
+      <div className="hidden lg:block">
+        <WhatsAppNavigation section={section} setSection={changeSection} />
+      </div>
       <SidebarInset>
         {pending > 0 && (
           <div className="fixed top-2 right-2 z-50">
@@ -536,20 +500,24 @@ export function WhatsAppShell({ initial }: { readonly initial: WhatsAppApplicati
             </Badge>
           </div>
         )}
-        <ResizablePanelGroup orientation="horizontal">
-          <ResizablePanel
-            defaultSize="360px"
-            minSize="280px"
-            maxSize="520px"
-            className={selected ? "hidden lg:block" : undefined}
-          >
-            <DirectoryList browser={browser} view={view} section={section} />
-          </ResizablePanel>
-          <ResizableHandle className={selected ? "hidden lg:flex" : "hidden"} />
-          <ResizablePanel minSize="420px" className={!selected ? "hidden lg:block" : undefined}>
-            <Conversation browser={browser} view={view} />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        <div className="h-svh lg:hidden">
+          {selected ? <Conversation browser={browser} view={view} /> : directory}
+        </div>
+        <div className="hidden h-svh lg:block">
+          {section === "updates" ? (
+            directory
+          ) : (
+            <ResizablePanelGroup orientation="horizontal">
+              <ResizablePanel defaultSize="360px" minSize="280px" maxSize="520px">
+                {directory}
+              </ResizablePanel>
+              <ResizableHandle />
+              <ResizablePanel minSize="420px">
+                <Conversation browser={browser} view={view} />
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          )}
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );

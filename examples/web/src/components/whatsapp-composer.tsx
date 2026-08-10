@@ -455,6 +455,8 @@ export function WhatsAppComposer({
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0">
                 <EmojiPicker
+                  width="min(320px, calc(100vw - 2rem))"
+                  height={360}
                   theme={Theme.AUTO}
                   emojiStyle={EmojiStyle.NATIVE}
                   lazyLoadEmojis

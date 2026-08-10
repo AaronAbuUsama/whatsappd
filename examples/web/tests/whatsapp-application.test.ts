@@ -73,6 +73,8 @@ void test("browser state and commands use the public WhatsApp Client", async () 
     accountId: "browser",
     client,
     media: backend.media,
+    resolveAvatar: async (nativeId) =>
+      nativeId === CHAT ? "https://example.test/avatar.jpg" : undefined,
   });
 
   try {
@@ -86,12 +88,30 @@ void test("browser state and commands use the public WhatsApp Client", async () 
         timestamp: 1_700_000_000_000,
       }),
     });
+    await driver.emit({
+      type: "message",
+      message: textMessage({
+        id: "status-1",
+        chatId: "status@broadcast",
+        sender: CHAT,
+        text: "saved status",
+        timestamp: 1_700_000_001_000,
+      }),
+    });
 
     const initial = await application.state();
     assert.equal(initial.account.connection?.phase, "online");
     assert.equal(initial.chats.length, 1);
     assert.equal(initial.chats[0]?.name, "peer");
     assert.equal(initial.chats[0]?.preview, "hello from the peer");
+    assert.equal(initial.updates.length, 1);
+    assert.equal(initial.updates[0]?.content.kind, "text");
+    assert.equal(initial.updates[0]?.content.text, "saved status");
+    assert.ok(initial.chats[0]?.avatar);
+    assert.equal(
+      await application.avatar(initial.chats[0].avatar),
+      "https://example.test/avatar.jpg",
+    );
 
     const chat = initial.chats[0]?.key;
     assert.ok(chat);

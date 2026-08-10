@@ -97,6 +97,15 @@ export type ApplicationMessage = {
   };
 };
 
+export type ApplicationUpdate = {
+  readonly key: string;
+  readonly sender: string;
+  readonly initials: string;
+  readonly avatar?: string;
+  readonly timestamp: number;
+  readonly content: ApplicationMessageContent;
+};
+
 export type ApplicationConversation = {
   readonly chat: ApplicationChat;
   readonly messages: readonly ApplicationMessage[];
@@ -117,6 +126,7 @@ export type WhatsAppApplicationView = {
   readonly revision: number;
   readonly account: ApplicationAccount;
   readonly chats: readonly ApplicationChat[];
+  readonly updates: readonly ApplicationUpdate[];
   readonly contacts: readonly {
     readonly key: string;
     readonly name: string;
@@ -134,6 +144,7 @@ export type WhatsAppApplicationView = {
     readonly key: string;
     readonly name: string;
     readonly initials: string;
+    readonly avatar?: string;
     readonly participantCount: number;
     readonly canSend: boolean;
   }[];
@@ -237,7 +248,7 @@ export type WhatsAppApplication = {
       }
     | undefined
   >;
-  avatar(token: string): string | undefined;
+  avatar(token: string): Promise<string | undefined>;
   close(): Promise<void>;
 };
 
@@ -248,4 +259,5 @@ export type WhatsAppApplicationOptions = {
   readonly canSend?: (chatId: string) => boolean;
   readonly canCreateGroupWith?: (participantId: string) => boolean;
   readonly onGroupCreated?: (chatId: string) => void;
+  readonly resolveAvatar?: (nativeId: string) => Promise<string | null | undefined>;
 };

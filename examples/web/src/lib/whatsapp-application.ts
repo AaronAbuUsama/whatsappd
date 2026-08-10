@@ -27,6 +27,7 @@ import type {
   ApplicationConversation,
   ApplicationMessage,
   ApplicationMessageContent,
+  ApplicationUpdate,
   WhatsAppApplication,
   WhatsAppApplicationCommandResult,
   WhatsAppApplicationCommand,
@@ -37,6 +38,7 @@ export type * from "./whatsapp-application-types.ts";
 
 const SIDEBAR_PREVIEW_COUNT = 40;
 const PAGE_TIMEOUT_MS = 10_000;
+const STATUS_CHAT_ID = "status@broadcast";
 
 type MessageOptions = {
   readonly quote?: string;
@@ -110,12 +112,18 @@ export function createWhatsAppApplication(
     readonly mimetype?: string;
     readonly fileName?: string;
   }>();
-  const avatars = registry<string>();
+  const avatars = registry<{ readonly nativeId: string; readonly source?: string }>();
+  const avatarLoads = new Map<string, Promise<string | undefined>>();
   const listeners = new Set<() => void>();
   const pageLoads = new Map<string, Promise<void>>();
   const groupMetadata = new Map<string, Awaited<ReturnType<typeof client.groups.metadata>>>();
   let revision = 0;
   let closed = false;
+
+  const avatarToken = (nativeId: string, source?: string): string | undefined =>
+    source || options.resolveAvatar
+      ? avatars.token({ nativeId, ...(source && { source }) }, nativeId)
+      : undefined;
 
   const announce = (): void => {
     revision += 1;
@@ -157,11 +165,11 @@ export function createWhatsAppApplication(
     return pending;
   };
 
-  const chatView = (chat: ChatRecord): ApplicationChat => {
+  const chatView = (chat: ChatRecord, includeAvatar = false): ApplicationChat => {
     const name = chatName(client, chat);
     const contact = chat.isGroup ? undefined : client.contacts.resolve(chat.chatId);
     const source = avatarUrl(contact?.imgUrl);
-    const avatar = source ? avatars.token(source, source) : undefined;
+    const avatar = includeAvatar ? avatarToken(chat.chatId, source) : undefined;
     const latest = client.messages.get(chat.chatId).messages[0];
     return {
       key: chats.token(chat.chatId, chat.chatId),
@@ -331,13 +339,35 @@ export function createWhatsAppApplication(
           })
         : undefined;
       const preview = records.slice(0, SIDEBAR_PREVIEW_COUNT);
-      await Promise.all(
-        [...preview, ...(selected && !preview.includes(selected) ? [selected] : [])].map((chat) =>
-          page(chat.chatId),
-        ),
-      );
-      const chatViews = records.map(chatView);
+      const status = records.find((chat) => chat.chatId === STATUS_CHAT_ID);
+      const pageIds = new Set(preview.map((chat) => chat.chatId));
+      if (status) pageIds.add(status.chatId);
+      if (selected) pageIds.add(selected.chatId);
+      await Promise.all([...pageIds].map(page));
+      const chatViews = records
+        .filter((chat) => chat.chatId !== STATUS_CHAT_ID)
+        .map((chat, index) => chatView(chat, index < SIDEBAR_PREVIEW_COUNT));
       const account = client.account.get();
+      const updates: ApplicationUpdate[] = [];
+      if (status) {
+        for (const message of client.messages.get(status.chatId).messages) {
+          const nativeId = message.sender.id;
+          const contact = client.contacts.resolve(nativeId);
+          const sender = message.fromMe
+            ? (account.identity?.pushName ?? "You")
+            : (senderName(message) ?? "WhatsApp contact");
+          const source = avatarUrl(contact?.imgUrl);
+          const avatar = avatarToken(nativeId, source);
+          updates.push({
+            key: messages.token(message.ref, `${message.chatId}\0${message.messageId}`),
+            sender,
+            initials: initials(sender),
+            ...(avatar && { avatar }),
+            timestamp: message.timestamp,
+            content: contentView(message),
+          });
+        }
+      }
       let conversation: ApplicationConversation | undefined;
       if (selected) {
         const retained = client.messages.get(selected.chatId);
@@ -367,7 +397,7 @@ export function createWhatsAppApplication(
           optimisticMessage(message, Date.now() + index),
         );
         conversation = {
-          chat: chatView(selected),
+          chat: chatView(selected, true),
           messages: [...projected, ...optimistic],
           paging: retained.error ? "error" : retained.older,
           ...(group && {
@@ -398,14 +428,15 @@ export function createWhatsAppApplication(
           }),
         },
         chats: chatViews,
-        contacts: client.contacts.list().map((contact) => {
+        updates,
+        contacts: client.contacts.list().map((contact, index) => {
           const nativeId =
             contact.nativeIds.find(canSend) ?? contact.nativeIds[0] ?? contact.contactId;
           const groupIds = contact.nativeIds.filter(canCreateGroupWith);
           const groupId = groupIds.find((id) => id.endsWith("@s.whatsapp.net")) ?? groupIds[0];
           const name = firstName(contact) ?? nativeId.split("@")[0] ?? "Unknown contact";
           const source = avatarUrl(contact.imgUrl);
-          const avatar = source ? avatars.token(source, source) : undefined;
+          const avatar = index < SIDEBAR_PREVIEW_COUNT ? avatarToken(nativeId, source) : undefined;
           return {
             key: chats.token(nativeId, nativeId),
             name,
@@ -424,12 +455,14 @@ export function createWhatsAppApplication(
             }),
           };
         }),
-        groups: client.groups.list().map((group) => {
+        groups: client.groups.list().map((group, index) => {
           const name = group.subject ?? "Unnamed group";
+          const avatar = index < SIDEBAR_PREVIEW_COUNT ? avatarToken(group.groupId) : undefined;
           return {
             key: chats.token(group.groupId, group.groupId),
             name,
             initials: initials(name),
+            ...(avatar && { avatar }),
             participantCount: group.participants.length,
             canSend: canSend(group.groupId),
           };
@@ -598,7 +631,21 @@ export function createWhatsAppApplication(
         ...(target.fileName && { fileName: target.fileName }),
       };
     },
-    avatar: (token) => avatars.resolve(token),
+    async avatar(token) {
+      const target = avatars.resolve(token);
+      if (!target) return undefined;
+      if (target.source) return target.source;
+      if (!options.resolveAvatar) return undefined;
+      let pending = avatarLoads.get(target.nativeId);
+      if (!pending) {
+        pending = options
+          .resolveAvatar(target.nativeId)
+          .then((source) => avatarUrl(source))
+          .catch(() => undefined);
+        avatarLoads.set(target.nativeId, pending);
+      }
+      return pending;
+    },
     async close() {
       if (closed) return;
       closed = true;

@@ -12,6 +12,7 @@ import {
   fileMediaStore,
   libsqlBackend,
   qrAuth,
+  type WhatsAppSession,
   type WhatsAppRuntime,
 } from "whatsappd";
 import {
@@ -77,6 +78,7 @@ async function createWorker(): Promise<Worker> {
   const profile = resolve(requiredEnvironment("WHATSAPPD_PROFILE_DIR"));
   const { destinations: allowed, groupPeers } = await sendAllowlist();
   const media = fileMediaStore({ directory: profile });
+  let session: WhatsAppSession | undefined;
   const backend = libsqlBackend({
     accountId,
     media,
@@ -85,12 +87,15 @@ async function createWorker(): Promise<Worker> {
   const runtime = createWhatsAppRuntime({
     accountId,
     backend,
-    openSession: (credentials) =>
-      createSession({
+    openSession: (credentials) => {
+      session = createSession({
         store: credentials,
         auth: qrAuth(),
         logger: pino({ level: "silent" }),
-      }),
+        receiveStatusBroadcast: true,
+      });
+      return session;
+    },
   });
   const client = await createWhatsAppClient(runtime);
   const application = createWhatsAppApplication({
@@ -100,6 +105,7 @@ async function createWorker(): Promise<Worker> {
     canSend: (chatId) => allowed.has(chatId),
     canCreateGroupWith: (participantId) => groupPeers.has(participantId),
     onGroupCreated: (chatId) => allowed.add(chatId),
+    resolveAvatar: async (nativeId) => session?.profilePictureUrl(nativeId, "image"),
   });
 
   try {
