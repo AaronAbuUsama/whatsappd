@@ -51,9 +51,9 @@ jobs:
             pnpm --filter "$package" pack --pack-destination "$RUNNER_TEMP"
             if [[ "$version" == *-* ]]; then
               prerelease="${version#*-}"
-              npm publish "$RUNNER_TEMP/$archive-$version.tgz" --provenance --access public --tag "${prerelease%%.*}"
+              (cd "$RUNNER_TEMP" && npm publish "$archive-$version.tgz" --provenance --access public --tag "${prerelease%%.*}")
             else
-              npm publish "$RUNNER_TEMP/$archive-$version.tgz" --provenance --access public
+              (cd "$RUNNER_TEMP" && npm publish "$archive-$version.tgz" --provenance --access public)
             fi
           }
 

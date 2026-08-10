@@ -8,8 +8,8 @@
       "title": "whatsappd",
       "description": "Install the locked whatsappd package family used by registry components.",
       "type": "registry:lib",
-      "dependencies": ["whatsappd@0.4.0-alpha.1", "@whatsappd/react@0.4.0-alpha.1"],
-      "meta": { "version": "0.4.0-alpha.1" }
+      "dependencies": ["whatsappd@0.4.0-alpha.2", "@whatsappd/react@0.4.0-alpha.2"],
+      "meta": { "version": "0.4.0-alpha.2" }
     }
   ],
   "include": ["./registry/web/registry.json", "./registry/opentui/registry.json"]
