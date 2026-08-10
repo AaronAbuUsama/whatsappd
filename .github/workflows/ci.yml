@@ -68,6 +68,8 @@ jobs:
       - run: pnpm check:docs
       # The dependency graph must stay free of unused files and packages.
       - run: pnpm check:unused
+      - run: pnpm docs:build
+      - run: pnpm registry:test
       # Build duration is recorded rather than gated. It is genuinely useful --
       # a build that creeps from one second to thirty is a real regression --
       # but shared runners vary enough that any threshold tight enough to catch

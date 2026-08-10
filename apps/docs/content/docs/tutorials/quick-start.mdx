@@ -1,0 +1,18 @@
+---
+title: Quick start
+description: Install whatsappd and open a typed Session.
+---
+
+## Install
+
+```bash
+pnpm add whatsappd
+```
+
+## Run a Session
+
+The example deliberately performs no send. Linking a real account is a side effect; sending to an automatically selected chat would be unsafe.
+
+<include cwd="../../..">snippets/quick-start.ts</include>
+
+`online` means the socket is ready. Initial WhatsApp sync is a separate stream of updates and may continue afterwards.

@@ -13,6 +13,9 @@ catalog:
   vite-plus: 0.2.2
 minimumReleaseAgeExclude:
   - baileys@7.0.0-rc14
+  - fumadocs-core@16.14.3
+  - fumadocs-mdx@15.2.3
+  - fumadocs-ui@16.14.3
 overrides:
   "@vitest/browser": 4.1.9
   "@vitest/browser-playwright": 4.1.9

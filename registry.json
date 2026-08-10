@@ -1,0 +1,16 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "@whatsappd",
+  "homepage": "https://aaronabuusama.github.io/whatsappd",
+  "items": [
+    {
+      "name": "whatsappd",
+      "title": "whatsappd",
+      "description": "Install the locked whatsappd package family used by registry components.",
+      "type": "registry:lib",
+      "dependencies": ["whatsappd@0.3.0", "@whatsappd/react@0.3.0"],
+      "meta": { "version": "0.3.0" }
+    }
+  ],
+  "include": ["./registry/web/registry.json", "./registry/opentui/registry.json"]
+}

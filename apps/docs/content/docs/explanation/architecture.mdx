@@ -1,0 +1,17 @@
+---
+title: Architecture
+description: Why the library separates WhatsApp Session, Runtime, Client, React bindings, and editable renderers.
+---
+
+```mermaid
+flowchart LR
+  A["WhatsApp Session: live boundary"] --> B["WhatsApp Runtime: Account Lease, persistence, recovery"]
+  B --> C["WhatsApp Client: synchronized application state"]
+  C --> D["@whatsappd/react: renderer-neutral subscription"]
+  D --> E["Web source registry"]
+  D --> F["OpenTUI source registry"]
+```
+
+The WhatsApp Session is the direct, live protocol boundary. The WhatsApp Runtime adds the Account Lease, Current Mirror, media storage, and queued WhatsApp Operations. The WhatsApp Client turns those capabilities into stable chat/contact/group/message namespaces. `@whatsappd/react` adapts the WhatsApp Client to React’s external-store contract without importing a renderer.
+
+The web and OpenTUI layers remain editable source because presentation is product-specific. They share WhatsApp Client semantics and a package-family version, not DOM, CSS, or terminal primitives.
