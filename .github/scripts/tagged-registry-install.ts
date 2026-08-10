@@ -150,7 +150,7 @@ try {
       "--cwd",
       consumer,
     ],
-    { cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
+    { cwd: root, env: { CI: "true", NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
   );
   assert.match(stdout, new RegExp(`whatsappd@${core.version.replaceAll(".", "\\.")}`));
   assert.match(stdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
@@ -169,7 +169,7 @@ try {
       "--cwd",
       consumer,
     ],
-    { cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
+    { cwd: root, env: { CI: "true", NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
   );
   assert.match(webStdout, /whatsapp-shell\.tsx/u);
   assert.match(webStdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
@@ -188,7 +188,7 @@ try {
       "--cwd",
       consumer,
     ],
-    { cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
+    { cwd: root, env: { CI: "true", NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
   );
   assert.match(opentuiStdout, /whatsapp-inbox\.tsx/u);
   assert.match(

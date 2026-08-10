@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0-alpha.1
+
+### Patch Changes
+
+- Publish the package family after the clean docs and tagged-registry release gates pass.
+
 ## 0.4.0-alpha.0
 
 ### Minor Changes
