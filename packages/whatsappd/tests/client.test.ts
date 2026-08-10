@@ -762,7 +762,7 @@ test("PN/LID consolidation, alias lookup and contact deletion apply from patch d
   }
 });
 
-test("the contact namespace excludes conversation-shaped records already in the mirror", async () => {
+test("WC-10 the contact namespace excludes conversation-shaped mirror records", async () => {
   const worker = await lane({
     before: async (_runtime, backend) => {
       await backend.data.accept(

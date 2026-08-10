@@ -94,6 +94,17 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
     await firstRuntime.start();
     await firstBackend.credentials.write({ registration: "durable" });
     await firstSession.emit({
+      type: "contact",
+      contact: {
+        id: CHAT,
+        nativeIds: [CHAT, "55555@lid"],
+        displayName: "Ada Display",
+        profileName: "Ada Profile",
+        verifiedName: "Ada Verified",
+        username: "ada",
+      },
+    });
+    await firstSession.emit({
       type: "message",
       message: textMessage({ id: "m1", chatId: CHAT, text: "Hello", timestamp: AT }),
     });
@@ -269,7 +280,17 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
     const replacementClient = createRuntimeMirrorReader(replacementRuntime);
 
     await replacementRuntime.start();
-    expect(await firstSnapshot(replacementClient)).toEqual(expectedSnapshot);
+    const reconstructed = await firstSnapshot(replacementClient);
+    expect(reconstructed).toEqual(expectedSnapshot);
+    expect(reconstructed.contacts.find(({ contactId }) => contactId === CHAT)).toEqual({
+      accountId: ACCOUNT,
+      contactId: CHAT,
+      nativeIds: [CHAT, "55555@lid"],
+      displayName: "Ada Display",
+      profileName: "Ada Profile",
+      verifiedName: "Ada Verified",
+      username: "ada",
+    });
     expect(await replacementClient.messages(CHAT)).toEqual(expectedPage);
     expect(await replacementClient.messages(ROOM)).toEqual(expectedGroupPage);
     expect(
@@ -505,7 +526,7 @@ test("historical controls wait durably for targets in a later process", async ()
   }
 });
 
-test("a libSQL restart preserves unknown and authoritative empty group membership", async () => {
+test("WC-11 a libSQL restart preserves unknown and authoritative empty group membership", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-groups-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
   const emptyRoom = "empty@g.us";

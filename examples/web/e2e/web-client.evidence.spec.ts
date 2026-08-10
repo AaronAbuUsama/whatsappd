@@ -66,16 +66,54 @@ test("WC-01 WC-20 WC-21 directory and responsive navigation", async ({ page }, t
     } else await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible();
   });
 
-  if (mobile)
-    await test.step("WC-23 WC-24: mobile directories stay distinct", async () => {
-      await page.getByLabel("Contacts").click();
-      await expect(page.getByRole("heading", { name: "Contacts" })).toBeVisible();
-      await page.getByLabel("Groups").click();
-      await expect(page.getByRole("heading", { name: "Groups" })).toBeVisible();
-      await expect(page.getByText("Participants not loaded")).toBeVisible();
-    });
+  await attachEvidence(page, testInfo, "WC-20-21");
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
+});
 
-  await attachEvidence(page, testInfo, "WC-20-21-23-24");
+test("WC-10 WC-11 WC-23 WC-24 contact and group directory truth", async ({ page }, testInfo) => {
+  const failures = browserHealth(page);
+  const mobile = testInfo.project.name === "mobile";
+  const navigate = (name: "Contacts" | "Groups") =>
+    mobile
+      ? page.getByLabel(name).click()
+      : page.getByRole("button", { name, exact: true }).first().click();
+  await gotoScenario(page, "directory");
+
+  await navigate("Contacts");
+  await expect(page.getByRole("heading", { name: "Contacts" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Aster Vale/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Celadon Finch/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Empty Conservatory/ })).toHaveCount(0);
+  await page.getByRole("searchbox", { name: "Search contacts" }).fill("aster-garden");
+  await expect(page.getByRole("button", { name: /Aster Vale/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Celadon Finch/ })).toBeHidden();
+  await page.getByRole("button", { name: /Aster Vale/ }).click();
+  await expect(page.getByText("A. Vale", { exact: true })).toBeVisible();
+  await expect(page.getByText("aster-garden", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("paragraph").filter({ hasText: "Invented fixture contact" }).last(),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Common groups" })).toBeVisible();
+
+  if (mobile) await page.getByRole("button", { name: "Back to directory" }).click();
+  await navigate("Groups");
+  await expect(page.getByRole("heading", { name: "Groups" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Aster Vale/ })).toHaveCount(0);
+  const known = page.getByRole("button", { name: /Beacon Workshop/ });
+  await expect(known).toBeVisible();
+  await expect(known).toContainText("3 participants");
+  const empty = page.getByRole("button", { name: /Empty Conservatory/ });
+  await expect(empty).toBeVisible();
+  await expect(empty).toContainText("0 participants");
+  const unknown = page.getByRole("button", { name: /Unloaded Orchard/ });
+  await expect(unknown).toBeVisible();
+  await expect(unknown).toContainText("Participants not loaded");
+  await page.getByRole("button", { name: /Unloaded Orchard/ }).click();
+  await expect(page.getByRole("heading", { name: "Unloaded Orchard" })).toBeVisible();
+  await expect(page.getByText("Participants not loaded", { exact: true }).last()).toBeVisible();
+
+  await attachEvidence(page, testInfo, "WC-10-11-23-24");
   await test.step("WC-02: browser health and viewport integrity", () =>
     expectHealthy(page, failures));
 });

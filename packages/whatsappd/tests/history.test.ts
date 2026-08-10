@@ -161,7 +161,7 @@ test("conversation sync chats and contacts map without leaking Baileys types", (
   expect(batch.messages).toEqual([]);
 });
 
-test("conversation sync preserves absent and authoritative empty group rosters", () => {
+test("WC-11 conversation sync preserves absent and authoritative empty group rosters", () => {
   const batch = toConversationSyncBatch(
     {
       chats: [

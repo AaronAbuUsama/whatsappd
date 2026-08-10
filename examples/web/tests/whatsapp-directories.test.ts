@@ -66,7 +66,7 @@ void test("chat summaries expose truthful preview direction and aggregate receip
   }
 });
 
-void test("contact and group directories remain separate and preserve known facts", async () => {
+void test("WC-10 WC-11 WC-23 WC-24 directories preserve identity and membership truth", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
   const runtime = createWhatsAppRuntime({

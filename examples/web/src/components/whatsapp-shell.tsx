@@ -520,7 +520,13 @@ export function WhatsAppShell({
         navigation={<WhatsAppMobileNavigation section={section} setSection={changeSection} />}
       />
     ) : (
-      <DirectoryList browser={browser} view={view} section={section} setSection={changeSection} />
+      <DirectoryList
+        key={section}
+        browser={browser}
+        view={view}
+        section={section}
+        setSection={changeSection}
+      />
     );
   const detail =
     section === "contacts" || section === "groups" ? (
