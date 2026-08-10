@@ -80,6 +80,35 @@ test("WC-01 WC-20 WC-21 directory and responsive navigation", async ({ page }, t
     expectHealthy(page, failures));
 });
 
+test("WC-22 avatars render or fall back without retrying failures", async ({ page }, testInfo) => {
+  const failures = browserHealth(page);
+  const requests = new Map<string, number>();
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith("/api/avatar/state-lab-"))
+      requests.set(path, (requests.get(path) ?? 0) + 1);
+  });
+  await gotoScenario(page, "directory");
+
+  await test.step("WC-22: valid avatars render and shared tokens load once", async () => {
+    await expect(page.getByRole("img", { name: "Aster Garden" })).toBeVisible();
+    await expect(page.getByRole("img", { name: /Cedar Observatory/ })).toBeVisible();
+    expect(requests.get("/api/avatar/state-lab-shared")).toBe(1);
+  });
+
+  await test.step("WC-22: failed avatars retain initials and are negatively cached", async () => {
+    const beacon = page.getByRole("button", { name: /Beacon Workshop/ });
+    await expect(beacon.getByText("BW", { exact: true })).toBeVisible();
+    await beacon.click();
+    await expect(page.getByRole("heading", { name: "Beacon Workshop" })).toBeVisible();
+    expect(requests.get("/api/avatar/state-lab-broken")).toBe(1);
+  });
+
+  await attachEvidence(page, testInfo, "WC-22");
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
+});
+
 test("WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({ page }, testInfo) => {
   const failures = browserHealth(page);
   await gotoScenario(page, "conversation");
