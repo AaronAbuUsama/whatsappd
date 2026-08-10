@@ -63,7 +63,7 @@ async function assertTaggedRendererRegistry(family: "web" | "opentui"): Promise<
     const files = await Promise.all(
       (item.files ?? []).map(async (file) => {
         const source = await fetch(
-          `https://raw.githubusercontent.com/AaronAbuUsama/whatsappd/${ref}/${file.path}`,
+          `https://raw.githubusercontent.com/AaronAbuUsama/whatsappd/${ref}/registry/${family}/${file.path}`,
         );
         assert.equal(source.ok, true, `tagged ${item.name} source returned ${source.status}`);
         return { ...file, content: await source.text() };
