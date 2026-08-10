@@ -109,6 +109,54 @@ test("WC-22 avatars render or fall back without retrying failures", async ({ pag
     expectHealthy(page, failures));
 });
 
+test("WC-14 stored media renders and seeks through opaque routes", async ({ page }, testInfo) => {
+  const failures = browserHealth(page);
+  await gotoScenario(page, "conversation");
+
+  await test.step("WC-14: stored image, sticker, audio, video, and document are usable", async () => {
+    await expect(page.getByRole("img", { name: "Invented image caption" })).toBeVisible();
+    await expect(page.getByRole("img", { name: "sticker" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Download" })).toBeVisible();
+    const audio = page.getByLabel("Voice message");
+    const video = page.getByLabel("Video message");
+    await expect
+      .poll(() => audio.evaluate((element) => (element as HTMLMediaElement).readyState))
+      .toBeGreaterThanOrEqual(1);
+    await expect
+      .poll(() => video.evaluate((element) => (element as HTMLMediaElement).readyState))
+      .toBeGreaterThanOrEqual(1);
+  });
+
+  await test.step("WC-14: missing and failed media remain distinct", async () => {
+    await expect(page.getByText("Media reference missing")).toBeVisible();
+    await expect(page.getByText("Media download failed")).toBeVisible();
+  });
+
+  await test.step("WC-14: browser seeking receives a private byte range", async () => {
+    const proof = await page.evaluate(async () => {
+      const response = await fetch("/api/media/state-lab-audio", {
+        headers: { Range: "bytes=0-9" },
+      });
+      return {
+        status: response.status,
+        range: response.headers.get("content-range"),
+        cache: response.headers.get("cache-control"),
+        length: (await response.arrayBuffer()).byteLength,
+      };
+    });
+    expect(proof).toEqual({
+      status: 206,
+      range: "bytes 0-9/280",
+      cache: "private, no-store",
+      length: 10,
+    });
+  });
+
+  await attachEvidence(page, testInfo, "WC-14");
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
+});
+
 test("WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({ page }, testInfo) => {
   const failures = browserHealth(page);
   await gotoScenario(page, "conversation");
