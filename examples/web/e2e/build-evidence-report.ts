@@ -1,5 +1,7 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertNoPrivateMaterial, stateLabFixtureSources } from "../tests/privacy-check.ts";
 
@@ -27,9 +29,16 @@ type Run = {
   readonly screenshot: string;
   readonly video: string;
 };
+type SemanticProof = {
+  readonly id: "WC-40" | "WC-41" | "WC-42";
+  readonly rung: "P6";
+  readonly status: "passed";
+  readonly assertions: readonly string[];
+};
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = path.resolve(webRoot, "../..");
+const execFile = promisify(execFileCallback);
 const evidence = path.join(repository, ".artifacts/evidence");
 const media = path.join(evidence, "media");
 const report = path.join(evidence, "index.html");
@@ -61,7 +70,9 @@ for (const spec of specs)
       const assertions = (result.steps ?? []).map(({ title }) => title);
       if (assertions.some((title) => !/^WC-\d+(?: WC-\d+)*:/u.test(title)))
         throw new Error(`${spec.title} has an assertion without a WC id`);
-      const features = [...new Set(assertions.join("\n").match(/WC-\d+/gu) ?? [])];
+      const features = [
+        ...new Set(`${spec.title}\n${assertions.join("\n")}`.match(/WC-\d+/gu) ?? []),
+      ];
       const screenshotAttachment = result.attachments?.find(
         ({ contentType }) => contentType === "image/png",
       );
@@ -94,6 +105,61 @@ for (const spec of specs)
 if (!runs.length || runs.some(({ status }) => status !== "passed"))
   throw new Error("Evidence report requires a non-empty all-passing browser run");
 
+await execFile(
+  process.execPath,
+  [
+    "--experimental-strip-types",
+    path.join(repository, "packages/whatsappd/smoke/packed-consumer.ts"),
+  ],
+  { cwd: repository },
+);
+await execFile(
+  process.execPath,
+  [
+    "--experimental-strip-types",
+    path.join(repository, ".github/scripts/packed-renderer-examples.ts"),
+    "--web",
+  ],
+  { cwd: repository },
+);
+await execFile("pnpm", ["--filter", "@whatsappd/docs", "registry:build"], {
+  cwd: repository,
+});
+await execFile(
+  process.execPath,
+  [
+    "--experimental-strip-types",
+    "--test",
+    "--test-name-pattern=canonical registry|hosted namespace|web items|web block",
+    path.join(repository, "apps/docs/tests/registry.test.ts"),
+  ],
+  { cwd: repository },
+);
+const semanticProofs: readonly SemanticProof[] = [
+  {
+    id: "WC-40",
+    rung: "P6",
+    status: "passed",
+    assertions: ["Web registry source matches the example and installs into a clean consumer"],
+  },
+  {
+    id: "WC-41",
+    rung: "P6",
+    status: "passed",
+    assertions: ["Packed @whatsappd/react stays renderer-neutral and drives the web example"],
+  },
+  {
+    id: "WC-42",
+    rung: "P6",
+    status: "passed",
+    assertions: ["Packed packages and registry source pass clean-consumer proofs"],
+  },
+];
+writeFileSync(
+  path.join(evidence, "semantic-results.json"),
+  `${JSON.stringify(semanticProofs, undefined, 2)}\n`,
+);
+
 const features = [...contract.matchAll(/^### (WC-\d+) — (.+)$/gmu)].map((match) => ({
   id: match[1]!,
   title: match[2]!,
@@ -109,13 +175,17 @@ const escape = (value: string): string =>
 const featureIndex = features
   .map((feature) => {
     const evidenceRuns = runs.filter(({ features: ids }) => ids.includes(feature.id));
+    const semanticProof = semanticProofs.find(({ id }) => id === feature.id);
+    const passed = evidenceRuns.length > 0 || semanticProof !== undefined;
     return `<article id="${feature.id.toLowerCase()}">
       <h2>${feature.id} — ${escape(feature.title)}</h2>
-      <p class="${evidenceRuns.length ? "passed" : "pending"}">${evidenceRuns.length ? "P5 evidence recorded" : "P5 evidence pending"}</p>
+      <p class="${passed ? "passed" : "pending"}">${evidenceRuns.length ? "P5 browser evidence recorded" : semanticProof ? "P6 semantic proof recorded" : "Evidence pending"}</p>
       ${
         evidenceRuns.length
           ? `<ul>${evidenceRuns.map((run) => `<li><a href="#${run.id}">${escape(run.project)} — ${escape(run.title)}</a></li>`).join("")}</ul>`
-          : "<p>No browser assertion has been recorded for this feature yet.</p>"
+          : semanticProof
+            ? `<ul>${semanticProof.assertions.map((assertion) => `<li>${escape(assertion)}</li>`).join("")}</ul>`
+            : "<p>No browser assertion has been recorded for this feature yet.</p>"
       }
     </article>`;
   })
@@ -149,8 +219,9 @@ assertNoPrivateMaterial(
   JSON.stringify(runs.map(({ screenshot: _screenshot, video: _video, ...run }) => run)),
   "evidence metadata",
 );
+assertNoPrivateMaterial(JSON.stringify(semanticProofs), "semantic evidence metadata");
 assertNoPrivateMaterial(html, "evidence HTML");
 writeFileSync(report, html);
 console.log(
-  `evidence-report: ${runs.length}/${runs.length} runs passed; ${features.length} WC ids indexed; privacy scan passed`,
+  `evidence-report: ${runs.length}/${runs.length} browser runs and ${semanticProofs.length}/${semanticProofs.length} semantic proofs passed; ${features.length} WC ids indexed; privacy scan passed`,
 );
