@@ -1,0 +1,17 @@
+{
+  "name": "@whatsappd/registry-opentui",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opentui/core": "0.4.5",
+    "@opentui/react": "0.4.5",
+    "@whatsappd/react": "workspace:*",
+    "react": "19.2.8",
+    "whatsappd": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19"
+  }
+}

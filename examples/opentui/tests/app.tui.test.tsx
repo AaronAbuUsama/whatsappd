@@ -4,7 +4,10 @@ import { useKeyboard } from "@opentui/react";
 import { act, useState } from "react";
 import { createWhatsAppBindings, type WhatsAppStore } from "@whatsappd/react";
 import { WhatsAppTui } from "../src/app.tsx";
-import type { TerminalApplication, TerminalSnapshot } from "../src/application.ts";
+import type {
+  TerminalApplication,
+  TerminalSnapshot,
+} from "../src/components/whatsappd-tui/lib/whatsapp-terminal.ts";
 
 const snapshot: TerminalSnapshot = {
   account: "fixture-account",

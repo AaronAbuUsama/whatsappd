@@ -2,5 +2,156 @@
   "$schema": "https://ui.shadcn.com/schema/registry.json",
   "name": "@whatsappd/opentui",
   "homepage": "https://aaronabuusama.github.io/whatsappd/docs/reference/registry",
-  "items": []
+  "items": [
+    {
+      "name": "whatsapp-tui-contract",
+      "title": "WhatsApp terminal contract",
+      "description": "Terminal snapshots and commands projected from the public WhatsApp Client.",
+      "type": "registry:lib",
+      "dependencies": ["@whatsappd/react@0.3.0", "whatsappd@0.3.0"],
+      "devDependencies": ["@types/node@>=20.0.0"],
+      "files": [
+        {
+          "path": "src/lib/whatsapp-terminal.ts",
+          "type": "registry:lib",
+          "target": "components/whatsappd-tui/lib/whatsapp-terminal.ts"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-tui-account-state",
+      "title": "WhatsApp terminal account state",
+      "description": "Terminal-native account identity and connection phase presentation.",
+      "type": "registry:component",
+      "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
+      "files": [
+        {
+          "path": "src/components/whatsapp-account-state.tsx",
+          "type": "registry:component",
+          "target": "components/whatsappd-tui/components/whatsapp-account-state.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-tui-chat-list",
+      "title": "WhatsApp terminal chat list",
+      "description": "Terminal-native chat rows, selection, previews, groups, and send availability.",
+      "type": "registry:component",
+      "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
+      "registryDependencies": ["@whatsappd/whatsapp-tui-contract"],
+      "files": [
+        {
+          "path": "src/components/whatsapp-chat-list.tsx",
+          "type": "registry:component",
+          "target": "components/whatsappd-tui/components/whatsapp-chat-list.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-tui-operation-status",
+      "title": "WhatsApp terminal operation status",
+      "description": "Queued, sending, failed, and outcome-unknown operation presentation.",
+      "type": "registry:component",
+      "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
+      "registryDependencies": ["@whatsappd/whatsapp-tui-contract"],
+      "files": [
+        {
+          "path": "src/components/whatsapp-operation-status.tsx",
+          "type": "registry:component",
+          "target": "components/whatsappd-tui/components/whatsapp-operation-status.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-tui-message",
+      "title": "WhatsApp terminal message",
+      "description": "Terminal-native message and attachment summary with reactions and receipts.",
+      "type": "registry:component",
+      "dependencies": ["@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-tui-contract",
+        "@whatsappd/whatsapp-tui-operation-status"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-message.tsx",
+          "type": "registry:component",
+          "target": "components/whatsappd-tui/components/whatsapp-message.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-tui-composer",
+      "title": "WhatsApp terminal composer",
+      "description": "Terminal-native allowlist-aware text composer.",
+      "type": "registry:component",
+      "dependencies": ["@opentui/core@^0.4.5", "@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
+      "files": [
+        {
+          "path": "src/components/whatsapp-composer.tsx",
+          "type": "registry:component",
+          "target": "components/whatsappd-tui/components/whatsapp-composer.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-tui-conversation",
+      "title": "WhatsApp terminal conversation",
+      "description": "Terminal-native history paging, transcript, operation states, and composer.",
+      "type": "registry:component",
+      "dependencies": ["@opentui/core@^0.4.5", "@opentui/react@^0.4.5", "react@>=19.2.0"],
+      "devDependencies": ["@types/react@^19"],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-tui-composer",
+        "@whatsappd/whatsapp-tui-contract",
+        "@whatsappd/whatsapp-tui-message"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-conversation.tsx",
+          "type": "registry:component",
+          "target": "components/whatsappd-tui/components/whatsapp-conversation.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-tui-inbox",
+      "title": "WhatsApp terminal inbox",
+      "description": "Complete responsive terminal inbox block with renderer-owned focus, keyboard, layout, and scroll anchoring.",
+      "type": "registry:block",
+      "dependencies": [
+        "@opentui/core@^0.4.5",
+        "@opentui/react@^0.4.5",
+        "@whatsappd/react@0.3.0",
+        "react@>=19.2.0"
+      ],
+      "devDependencies": ["@types/react@^19"],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-tui-account-state",
+        "@whatsappd/whatsapp-tui-chat-list",
+        "@whatsappd/whatsapp-tui-contract",
+        "@whatsappd/whatsapp-tui-conversation"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-inbox.tsx",
+          "type": "registry:block",
+          "target": "components/whatsappd-tui/components/whatsapp-inbox.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    }
+  ]
 }

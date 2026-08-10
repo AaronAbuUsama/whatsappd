@@ -19,6 +19,7 @@ Register the hosted namespace once in `components.json`:
 # Hosted namespace
 pnpm dlx shadcn@latest add @whatsappd/whatsappd
 pnpm dlx shadcn@latest add @whatsappd/whatsapp-inbox
+pnpm dlx shadcn@latest add @whatsappd/whatsapp-tui-inbox
 
 # Reproducible Git tag (replace <tag> with a release that includes the registry)
 pnpm dlx shadcn@latest add AaronAbuUsama/whatsappd/whatsapp-inbox#<tag>
@@ -31,7 +32,14 @@ The web catalogue also exposes `whatsapp-chat-list`, `whatsapp-conversation`,
 `WhatsAppBrowser` store; the consuming application keeps its routes,
 authorization, media URLs, and theme tokens.
 
-Pairing/onboarding is not published as a web block yet because the working web
-example has not proved protected QR challenge consumption. Both registry
+The OpenTUI catalogue exposes `whatsapp-tui-chat-list`,
+`whatsapp-tui-conversation`, `whatsapp-tui-message`,
+`whatsapp-tui-composer`, `whatsapp-tui-account-state`, and
+`whatsapp-tui-operation-status`. The complete `whatsapp-tui-inbox` block owns
+terminal focus, keyboard handling, layout, and scroll anchoring while consuming
+the same renderer-neutral React store contract.
+
+Pairing/onboarding is not published for either renderer yet because the working
+examples have not proved protected QR challenge consumption. Both registry
 addresses resolve canonical source at one package-family version; generated
 `/r/*.json` files are build output, not committed source.

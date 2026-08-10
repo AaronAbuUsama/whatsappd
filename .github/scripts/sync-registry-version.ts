@@ -20,11 +20,13 @@ for (const file of files) {
   else if (source !== updated) await writeFile(target, updated);
 }
 
-const packageTarget = path.join(root, "registry/web/package.json");
-const packageSource = await readFile(packageTarget, "utf8");
-const packageJson = JSON.parse(packageSource) as { version: string };
-if (check) assert.equal(packageJson.version, version, "registry/web/package.json version");
-else if (packageJson.version !== version) {
-  packageJson.version = version;
-  await writeFile(packageTarget, `${JSON.stringify(packageJson, undefined, 2)}\n`);
+for (const family of ["web", "opentui"]) {
+  const packageTarget = path.join(root, `registry/${family}/package.json`);
+  const packageSource = await readFile(packageTarget, "utf8");
+  const packageJson = JSON.parse(packageSource) as { version: string };
+  if (check) assert.equal(packageJson.version, version, `registry/${family}/package.json version`);
+  else if (packageJson.version !== version) {
+    packageJson.version = version;
+    await writeFile(packageTarget, `${JSON.stringify(packageJson, undefined, 2)}\n`);
+  }
 }
