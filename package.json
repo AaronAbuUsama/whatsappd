@@ -6,7 +6,7 @@
     "build": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/react build",
     "dev": "pnpm --filter whatsappd dev",
     "docs": "pnpm --filter @whatsappd/docs dev",
-    "docs:build": "pnpm --filter @whatsappd/docs build",
+    "docs:build": "pnpm build && pnpm --filter @whatsappd/docs build",
     "example:web": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/example-web dev",
     "example:web:build": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/example-web build",
     "example:opentui": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/example-opentui dev",
