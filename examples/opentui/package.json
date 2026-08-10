@@ -1,0 +1,24 @@
+{
+  "name": "@whatsappd/example-opentui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/index.tsx",
+    "test": "pnpm --filter whatsappd build && node --experimental-strip-types --test tests/application.test.ts && bun tests/app.tui.test.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@libsql/client": "0.15.15",
+    "@opentui/core": "0.4.5",
+    "@opentui/react": "0.4.5",
+    "pino": "^10.3.1",
+    "react": "19.2.8",
+    "whatsappd": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19",
+    "typescript": "^6.0.3"
+  }
+}
