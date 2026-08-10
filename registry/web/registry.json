@@ -8,7 +8,7 @@
       "title": "WhatsApp web contract",
       "description": "Renderer-facing snapshots, commands, and browser store contract.",
       "type": "registry:lib",
-      "dependencies": ["react@>=18.0.0", "whatsappd@0.4.0-alpha.0"],
+      "dependencies": ["react@>=18.0.0", "whatsappd@0.4.0-alpha.1"],
       "devDependencies": ["@types/react@^19"],
       "files": [
         {
@@ -22,7 +22,7 @@
           "target": "lib/whatsappd/whatsapp-assets.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-chat-primitives",
@@ -64,7 +64,7 @@
           "target": "components/ui/message-scroller.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-avatar",
@@ -84,7 +84,7 @@
           "target": "lib/avatar-cache.ts"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-account-state",
@@ -100,7 +100,7 @@
           "target": "components/whatsapp-account-state.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-operation-status",
@@ -116,7 +116,7 @@
           "target": "components/whatsapp-operation-status.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-composer",
@@ -143,7 +143,7 @@
           "target": "components/whatsapp-composer.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-message",
@@ -168,7 +168,7 @@
           "target": "components/whatsapp-message.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-chat-list",
@@ -210,7 +210,7 @@
           "target": "components/whatsapp-navigation.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-conversation",
@@ -242,7 +242,7 @@
           "target": "components/whatsapp-conversation.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     },
     {
       "name": "whatsapp-inbox",
@@ -250,7 +250,7 @@
       "description": "Complete responsive inbox block. Supply the browser store; routes, auth, media URLs, and styling stay application-owned.",
       "type": "registry:block",
       "dependencies": [
-        "@whatsappd/react@0.4.0-alpha.0",
+        "@whatsappd/react@0.4.0-alpha.1",
         "lucide-react@^1.30.0",
         "next-themes@^0.4.6",
         "sonner@^2.0.7"
@@ -292,7 +292,7 @@
           "target": "components/whatsapp-updates.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.0" }
+      "meta": { "version": "0.4.0-alpha.1" }
     }
   ]
 }
