@@ -1,0 +1,26 @@
+---
+title: Source registry
+description: Install editable web and OpenTUI source from the hosted namespace or a Git tag.
+---
+
+The npm package family contains `whatsappd` and `@whatsappd/react`. Renderer components are source: the shadcn CLI copies them into the consumer’s repository.
+
+Register the hosted namespace once in `components.json`:
+
+```json
+{
+  "registries": {
+    "@whatsappd": "https://aaronabuusama.github.io/whatsappd/r/{name}.json"
+  }
+}
+```
+
+```bash
+# Hosted namespace
+pnpm dlx shadcn@latest add @whatsappd/whatsappd
+
+# Reproducible Git tag (replace <tag> with a release that includes the registry)
+pnpm dlx shadcn@latest add AaronAbuUsama/whatsappd/whatsappd#<tag>
+```
+
+Both addresses resolve the same canonical root registry. Web and OpenTUI items declare their own WhatsApp Runtime and registry dependencies; generated `/r/*.json` files are build output, not committed source.

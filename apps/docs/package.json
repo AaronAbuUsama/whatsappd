@@ -1,0 +1,33 @@
+{
+  "name": "@whatsappd/docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm registry:build && next build",
+    "dev": "next dev --hostname 127.0.0.1",
+    "registry:build": "shadcn build registry.json -c ../.. -o apps/docs/public/r",
+    "test": "pnpm registry:build && node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "fumadocs-mdx && tsc --noEmit"
+  },
+  "dependencies": {
+    "fumadocs-core": "16.14.3",
+    "fumadocs-mdx": "15.2.3",
+    "fumadocs-ui": "16.14.3",
+    "lucide-react": "^1.30.0",
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "whatsappd": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/mdx": "2.0.14",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "shadcn": "^4.16.2",
+    "tailwindcss": "^4",
+    "typescript": "^6.0.3"
+  }
+}

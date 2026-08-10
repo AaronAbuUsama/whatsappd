@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -47,12 +47,39 @@ try {
       dependencies: {
         "@whatsappd/react": `file:./${reactArchive}`,
         "@libsql/client": "0.15.15",
+        "@types/node": "^26.1.1",
         react: "19.2.8",
+        typescript: "^6.0.3",
         whatsappd: `file:./${archive}`,
       },
     }),
   );
   await execFile("pnpm", ["install", "--ignore-scripts"], { cwd: consumer });
+
+  const snippets = (await readdir(path.join(root, "apps/docs/snippets"))).filter((file) =>
+    file.endsWith(".ts"),
+  );
+  await Promise.all(
+    snippets.map((file) =>
+      copyFile(path.join(root, "apps/docs/snippets", file), path.join(consumer, file)),
+    ),
+  );
+  await writeFile(
+    path.join(consumer, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        noEmit: true,
+        skipLibCheck: true,
+        strict: true,
+        target: "ES2022",
+        types: ["node"],
+      },
+      files: snippets,
+    }),
+  );
+  await execFile("pnpm", ["exec", "tsc", "--project", "tsconfig.json"], { cwd: consumer });
 
   const packageJson = JSON.parse(
     await readFile(path.join(consumer, "node_modules/whatsappd/package.json"), "utf8"),

@@ -1,0 +1,10 @@
+---
+title: Build a durable WhatsApp Client
+description: Compose the WhatsApp Runtime and WhatsApp Client without hiding application-owned lifetime.
+---
+
+Use `createWhatsAppRuntime()` when the application needs a Current Mirror and queued WhatsApp Operations. The application owns four things: its account identifier, Backend Capabilities, Session factory, and shutdown sequence.
+
+<include cwd="../../..">snippets/durable-client.ts</include>
+
+Do not create one WhatsApp Runtime per HTTP request. One long-lived Account Worker owns the WhatsApp Runtime and Account Lease; browser and terminal renderers consume the same WhatsApp Client state through application-owned transport.

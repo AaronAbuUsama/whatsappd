@@ -25,6 +25,10 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
+      # A pushed tag is the immutable fallback address promised by ADR-0033.
+      # Exercise the real GitHub shorthand after the ref exists remotely.
+      - run: pnpm registry:build
+      - run: node --experimental-strip-types .github/scripts/tagged-registry-install.ts "$GITHUB_REF_NAME"
       # The publish step below packs `dist/`, and `pnpm pack` archives whatever
       # `dist/` already holds. Without this the tarball that reaches npm is the
       # one artifact the packed proof never inspected — the proof would guard

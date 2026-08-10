@@ -54,13 +54,15 @@ program: this machine holds real conversations and sends are allowlisted.
 ```bash
 pnpm check         # format, lint, and type-check
 pnpm test
+pnpm docs:build
+pnpm registry:test
 pnpm check:docs    # every path and script name the agent docs cite still exists
 pnpm check:unused  # unused files, exports, and dependencies
 pnpm build
 pnpm test:pack     # builds, packs, and inspects the tarball a consumer receives
 ```
 
-CI runs exactly these on Node 22 and 24.
+CI runs these core gates on Node 22 and 24, plus renderer, coverage, and package-size proofs.
 
 The size and shape limits in `vite.config.ts` are set just above what the
 codebase already contains, so they bind the next file rather than demand a
