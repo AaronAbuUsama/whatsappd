@@ -10,7 +10,7 @@ allowBuilds:
   protobufjs: false
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.2
-  vite-plus: 0.2.2
+  vite-plus: 0.2.7
 minimumReleaseAgeExclude:
   - baileys@7.0.0-rc14
 overrides:

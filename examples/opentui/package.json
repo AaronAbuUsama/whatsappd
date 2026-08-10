@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@libsql/client": "0.15.15",
+    "@libsql/client": "0.17.4",
     "@opentui/core": "0.4.5",
     "@opentui/react": "0.4.5",
     "@whatsappd/react": "workspace:*",
@@ -18,7 +18,7 @@
     "whatsappd": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "@types/react": "^19",
     "typescript": "^6.0.3"
   }
