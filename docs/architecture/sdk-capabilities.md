@@ -2,7 +2,7 @@
 
 This agent-maintained guide answers what Baileys exposes, what whatsappd exposes today, and what friendly interface is planned. It is a roadmap, not a product authority, merge gate, or claim that every row has been exercised against a live account. No human has reviewed it line by line, so treat it as capable of being wrong and fix it where it is.
 
-Audit versions: whatsappd `0.2.2`; Baileys `7.0.0-rc14`.
+Audit versions: whatsappd `0.4.0-alpha.0`; Baileys `7.0.0-rc14`.
 
 ## Verification status
 
@@ -32,8 +32,9 @@ createWhatsAppClient`, observed inbound text through both Client read seams,
 - Web source registry: **run at the clean source-consumer seam** — the proven
   web presentation is the canonical `registry/web` source, the example consumes
   byte-identical installed files, and a clean application installs and
-  typechecks the complete `whatsapp-inbox` block. Packed-package P6 remains the
-  separate whole-goal proof in issue #164.
+  typechecks the complete `whatsapp-inbox` block. The `0.4.0-alpha.0` release
+  proof also installs packed package-family tarballs into the permanent example
+  and runs its browser interaction tests.
 - OpenTUI: **run at the deterministic renderer seam** — issue #160's private
   OpenTUI React consumer composes the public Client, projects saved/live and
   optimistic state, and passed native-renderer checks for desktop and compact
@@ -43,7 +44,9 @@ createWhatsAppClient`, observed inbound text through both Client read seams,
 - OpenTUI source registry: **run at the clean source-consumer seam** — the
   example consumes byte-identical `registry/opentui` files and a clean project
   installs and typechecks the complete `whatsapp-tui-inbox` block with its
-  declared OpenTUI and package-family dependencies.
+  declared OpenTUI and package-family dependencies. The `0.4.0-alpha.0` release
+  proof installs the same packed package family and drives the native renderer
+  interaction test.
 
 Automated tests do not establish real-account or rendered behavior. A P4 run at
 one layer establishes nothing about another: the Session-layer history proof and

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -36,7 +37,13 @@ async function assertTaggedRendererRegistry(family: "web" | "opentui"): Promise<
     readonly items?: ReadonlyArray<{
       readonly name?: string;
       readonly dependencies?: readonly string[];
+      readonly files?: ReadonlyArray<{
+        readonly path: string;
+        readonly target?: string;
+        readonly type?: string;
+      }>;
       readonly meta?: { readonly version?: string };
+      readonly [key: string]: unknown;
     }>;
   };
   for (const item of registry.items ?? []) {
@@ -52,14 +59,45 @@ async function assertTaggedRendererRegistry(family: "web" | "opentui"): Promise<
     }
     const hosted = JSON.parse(
       await readFile(path.join(root, `apps/docs/public/r/${item.name}.json`), "utf8"),
-    ) as { readonly meta?: { readonly version?: string } };
-    assert.equal(hosted.meta?.version, item.meta?.version, `${item.name} hosted version`);
+    ) as Record<string, unknown>;
+    const { $schema: _schema, ...hostedItem } = hosted;
+    const files = await Promise.all(
+      (item.files ?? []).map(async (file) => {
+        const source = await fetch(
+          `https://raw.githubusercontent.com/AaronAbuUsama/whatsappd/${ref}/registry/${family}/${file.path}`,
+        );
+        assert.equal(source.ok, true, `tagged ${item.name} source returned ${source.status}`);
+        return { ...file, path: `registry/${family}/${file.path}`, content: await source.text() };
+      }),
+    );
+    assert.deepEqual(
+      hostedItem,
+      item.files ? { ...item, files } : item,
+      `${item.name} hosted and tagged items differ`,
+    );
   }
 }
 
 await assertTaggedRendererRegistry("web");
 await assertTaggedRendererRegistry("opentui");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-tagged-registry-"));
+const registryServer = createServer(async (request, response) => {
+  try {
+    const name = path.basename(new URL(request.url ?? "/", "http://registry.local").pathname);
+    assert.match(name, /^[a-z0-9-]+\.json$/u);
+    response.setHeader("content-type", "application/json");
+    response.end(await readFile(path.join(root, "apps/docs/public/r", name)));
+  } catch {
+    response.statusCode = 404;
+    response.end();
+  }
+});
+await new Promise<void>((resolve, reject) => {
+  registryServer.once("error", reject);
+  registryServer.listen(0, "127.0.0.1", resolve);
+});
+const address = registryServer.address();
+assert.ok(address && typeof address === "object");
 
 try {
   await mkdir(path.join(consumer, "app"));
@@ -92,6 +130,9 @@ try {
         lib: "@/lib",
         hooks: "@/hooks",
       },
+      registries: {
+        "@whatsappd": `http://127.0.0.1:${address.port}/{name}.json`,
+      },
     }),
   );
 
@@ -113,6 +154,25 @@ try {
   );
   assert.match(stdout, new RegExp(`whatsappd@${core.version.replaceAll(".", "\\.")}`));
   assert.match(stdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
+
+  const { stdout: webStdout } = await execFile(
+    "pnpm",
+    [
+      "--filter",
+      "@whatsappd/docs",
+      "exec",
+      "shadcn",
+      "add",
+      `AaronAbuUsama/whatsappd/whatsapp-inbox#${ref}`,
+      "--dry-run",
+      "--yes",
+      "--cwd",
+      consumer,
+    ],
+    { cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
+  );
+  assert.match(webStdout, /whatsapp-shell\.tsx/u);
+  assert.match(webStdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
 
   const { stdout: opentuiStdout } = await execFile(
     "pnpm",
@@ -136,5 +196,8 @@ try {
     new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`),
   );
 } finally {
+  await new Promise<void>((resolve, reject) =>
+    registryServer.close((error) => (error ? reject(error) : resolve())),
+  );
   await rm(consumer, { recursive: true, force: true });
 }

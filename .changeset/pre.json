@@ -1,0 +1,21 @@
+{
+  "mode": "pre",
+  "tag": "alpha",
+  "initialVersions": {
+    "@whatsappd/docs": "0.1.0",
+    "@whatsappd/example-opentui": "0.1.0",
+    "@whatsappd/example-web": "0.1.0",
+    "@whatsappd/react": "0.3.0",
+    "whatsappd": "0.3.0",
+    "@whatsappd/registry-opentui": "0.3.0",
+    "@whatsappd/registry-web": "0.3.0"
+  },
+  "changesets": [
+    "calm-controls-stay-controls",
+    "calm-groups-know",
+    "curly-bags-listen",
+    "neat-docs-register",
+    "opentui-registry-items",
+    "web-registry-items"
+  ]
+}
