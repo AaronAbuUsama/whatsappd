@@ -1,11 +1,23 @@
 import { WhatsAppShell } from "@/components/whatsapp-shell";
+import { stateLabView } from "@/components/whatsapp-state-lab";
+import { WhatsAppStateLabShell } from "@/components/whatsapp-state-lab-shell";
 import { applicationState } from "@/lib/whatsapp.server";
 import { cookies } from "next/headers";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  readonly searchParams: Promise<{ readonly __stateLab?: string }>;
+}) {
+  const lab =
+    process.env.NODE_ENV === "development"
+      ? stateLabView((await searchParams).__stateLab)
+      : undefined;
+  if (lab) return <WhatsAppStateLabShell initial={lab} />;
+
   if (!process.env.WHATSAPPD_PROFILE_DIR || !process.env.WHATSAPPD_ACCOUNT_ID) {
     return (
       <main className="grid min-h-svh place-items-center p-6">

@@ -1,6 +1,12 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { STATE_LAB_COVERAGE } from "../src/components/whatsapp-state-lab";
 
-const story = (id: string): string => `/iframe.html?id=whatsapp-state-lab--${id}&viewMode=story`;
+const scenario = (id: string): string => `/?__stateLab=${id}`;
+
+async function gotoScenario(page: Page, id: string): Promise<void> {
+  await page.goto(scenario(id));
+  await page.getByTestId("state-lab-ready").waitFor({ state: "attached" });
+}
 
 function browserHealth(page: Page): string[] {
   const failures: string[] = [];
@@ -13,7 +19,7 @@ function browserHealth(page: Page): string[] {
   );
   page.on("response", (response) => {
     const url = new URL(response.url());
-    if (url.origin === "http://127.0.0.1:6006" && response.status() >= 400)
+    if (url.origin === "http://127.0.0.1:3102" && response.status() >= 400)
       failures.push(`response: ${response.status()} ${url.pathname}`);
   });
   return failures;
@@ -33,12 +39,15 @@ async function expectHealthy(page: Page, failures: readonly string[]): Promise<v
   expect(failures).toEqual([]);
 }
 
-test("WC-01 WC-20 WC-21 WC-23 WC-24 directory and responsive navigation", async ({
-  page,
-}, testInfo) => {
+test("WC-01 WC-20 WC-21 directory and responsive navigation", async ({ page }, testInfo) => {
   const failures = browserHealth(page);
   const mobile = testInfo.project.name === "mobile";
-  await page.goto(story("desktop-directory"));
+  await gotoScenario(page, "directory");
+
+  await test.step("WC-01: the real proof app renders invented deterministic state", async () => {
+    await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible();
+    await expect(page.getByText("Aster Garden")).toBeVisible();
+  });
 
   await test.step("WC-21: search uses the rendered chat list", async () => {
     await page.getByRole("searchbox", { name: "Search chats" }).fill("Aster");
@@ -67,18 +76,13 @@ test("WC-01 WC-20 WC-21 WC-23 WC-24 directory and responsive navigation", async 
     });
 
   await attachEvidence(page, testInfo, "WC-20-21-23-24");
-  await expectHealthy(page, failures);
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
 });
 
 test("WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({ page }, testInfo) => {
   const failures = browserHealth(page);
-  await page.goto(
-    story(
-      testInfo.project.name === "mobile"
-        ? "mobile-conversation-matrix"
-        : "desktop-conversation-matrix",
-    ),
-  );
+  await gotoScenario(page, "conversation");
 
   await test.step("WC-31: every message-kind fixture reaches the transcript", async () => {
     await expect(page.getByText("Invented incoming message")).toBeAttached();
@@ -116,31 +120,22 @@ test("WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({ page },
   });
 
   await attachEvidence(page, testInfo, "WC-30-31-32-33-35");
-  await expectHealthy(page, failures);
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
 });
 
 test("WC-26 connection states remain truthful", async ({ page }, testInfo) => {
   const failures = browserHealth(page);
-  const mobile = testInfo.project.name === "mobile" ? "mobile-" : "";
-  for (const phase of [
-    "disconnected",
-    "connecting",
-    "pairing",
-    "authenticated",
-    "backing-off",
-    "logged-out",
-    "suspended",
-    "stale",
-    "closed",
-  ]) {
+  for (const phase of STATE_LAB_COVERAGE.connectionPhases.filter((phase) => phase !== "online")) {
     await test.step(`WC-26: ${phase}`, async () => {
-      await page.goto(story(`${mobile}connection-${phase}`));
-      await expect(page.locator("body")).toContainText(phase.replaceAll("-", " "));
+      await gotoScenario(page, `connection-${phase.replaceAll("_", "-")}`);
+      await expect(page.locator("body")).toContainText(phase.replaceAll("_", " "));
     });
   }
-  await page.goto(story(`${mobile}connection-online`));
+  await gotoScenario(page, "connection-online");
   await expect(page.getByRole("heading", { name: "Beacon Workshop" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Message" })).toBeEnabled();
   await attachEvidence(page, testInfo, "WC-26");
-  await expectHealthy(page, failures);
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
 });

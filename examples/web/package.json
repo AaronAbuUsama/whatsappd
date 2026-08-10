@@ -11,8 +11,8 @@
     "storybook": "STORYBOOK_DISABLE_TELEMETRY=true storybook dev -p 6006 --no-open",
     "storybook:build": "STORYBOOK_DISABLE_TELEMETRY=true storybook build -o ../../.artifacts/storybook",
     "test:storybook": "vitest run --project=storybook",
-    "test:evidence": "playwright test",
-    "test:evidence:open": "pnpm test:evidence && open -a 'Google Chrome' ../../.artifacts/evidence/report/index.html"
+    "test:evidence": "playwright test && node --experimental-strip-types e2e/build-evidence-report.ts",
+    "test:evidence:open": "pnpm test:evidence && open -a 'Google Chrome' ../../.artifacts/evidence/index.html"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

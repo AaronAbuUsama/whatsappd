@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { STATE_LAB_COVERAGE, STATE_LAB_VIEWS } from "../src/components/whatsapp-state-lab.ts";
+import { assertNoPrivateMaterial, stateLabFixtureSources } from "./privacy-check.ts";
 
 void test("WC-01 state lab covers every contracted public state", () => {
   assert.deepEqual(STATE_LAB_COVERAGE.connectionPhases, [
@@ -64,6 +65,18 @@ void test("WC-01 exported views realize every declared state", () => {
     [...new Set(messages.flatMap(({ operation }) => operation?.status ?? []))].sort(),
     [...STATE_LAB_COVERAGE.operationStates].sort(),
   );
+  assert.deepEqual(
+    [
+      ...new Set(
+        messages.flatMap(({ content }) =>
+          "state" in content
+            ? [content.state === "failed" ? "failed" : content.media ? "stored" : "missing"]
+            : [],
+        ),
+      ),
+    ].sort(),
+    [...STATE_LAB_COVERAGE.mediaStates].sort(),
+  );
   assert.deepEqual(Object.keys(STATE_LAB_VIEWS.connections), [
     ...STATE_LAB_COVERAGE.connectionPhases,
   ]);
@@ -88,4 +101,10 @@ void test("WC-01 state lab contains only invented opaque fixture material", () =
   assert.doesNotMatch(serialized, /https?:\/\//i);
   assert.doesNotMatch(serialized, /BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY/i);
   assert.doesNotMatch(serialized, /(?:qr|pairing)[_-]?(?:code|secret|token|value)/i);
+});
+
+void test("WC-01 repository fixtures contain no linked-account material", () => {
+  const { files, source } = stateLabFixtureSources(new URL("../", import.meta.url));
+  assert.ok(files.length > 0);
+  assertNoPrivateMaterial(source, "state-lab repository fixtures");
 });

@@ -16,7 +16,7 @@ export default defineConfig({
     ["html", { outputFolder: path.join(evidence, "report"), open: "never" }],
   ],
   use: {
-    baseURL: "http://127.0.0.1:6006",
+    baseURL: "http://127.0.0.1:3102",
     video: "on",
     trace: "retain-on-failure",
   },
@@ -32,9 +32,9 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["iPhone 13"], browserName: "chromium" } },
   ],
   webServer: {
-    command: "pnpm storybook",
+    command: "pnpm dev -p 3102",
     cwd: directory,
-    url: "http://127.0.0.1:6006/iframe.html",
+    url: "http://127.0.0.1:3102",
     reuseExistingServer: true,
     timeout: 120_000,
   },

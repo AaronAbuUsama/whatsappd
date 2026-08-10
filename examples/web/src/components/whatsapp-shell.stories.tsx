@@ -2,59 +2,16 @@ import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { expect, userEvent } from "storybook/test";
 import { WhatsAppShell } from "@/components/whatsapp-shell";
 import {
+  createStateLabBrowser,
   STATE_LAB_VIEWS,
   stateLabConversation,
   stateLabDirectory,
 } from "@/components/whatsapp-state-lab";
-import type { WhatsAppBrowser, WhatsAppBrowserSnapshot } from "@/lib/whatsapp-browser";
 import type {
   WhatsAppApplicationCommand,
   WhatsAppApplicationView,
 } from "@/lib/whatsapp-application";
 import "@/app/globals.css";
-
-const CHAT_BEACON = "chat-beacon";
-
-function fixtureBrowser(
-  view: WhatsAppApplicationView,
-  selections: Readonly<Record<string, WhatsAppApplicationView>> = {
-    [CHAT_BEACON]: stateLabConversation,
-  },
-  commands: WhatsAppApplicationCommand[] = [],
-): WhatsAppBrowser {
-  const listeners = new Set<() => void>();
-  let snapshot: WhatsAppBrowserSnapshot = {
-    view,
-    pending: 0,
-    ...(view.conversation && { selected: view.conversation.chat.key }),
-  };
-  const directory = view.conversation ? stateLabDirectory : view;
-  const announce = (): void => listeners.forEach((listener) => listener());
-  return {
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    getSnapshot: () => snapshot,
-    getServerSnapshot: () => snapshot,
-    async select(selected) {
-      snapshot = {
-        ...snapshot,
-        view: selected ? (selections[selected] ?? snapshot.view) : directory,
-        selected,
-      };
-      announce();
-    },
-    async command(command) {
-      commands.push(command);
-      return { type: "accepted" };
-    },
-    async sendMedia() {
-      return { type: "accepted" };
-    },
-    async refresh() {},
-  };
-}
 
 const meta = {
   title: "WhatsApp/State lab",
@@ -66,7 +23,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const DesktopDirectory: Story = {
-  args: { initial: stateLabDirectory, browser: fixtureBrowser(stateLabDirectory) },
+  args: { initial: stateLabDirectory, browser: createStateLabBrowser(stateLabDirectory) },
   play: async ({ canvas }) => {
     await expect(canvas.getByRole("heading", { name: "Chats" })).toBeVisible();
     const search = canvas.getByRole("searchbox", { name: "Search chats" });
@@ -78,7 +35,7 @@ export const DesktopDirectory: Story = {
 
 export const MobileSelection: Story = {
   globals: { viewport: { value: "mobile1", isRotated: false } },
-  args: { initial: stateLabDirectory, browser: fixtureBrowser(stateLabDirectory) },
+  args: { initial: stateLabDirectory, browser: createStateLabBrowser(stateLabDirectory) },
   play: async ({ canvas }) => {
     await userEvent.click(canvas.getByRole("button", { name: /Beacon Workshop/ }));
     await expect(canvas.getByRole("heading", { name: "Beacon Workshop" })).toBeVisible();
@@ -94,16 +51,16 @@ export const MobileSelection: Story = {
 };
 
 export const DesktopConversationMatrix: Story = {
-  args: { initial: stateLabConversation, browser: fixtureBrowser(stateLabConversation) },
+  args: { initial: stateLabConversation, browser: createStateLabBrowser(stateLabConversation) },
 };
 
 export const MobileConversationMatrix: Story = {
   globals: { viewport: { value: "mobile1", isRotated: false } },
-  args: { initial: stateLabConversation, browser: fixtureBrowser(stateLabConversation) },
+  args: { initial: stateLabConversation, browser: createStateLabBrowser(stateLabConversation) },
 };
 
 const interactionCommands: WhatsAppApplicationCommand[] = [];
-const interactionBrowser = fixtureBrowser(stateLabConversation, {}, interactionCommands);
+const interactionBrowser = createStateLabBrowser(stateLabConversation, interactionCommands);
 
 export const ConversationInteractions: Story = {
   args: { initial: stateLabConversation, browser: interactionBrowser },
@@ -125,7 +82,7 @@ export const ConversationInteractions: Story = {
 };
 
 const storyFor = (view: WhatsAppApplicationView): Story => ({
-  args: { initial: view, browser: fixtureBrowser(view) },
+  args: { initial: view, browser: createStateLabBrowser(view) },
 });
 const mobileStoryFor = (view: WhatsAppApplicationView): Story => ({
   ...storyFor(view),

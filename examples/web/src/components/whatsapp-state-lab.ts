@@ -1,8 +1,10 @@
 import type {
   ApplicationConnection,
   ApplicationMessage,
+  WhatsAppApplicationCommand,
   WhatsAppApplicationView,
 } from "@/lib/whatsapp-application";
+import type { WhatsAppBrowser, WhatsAppBrowserSnapshot } from "@/lib/whatsapp-browser";
 
 const NOW = 1_700_000_000_000;
 const CHAT_ASTER = "chat-aster";
@@ -346,3 +348,56 @@ export const STATE_LAB_VIEWS = {
   connections: connectionViews,
   paging: pagingViews,
 } as const;
+
+const STATE_LAB_SCENARIOS: Readonly<Record<string, WhatsAppApplicationView>> = {
+  directory: stateLabDirectory,
+  conversation: stateLabConversation,
+  ...Object.fromEntries(
+    Object.entries(connectionViews).map(([phase, view]) => [
+      `connection-${phase.replaceAll("_", "-")}`,
+      view,
+    ]),
+  ),
+};
+
+export function stateLabView(scenario: string | undefined): WhatsAppApplicationView | undefined {
+  return scenario ? STATE_LAB_SCENARIOS[scenario] : undefined;
+}
+
+export function createStateLabBrowser(
+  view: WhatsAppApplicationView,
+  commands: WhatsAppApplicationCommand[] = [],
+): WhatsAppBrowser {
+  const listeners = new Set<() => void>();
+  let snapshot: WhatsAppBrowserSnapshot = {
+    view,
+    pending: 0,
+    ...(view.conversation && { selected: view.conversation.chat.key }),
+  };
+  const directory = view.conversation ? stateLabDirectory : view;
+  const announce = (): void => listeners.forEach((listener) => listener());
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getSnapshot: () => snapshot,
+    getServerSnapshot: () => snapshot,
+    async select(selected) {
+      snapshot = {
+        ...snapshot,
+        view: selected === CHAT_BEACON ? stateLabConversation : directory,
+        selected,
+      };
+      announce();
+    },
+    async command(command) {
+      commands.push(command);
+      return { type: "accepted" };
+    },
+    async sendMedia() {
+      return { type: "accepted" };
+    },
+    async refresh() {},
+  };
+}
