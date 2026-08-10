@@ -68,7 +68,7 @@ try {
   );
   await execFile(
     "pnpm",
-    ["install", "--ignore-scripts", ...(registry ? ["--prefer-online"] : [])],
+    ["install", "--ignore-scripts", ...(registry ? ["--config.prefer-online=true"] : [])],
     { cwd: consumer },
   );
 
