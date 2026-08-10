@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "bun src/index.tsx",
+    "evidence": "bun src/evidence.ts",
+    "evidence:finalize": "bun src/evidence.ts --finalize",
     "test": "pnpm --filter whatsappd build && pnpm --filter @whatsappd/react build && node --experimental-strip-types --test tests/application.test.ts && bun tests/app.tui.test.tsx",
     "typecheck": "tsc --noEmit"
   },
@@ -13,9 +15,11 @@
     "@opentui/core": "0.4.5",
     "@opentui/react": "0.4.5",
     "@whatsappd/react": "workspace:*",
+    "agentic-tui-kit": "0.1.0",
     "pino": "^10.3.1",
     "react": "19.2.8",
-    "whatsappd": "workspace:*"
+    "whatsappd": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

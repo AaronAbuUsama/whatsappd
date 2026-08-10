@@ -11,7 +11,8 @@
     "skipLibCheck": true,
     "types": ["node"],
     "paths": {
-      "whatsappd": ["../../packages/whatsappd/src/index.ts"]
+      "whatsappd": ["../../packages/whatsappd/src/index.ts"],
+      "@whatsappd/react": ["../../packages/react/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx"]
