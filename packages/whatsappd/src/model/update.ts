@@ -34,4 +34,14 @@ export type Update =
    *  {@link InboundMessage} shape. */
   | (UpdateBase & { kind: "edit"; message: InboundMessage })
   /** A message was deleted for everyone (revoked). `by` is who revoked it. */
-  | (UpdateBase & { kind: "revoke"; by?: string });
+  | (UpdateBase & { kind: "revoke"; by?: string })
+  /** Latest decoded poll selections for one or more voters. Option identities
+   *  are SHA-256 hashes of the poll's UTF-8 option labels. */
+  | (UpdateBase & {
+      kind: "poll_votes";
+      votes: readonly {
+        by: string;
+        selectedOptionIds: readonly string[];
+        at?: number;
+      }[];
+    });

@@ -486,14 +486,27 @@ function messageRecord(value: unknown): MessageRecord {
           };
         }),
       };
-    case "poll":
+    case "poll": {
+      const votes = record.votes;
+      if (votes !== undefined && !Array.isArray(votes))
+        throw new Error("invalid libSQL message.votes");
       return {
         ...base,
         kind: "poll",
         name: string(record.name, "message.name"),
         options: strings(record.options, "message.options"),
         selectableCount: number(record.selectableCount, "message.selectableCount"),
+        ...(votes !== undefined && {
+          votes: votes.map((value, index) => {
+            const vote = object(value, `message.votes[${index}]`);
+            return {
+              option: string(vote.option, `message.votes[${index}].option`),
+              voters: strings(vote.voters, `message.votes[${index}].voters`),
+            };
+          }),
+        }),
       };
+    }
     case "unsupported":
       return { ...base, kind: "unsupported", rawType: string(record.rawType, "message.rawType") };
     case "revoked": {
@@ -721,6 +734,25 @@ function durableUpdate(value: unknown, label: string): DurableUpdate {
     case "revoke": {
       const by = optionalString(update.by, `${label}.by`);
       return { ...base, kind: "revoke", ...(by !== undefined && { by }) };
+    }
+    case "poll_votes": {
+      if (!Array.isArray(update.votes)) throw new Error(`invalid libSQL ${label}.votes`);
+      return {
+        ...base,
+        kind: "poll_votes",
+        votes: update.votes.map((value, index) => {
+          const vote = object(value, `${label}.votes[${index}]`);
+          const voteAt = optionalNumber(vote.at, `${label}.votes[${index}].at`);
+          return {
+            by: string(vote.by, `${label}.votes[${index}].by`),
+            selectedOptionIds: strings(
+              vote.selectedOptionIds,
+              `${label}.votes[${index}].selectedOptionIds`,
+            ),
+            ...(voteAt !== undefined && { at: voteAt }),
+          };
+        }),
+      };
     }
     default:
       throw new Error(`invalid libSQL ${label}.kind`);

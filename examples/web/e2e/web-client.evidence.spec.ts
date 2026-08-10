@@ -157,7 +157,9 @@ test("WC-14 stored media renders and seeks through opaque routes", async ({ page
     expectHealthy(page, failures));
 });
 
-test("WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({ page }, testInfo) => {
+test("WC-12 WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({
+  page,
+}, testInfo) => {
   const failures = browserHealth(page);
   await gotoScenario(page, "conversation");
 
@@ -166,6 +168,13 @@ test("WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({ page },
     await expect(page.getByText("Choose an invented garden")).toBeAttached();
     await expect(page.getByText("This message was deleted")).toBeAttached();
     await expect(page.getByText(/Unsupported message/)).toBeAttached();
+  });
+
+  await test.step("WC-12: poll controls become results while unknown content stays explicit", async () => {
+    await expect(page.getByText("2 votes", { exact: true })).toBeAttached();
+    await expect(page.getByText("1 vote", { exact: true })).toBeAttached();
+    await expect(page.getByText("Unsupported message (inventedEnvelope)")).toBeAttached();
+    await expect(page.getByText(/pollUpdateMessage/)).toHaveCount(0);
   });
 
   await test.step("WC-32: a real pointer hover exposes message actions", async () => {
@@ -196,7 +205,7 @@ test("WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({ page },
     await expect(page.getByText("Could not send")).toBeAttached();
   });
 
-  await attachEvidence(page, testInfo, "WC-30-31-32-33-35");
+  await attachEvidence(page, testInfo, "WC-12-30-31-32-33-35");
   await test.step("WC-02: browser health and viewport integrity", () =>
     expectHealthy(page, failures));
 });

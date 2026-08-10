@@ -440,6 +440,60 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
     }
   });
 
+  test(`[${name}] poll votes update their poll and survive the public mirror`, async () => {
+    const resource = await create();
+    try {
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "message",
+            message: {
+              id: "poll-votes",
+              chatId: ROOM,
+              sender: { id: PN, mode: "pn" },
+              fromMe: false,
+              timestamp: AT,
+              live: true,
+              isGroup: true,
+              kind: "poll",
+              name: "Lunch?",
+              options: ["Waakye", "Jollof"],
+              selectableCount: 1,
+            },
+          }),
+          observed({
+            type: "update",
+            update: {
+              kind: "poll_votes",
+              ref: { chatId: ROOM, id: "poll-votes", fromMe: false },
+              votes: [
+                {
+                  by: PN,
+                  selectedOptionIds: [
+                    "d18003aabfd6c7e9c5cba811355a4a6061237d3463652a59cf12af00b656c027",
+                  ],
+                  at: AT + 1,
+                },
+              ],
+            },
+          } as WhatsAppDurableEvent),
+        ],
+        1,
+      );
+
+      expect((await resource.data.messages(ACCOUNT, ROOM)).messages[0]).toMatchObject({
+        kind: "poll",
+        votes: [
+          { option: "Waakye", voters: [PN] },
+          { option: "Jollof", voters: [] },
+        ],
+      });
+    } finally {
+      await resource.close();
+    }
+  });
+
   test(`[${name}] source sequence is independent from mirror revision and accounts are isolated`, async () => {
     const resource = await create();
     try {

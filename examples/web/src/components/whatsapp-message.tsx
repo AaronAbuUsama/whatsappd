@@ -267,11 +267,21 @@ export function WhatsAppMessageContent({
       return (
         <div>
           <strong>{content.name}</strong>
-          {content.options.map((option) => (
-            <Item key={option} size="xs">
-              <ItemTitle>{option}</ItemTitle>
-            </Item>
-          ))}
+          {content.options.map((option) => {
+            const count = content.votes?.find((vote) => vote.option === option)?.voters ?? 0;
+            return (
+              <Item key={option} size="xs">
+                <ItemContent>
+                  <ItemTitle>{option}</ItemTitle>
+                  {content.votes && (
+                    <ItemDescription>
+                      {count} {count === 1 ? "vote" : "votes"}
+                    </ItemDescription>
+                  )}
+                </ItemContent>
+              </Item>
+            );
+          })}
         </div>
       );
     case "revoked":

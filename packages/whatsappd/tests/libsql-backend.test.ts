@@ -145,6 +145,20 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
       },
     });
     await firstSession.emit({
+      type: "update",
+      update: {
+        kind: "poll_votes",
+        ref: { id: "poll-1", chatId: CHAT, fromMe: false },
+        votes: [
+          {
+            by: CHAT,
+            selectedOptionIds: ["d18003aabfd6c7e9c5cba811355a4a6061237d3463652a59cf12af00b656c027"],
+            at: AT + 4,
+          },
+        ],
+      },
+    });
+    await firstSession.emit({
       type: "message",
       message: {
         id: "future-1",
@@ -287,6 +301,17 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
       "location",
       "text",
     ]);
+    expect(
+      (await replacementClient.messages(CHAT)).messages.find(
+        ({ messageId }) => messageId === "poll-1",
+      ),
+    ).toMatchObject({
+      kind: "poll",
+      votes: [
+        { option: "Waakye", voters: [CHAT] },
+        { option: "Jollof", voters: [] },
+      ],
+    });
     expect(
       (await replacementClient.messages(CHAT)).messages.find(
         ({ messageId }) => messageId === "updated",

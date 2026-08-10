@@ -76,6 +76,7 @@ export type ApplicationMessageContent =
       readonly name: string;
       readonly options: readonly string[];
       readonly selectableCount: number;
+      readonly votes?: readonly { readonly option: string; readonly voters: number }[];
     }
   | { readonly kind: "unsupported"; readonly rawType: string }
   | { readonly kind: "revoked"; readonly revokedAt?: number };

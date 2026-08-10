@@ -43,7 +43,9 @@ import { mapPresenceUpdate } from "./presence.ts";
 import { mediaDownloader, noDownloader, type DownloadThunk } from "./download.ts";
 import { keyToRef, refToKey, toContent, toOptions } from "./outbound.ts";
 
-/** How many recent raw messages to retain for quote resolution. */
+/** How many recent raw messages to retain for quote and poll-key resolution.
+ * ponytail: add a private durable poll-key capability only if votes older than
+ * this live cache are required; never expose message secrets in the mirror. */
 const RECENT_CAP = 500;
 import type { BaileysAuth } from "./auth-state.ts";
 
@@ -71,7 +73,7 @@ export type RawEvent =
   | { t: "conversation_sync_complete" } // RECENT history status complete/paused or progress===100
   | { t: "conversation_sync"; sync: ConversationSyncBatch }
   | { t: "message"; msg: InboundMessage }
-  | { t: "update"; update: Update } // receipt / reaction / edit / revoke
+  | { t: "update"; update: Update } // receipt / reaction / edit / revoke / poll result
   | { t: "contact"; contact: import("../model/contact.ts").ContactUpdate }
   | { t: "group"; group: GroupUpdate }
   | { t: "presence"; presence: import("../model/presence.ts").PresenceUpdate }
@@ -184,6 +186,7 @@ export function toMessagesUpsertEvents(
   payload: MessagesUpsertPayload,
   self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
+  resolveMessage?: (ref: MessageRef) => WAMessage | undefined,
 ): RawEvent[] {
   if (payload.type !== "notify") {
     const sync = toConversationSyncBatch(
@@ -197,9 +200,12 @@ export function toMessagesUpsertEvents(
   }
 
   return payload.messages.flatMap((raw): RawEvent[] => {
-    const control = mapMessageControl(raw, true, self, makeDownload);
+    const control = mapMessageControl(raw, true, self, makeDownload, resolveMessage);
+    // Baileys 7.0.0-rc14 does not emit a decrypted messages.update for poll
+    // votes, so the raw envelope is the one live path that must publish here.
+    if (control?.update?.kind === "poll_votes") return [{ t: "update", update: control.update }];
     // Baileys emits the matching messages.update/messages.reaction event for
-    // live controls. Drop only the duplicate upsert envelope here.
+    // the other live controls. Drop only those duplicate upsert envelopes.
     if (control) return [];
     const msg = toInbound(raw, true, self, makeDownload);
     return msg ? [{ t: "message", msg } satisfies RawEvent] : [];
@@ -464,8 +470,8 @@ export async function openSocketWith(
   // Media bytes are pulled on demand via this factory — never buffered here.
   const makeDownload = mediaDownloader(sock, logger);
 
-  // Recent raw messages, kept only so quote/reply can resolve a MessageRef back
-  // to the original WAMessage without that proto ever crossing the surface.
+  // Recent raw messages let quote/reply and encrypted poll votes resolve their
+  // target without a Baileys proto ever crossing the public surface.
   const recent = new Map<string, WAMessage>();
   const resolveQuoted = (ref: MessageRef): WAMessage | undefined => recent.get(ref.id);
 
@@ -474,7 +480,12 @@ export async function openSocketWith(
   // before the account it names exists.
   sock.ev.on("messages.upsert", (payload) => {
     rememberRecent(recent, payload.messages);
-    for (const event of toMessagesUpsertEvents(payload, selfAddress(sock), makeDownload)) {
+    for (const event of toMessagesUpsertEvents(
+      payload,
+      selfAddress(sock),
+      makeDownload,
+      resolveQuoted,
+    )) {
       queue.push(event);
     }
   });

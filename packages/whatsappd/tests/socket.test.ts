@@ -313,7 +313,7 @@ test("messages.upsert notify does not duplicate edit and revoke protocols as tra
   expect(events).toEqual([]);
 });
 
-test("messages.upsert notify hides protocol controls but preserves unsupported poll updates", () => {
+test("messages.upsert notify hides known protocol and poll controls", () => {
   const events = toMessagesUpsertEvents(
     {
       type: "notify",
@@ -344,10 +344,79 @@ test("messages.upsert notify hides protocol controls but preserves unsupported p
     SELF,
   );
 
-  expect(events).toMatchObject([
+  expect(events).toEqual([]);
+});
+
+test("messages.upsert notify emits a decryptable poll vote as a target update", () => {
+  const poll = baseMessage(
     {
-      t: "message",
-      msg: { id: "POLL-VOTE1", kind: "unsupported", rawType: "pollUpdateMessage" },
+      remoteJid: "room@g.us",
+      participant: "creator@s.whatsapp.net",
+      fromMe: false,
+      id: "POLL1",
+    },
+    {
+      messageContextInfo: {
+        messageSecret: Buffer.from(
+          "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+          "hex",
+        ),
+      },
+      pollCreationMessage: {
+        name: "Lunch?",
+        options: [{ optionName: "Waakye" }, { optionName: "Jollof" }],
+        selectableOptionsCount: 1,
+      },
+    },
+  );
+  const vote = baseMessage(
+    {
+      remoteJid: "room@g.us",
+      participant: "voter@s.whatsapp.net",
+      fromMe: false,
+      id: "VOTE1",
+    },
+    {
+      pollUpdateMessage: {
+        pollCreationMessageKey: poll.key,
+        vote: {
+          encIv: Buffer.from("000102030405060708090a0b", "hex"),
+          encPayload: Buffer.from(
+            "c35ede711e4cbcb6184519d5af449b8f97d33bd3c07ce66c078b7efc69172b73cc411bd2f7a099058af081ddbbfd9f9c2ca5",
+            "hex",
+          ),
+        },
+        senderTimestampMs: 1_700_000_001_000,
+      },
+    },
+  );
+
+  const events = toMessagesUpsertEvents(
+    { type: "notify", messages: [vote] } as MessagesUpsert,
+    SELF,
+    undefined,
+    (ref) => (ref.id === "POLL1" ? poll : undefined),
+  );
+
+  expect(events).toEqual([
+    {
+      t: "update",
+      update: {
+        kind: "poll_votes",
+        ref: {
+          chatId: "room@g.us",
+          id: "POLL1",
+          fromMe: false,
+          participant: "creator@s.whatsapp.net",
+        },
+        votes: [
+          {
+            by: "voter@s.whatsapp.net",
+            selectedOptionIds: ["d18003aabfd6c7e9c5cba811355a4a6061237d3463652a59cf12af00b656c027"],
+            at: 1_700_000_001_000,
+          },
+        ],
+      },
     },
   ]);
 });

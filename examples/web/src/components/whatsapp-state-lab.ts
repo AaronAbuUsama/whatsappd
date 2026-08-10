@@ -281,6 +281,11 @@ const messages: readonly ApplicationMessage[] = [
     name: "Choose an invented garden",
     options: ["Aster", "Beacon", "Celadon"],
     selectableCount: 1,
+    votes: [
+      { option: "Aster", voters: 2 },
+      { option: "Beacon", voters: 1 },
+      { option: "Celadon", voters: 0 },
+    ],
   }),
   baseMessage("message-revoked", { kind: "revoked" }),
   baseMessage("message-unsupported", { kind: "unsupported", rawType: "inventedEnvelope" }),

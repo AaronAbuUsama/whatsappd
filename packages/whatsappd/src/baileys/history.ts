@@ -148,8 +148,9 @@ function toConversationSyncMessages(
 ): { messages: InboundMessage[]; updates: Update[] } {
   const normalized: InboundMessage[] = [];
   const updates: Update[] = [];
+  const rawById = new Map(messages.flatMap((raw) => (raw.key.id ? [[raw.key.id, raw]] : [])));
   for (const raw of messages) {
-    const control = mapMessageControl(raw, false, self, makeDownload);
+    const control = mapMessageControl(raw, false, self, makeDownload, (ref) => rawById.get(ref.id));
     if (control) {
       if (control.update) updates.push(control.update);
       continue;

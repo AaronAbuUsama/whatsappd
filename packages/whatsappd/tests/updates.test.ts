@@ -72,6 +72,48 @@ test("unmodeled update (e.g. starred only) → undefined", () => {
   expect(mapMessageUpdate({ key: KEY, update: { starred: true } }, SELF)).toBe(undefined);
 });
 
+test("decrypted poll updates target the poll instead of becoming transcript rows", () => {
+  const update = mapMessageUpdate(
+    {
+      key: { remoteJid: "room@g.us", id: "POLL1", fromMe: false },
+      update: {
+        pollUpdates: [
+          {
+            pollUpdateMessageKey: {
+              remoteJid: "room@g.us",
+              participant: "voter@s.whatsapp.net",
+              id: "VOTE1",
+              fromMe: false,
+            },
+            vote: {
+              selectedOptions: [
+                Buffer.from(
+                  "d18003aabfd6c7e9c5cba811355a4a6061237d3463652a59cf12af00b656c027",
+                  "hex",
+                ),
+              ],
+            },
+            senderTimestampMs: 1_700_000_000_000,
+          },
+        ],
+      },
+    },
+    SELF,
+  );
+
+  expect(update).toEqual({
+    kind: "poll_votes",
+    ref: { chatId: "room@g.us", id: "POLL1", fromMe: false },
+    votes: [
+      {
+        by: "voter@s.whatsapp.net",
+        selectedOptionIds: ["d18003aabfd6c7e9c5cba811355a4a6061237d3463652a59cf12af00b656c027"],
+        at: 1_700_000_000_000,
+      },
+    ],
+  });
+});
+
 // ── message-receipt.update: per-participant (group) receipts ──────────────────
 
 test("receipt update with readTimestamp → read, by participant, at ms", () => {

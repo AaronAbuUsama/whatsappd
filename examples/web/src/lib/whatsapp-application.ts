@@ -270,6 +270,9 @@ export function createWhatsAppApplication(
           name: message.name,
           options: message.options,
           selectableCount: message.selectableCount,
+          ...(message.votes && {
+            votes: message.votes.map(({ option, voters }) => ({ option, voters: voters.length })),
+          }),
         };
       case "unsupported":
         return { kind: message.kind, rawType: message.rawType };

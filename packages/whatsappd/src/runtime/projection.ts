@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { GroupParticipant, GroupUpdate } from "../model/group.ts";
 import type { HistoryChat } from "../model/history.ts";
@@ -381,6 +382,46 @@ async function projectMessage(
   });
 }
 
+function withPollVotes(
+  existing: Extract<MessageRecord, { readonly kind: "poll" }>,
+  update: Extract<DurableUpdate, { readonly kind: "poll_votes" }>,
+): MessageRecord {
+  const optionIds = new Map(
+    existing.options.map((option) => [option, createHash("sha256").update(option).digest("hex")]),
+  );
+  let votes = existing.votes ?? existing.options.map((option) => ({ option, voters: [] }));
+  for (const vote of update.votes) {
+    const selected = new Set(vote.selectedOptionIds);
+    votes = votes.map(({ option, voters }) => {
+      const next = voters.filter((voter) => voter !== vote.by);
+      if (selected.has(optionIds.get(option)!)) next.push(vote.by);
+      return { option, voters: next };
+    });
+  }
+  return { ...existing, votes };
+}
+
+function withReceipt(
+  existing: MessageRecord,
+  update: Extract<DurableUpdate, { readonly kind: "receipt" }>,
+): MessageRecord {
+  const subject = update.by === undefined ? "aggregate" : `participant:${update.by}`;
+  const receipt = {
+    subject,
+    status: update.status,
+    ...(update.by !== undefined && { by: update.by }),
+    ...(update.at !== undefined && { at: update.at }),
+  };
+  const index = existing.receipts.findIndex((current) => current.subject === subject);
+  const receipts =
+    index === -1
+      ? [...existing.receipts, receipt]
+      : existing.receipts.map((current, currentIndex) =>
+          currentIndex === index ? receipt : current,
+        );
+  return { ...existing, receipts };
+}
+
 async function projectMessageUpdate(state: ProjectionState, update: DurableUpdate): Promise<void> {
   const existing = await state.message(update.ref.chatId, update.ref.id);
   if (!existing) {
@@ -390,21 +431,7 @@ async function projectMessageUpdate(state: ProjectionState, update: DurableUpdat
   }
 
   if (update.kind === "receipt") {
-    const subject = update.by === undefined ? "aggregate" : `participant:${update.by}`;
-    const receipt = {
-      subject,
-      status: update.status,
-      ...(update.by !== undefined && { by: update.by }),
-      ...(update.at !== undefined && { at: update.at }),
-    };
-    const index = existing.receipts.findIndex((current) => current.subject === subject);
-    const receipts =
-      index === -1
-        ? [...existing.receipts, receipt]
-        : existing.receipts.map((current, currentIndex) =>
-            currentIndex === index ? receipt : current,
-          );
-    const message = { ...existing, receipts };
+    const message = withReceipt(existing, update);
     if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
     return;
   }
@@ -437,6 +464,13 @@ async function projectMessageUpdate(state: ProjectionState, update: DurableUpdat
                 : current,
             );
     const message = { ...existing, reactions };
+    if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
+    return;
+  }
+
+  if (update.kind === "poll_votes") {
+    if (existing.kind !== "poll") return;
+    const message = withPollVotes(existing, update);
     if (!isDeepStrictEqual(existing, message)) state.upsert({ type: "message", message });
     return;
   }
