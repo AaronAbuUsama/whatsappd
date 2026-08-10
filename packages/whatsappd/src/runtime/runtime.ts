@@ -515,7 +515,10 @@ export function createWhatsAppRuntime(config: WhatsAppRuntimeConfig): WhatsAppRu
       const messages: DurableInboundMessage[] = [];
       for (const message of batch.messages)
         messages.push(await captureMessage(accountId, backend.media, message));
-      return accept({ type: "conversation_sync", batch: { ...batch, messages } });
+      const updates: DurableUpdate[] = [];
+      for (const update of batch.updates ?? [])
+        updates.push(await durableUpdate(accountId, backend.media, update));
+      return accept({ type: "conversation_sync", batch: { ...batch, messages, updates } });
     },
     contact: (contact) => accept({ type: "contact", contact }),
     group: (group) => accept({ type: "group", group }),

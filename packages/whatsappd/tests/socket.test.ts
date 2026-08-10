@@ -248,6 +248,110 @@ test("messages.upsert notify still emits live inbound messages", () => {
   });
 });
 
+test("messages.upsert notify does not duplicate reaction controls as transcript rows", () => {
+  const events = toMessagesUpsertEvents(
+    {
+      type: "notify",
+      messages: [
+        baseMessage(
+          {
+            remoteJid: "1555@s.whatsapp.net",
+            fromMe: false,
+            id: "REACTION1",
+          },
+          {
+            reactionMessage: {
+              key: {
+                remoteJid: "1555@s.whatsapp.net",
+                fromMe: true,
+                id: "TARGET1",
+              },
+              text: "👍",
+              senderTimestampMs: 1_700_000,
+            },
+          },
+        ),
+      ],
+    } as MessagesUpsert,
+    SELF,
+  );
+
+  expect(events).toEqual([]);
+});
+
+test("messages.upsert notify does not duplicate edit and revoke protocols as transcript rows", () => {
+  const target = { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "TARGET1" };
+  const events = toMessagesUpsertEvents(
+    {
+      type: "notify",
+      messages: [
+        baseMessage(
+          { ...target, id: "EDIT1" },
+          {
+            protocolMessage: {
+              type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+              key: target,
+              editedMessage: { conversation: "fixed text" },
+              timestampMs: 1_700_000,
+            },
+          },
+        ),
+        baseMessage(
+          { ...target, id: "REVOKE1" },
+          {
+            protocolMessage: {
+              type: proto.Message.ProtocolMessage.Type.REVOKE,
+              key: target,
+            },
+          },
+        ),
+      ],
+    } as MessagesUpsert,
+    SELF,
+  );
+
+  expect(events).toEqual([]);
+});
+
+test("messages.upsert notify hides protocol controls but preserves unsupported poll updates", () => {
+  const events = toMessagesUpsertEvents(
+    {
+      type: "notify",
+      messages: [
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "EPHEMERAL1" },
+          {
+            protocolMessage: {
+              type: proto.Message.ProtocolMessage.Type.EPHEMERAL_SETTING,
+              ephemeralExpiration: 86_400,
+            },
+          },
+        ),
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "POLL-VOTE1" },
+          {
+            pollUpdateMessage: {
+              pollCreationMessageKey: {
+                remoteJid: "1555@s.whatsapp.net",
+                fromMe: false,
+                id: "POLL1",
+              },
+            },
+          },
+        ),
+      ],
+    } as MessagesUpsert,
+    SELF,
+  );
+
+  expect(events).toMatchObject([
+    {
+      t: "message",
+      msg: { id: "POLL-VOTE1", kind: "unsupported", rawType: "pollUpdateMessage" },
+    },
+  ]);
+});
+
 test("messages.upsert notify preserves live fromMe messages", () => {
   const events = toMessagesUpsertEvents(
     {
@@ -315,4 +419,90 @@ test("messages.upsert append emits historical messages through conversation sync
     isGroup: true,
     kind: "text",
   });
+});
+
+test("messages.upsert append keeps target updates inside the historical batch", () => {
+  const events = toMessagesUpsertEvents(
+    {
+      type: "append",
+      messages: [
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: true, id: "TARGET1" },
+          { conversation: "saved message" },
+        ),
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "REACTION1" },
+          {
+            reactionMessage: {
+              key: { remoteJid: "1555@s.whatsapp.net", fromMe: true, id: "TARGET1" },
+              text: "👍",
+            },
+          },
+        ),
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "EDIT-TARGET" },
+          { conversation: "before" },
+        ),
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "EDIT1" },
+          {
+            protocolMessage: {
+              type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+              key: { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "EDIT-TARGET" },
+              editedMessage: { conversation: "after" },
+            },
+          },
+        ),
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "REVOKE-TARGET" },
+          { conversation: "remove me" },
+        ),
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "REVOKE1" },
+          {
+            protocolMessage: {
+              type: proto.Message.ProtocolMessage.Type.REVOKE,
+              key: { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "REVOKE-TARGET" },
+            },
+          },
+        ),
+        baseMessage(
+          { remoteJid: "1555@s.whatsapp.net", fromMe: false, id: "EPHEMERAL1" },
+          {
+            protocolMessage: {
+              type: proto.Message.ProtocolMessage.Type.EPHEMERAL_SETTING,
+              ephemeralExpiration: 86_400,
+            },
+          },
+        ),
+      ],
+    } as MessagesUpsert,
+    SELF,
+  );
+
+  expect(events.length).toBe(1);
+  if (events[0]?.t !== "conversation_sync") throw new Error("expected conversation sync");
+  expect(events[0].sync.messages.map((message) => message.id)).toEqual([
+    "TARGET1",
+    "EDIT-TARGET",
+    "REVOKE-TARGET",
+  ]);
+  expect(events[0].sync.updates).toMatchObject([
+    {
+      kind: "reaction",
+      ref: { id: "TARGET1", chatId: "1555@s.whatsapp.net", fromMe: true },
+      emoji: "👍",
+      removed: false,
+    },
+    {
+      kind: "edit",
+      ref: { id: "EDIT-TARGET", chatId: "1555@s.whatsapp.net", fromMe: false },
+      message: { kind: "text", text: "after", live: false },
+    },
+    {
+      kind: "revoke",
+      ref: { id: "REVOKE-TARGET", chatId: "1555@s.whatsapp.net", fromMe: false },
+      by: "1555@s.whatsapp.net",
+    },
+  ]);
 });

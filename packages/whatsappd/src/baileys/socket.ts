@@ -38,7 +38,7 @@ import { mapContactUpdates } from "./contacts.ts";
 import { mapGroupMetadataUpdates, mapGroupParticipantsUpdate } from "./groups.ts";
 import { toConversationSyncBatch } from "./history.ts";
 import { toInbound } from "./inbound.ts";
-import { mapMessageUpdate, mapReaction, mapReceiptUpdate } from "./updates.ts";
+import { mapMessageControl, mapMessageUpdate, mapReaction, mapReceiptUpdate } from "./updates.ts";
 import { mapPresenceUpdate } from "./presence.ts";
 import { mediaDownloader, noDownloader, type DownloadThunk } from "./download.ts";
 import { keyToRef, refToKey, toContent, toOptions } from "./outbound.ts";
@@ -191,10 +191,16 @@ export function toMessagesUpsertEvents(
       self,
       makeDownload,
     );
-    return sync.messages.length > 0 ? [{ t: "conversation_sync", sync }] : [];
+    return sync.messages.length > 0 || (sync.updates?.length ?? 0) > 0
+      ? [{ t: "conversation_sync", sync }]
+      : [];
   }
 
-  return payload.messages.flatMap((raw) => {
+  return payload.messages.flatMap((raw): RawEvent[] => {
+    const control = mapMessageControl(raw, true, self, makeDownload);
+    // Baileys emits the matching messages.update/messages.reaction event for
+    // live controls. Drop only the duplicate upsert envelope here.
+    if (control) return [];
     const msg = toInbound(raw, true, self, makeDownload);
     return msg ? [{ t: "message", msg } satisfies RawEvent] : [];
   });
@@ -211,7 +217,12 @@ export function toMessagingHistoryEvents(
     events.push({ t: "conversation_sync_progress", progress: payload.progress });
   }
   const sync = toConversationSyncBatch(payload, self, makeDownload);
-  if (sync.chats.length > 0 || sync.contacts.length > 0 || sync.messages.length > 0) {
+  if (
+    sync.chats.length > 0 ||
+    sync.contacts.length > 0 ||
+    sync.messages.length > 0 ||
+    (sync.updates?.length ?? 0) > 0
+  ) {
     events.push({ t: "conversation_sync", sync });
   }
   if (complete) events.push({ t: "conversation_sync_complete" });

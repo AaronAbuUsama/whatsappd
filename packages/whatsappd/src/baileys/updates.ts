@@ -12,6 +12,7 @@
  * content lands in the same normalized shape as a message handler receives.
  */
 import {
+  normalizeMessageContent,
   proto,
   type WAMessage,
   type WAMessageKey,
@@ -65,6 +66,7 @@ export function mapMessageUpdate(
   u: WAMessageUpdate,
   self: WhatsAppAddress,
   makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
+  live = true,
 ): Update | undefined {
   const ref = keyToRef(u.key);
   const up = u.update;
@@ -85,7 +87,7 @@ export function mapMessageUpdate(
       message: edited,
       messageTimestamp: up.messageTimestamp ?? undefined,
     } as WAMessage;
-    const message = toInbound(synthetic, true, self, makeDownload);
+    const message = toInbound(synthetic, live, self, makeDownload);
     if (!message) return undefined;
     return { kind: "edit", ref, message };
   }
@@ -95,6 +97,65 @@ export function mapMessageUpdate(
   if (status) return { kind: "receipt", ref, status };
 
   return undefined;
+}
+
+/** Turn a raw control envelope into the same update Baileys emits separately. */
+export function mapMessageControl(
+  raw: WAMessage,
+  live: boolean,
+  self: WhatsAppAddress,
+  makeDownload: (raw: WAMessage) => DownloadThunk = noDownloader,
+): { readonly update?: Update } | undefined {
+  const content = normalizeMessageContent(raw.message);
+  const reaction = content?.reactionMessage;
+  if (reaction?.key?.id && reaction.key.remoteJid) {
+    return { update: mapReaction({ key: reaction.key, reaction: { ...reaction, key: raw.key } }) };
+  }
+  if (reaction) return {};
+
+  const protocol = content?.protocolMessage;
+  if (!protocol) return undefined;
+  if (!protocol.key?.id || !raw.key.remoteJid) return {};
+  const key = { ...raw.key, id: protocol.key.id };
+  if (protocol.type === proto.Message.ProtocolMessage.Type.REVOKE) {
+    const update = mapMessageUpdate(
+      {
+        key,
+        update: {
+          message: null,
+          messageStubType: proto.WebMessageInfo.StubType.REVOKE,
+          key: raw.key,
+        },
+      },
+      self,
+      makeDownload,
+      live,
+    );
+    return update ? { update } : {};
+  }
+  if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT && protocol.editedMessage) {
+    const timestampMs = protocol.timestampMs;
+    const timestamp =
+      timestampMs == null
+        ? raw.messageTimestamp
+        : Math.floor(
+            (typeof timestampMs === "number" ? timestampMs : timestampMs.toNumber()) / 1000,
+          );
+    const update = mapMessageUpdate(
+      {
+        key,
+        update: {
+          message: { editedMessage: { message: protocol.editedMessage } },
+          messageTimestamp: timestamp,
+        },
+      },
+      self,
+      makeDownload,
+      live,
+    );
+    return update ? { update } : {};
+  }
+  return {};
 }
 
 /** Map a per-participant receipt (`message-receipt.update`, the group case). */

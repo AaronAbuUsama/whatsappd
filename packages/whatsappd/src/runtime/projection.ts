@@ -26,12 +26,19 @@ export interface CurrentMirrorRecords {
   contactId(nativeId: string): Promise<string | undefined>;
   group(groupId: string): Promise<GroupRecord | undefined>;
   message(chatId: string, messageId: string): Promise<MessageRecord | undefined>;
+  pendingUpdates(chatId: string, messageId: string): Promise<readonly DurableUpdate[]>;
 }
 
 export type CurrentMirrorMutation =
   | { readonly type: "upsert"; readonly record: MirrorRecord }
   | { readonly type: "delete"; readonly record: MirrorDelete }
-  | { readonly type: "contact_alias"; readonly nativeId: string; readonly contactId: string };
+  | { readonly type: "contact_alias"; readonly nativeId: string; readonly contactId: string }
+  | {
+      readonly type: "pending_updates";
+      readonly chatId: string;
+      readonly messageId: string;
+      readonly updates: readonly DurableUpdate[];
+    };
 
 export interface CurrentMirrorProjection {
   readonly upserts: readonly MirrorRecord[];
@@ -48,6 +55,8 @@ interface ProjectionState {
   contactId(nativeId: string): Promise<string | undefined>;
   group(groupId: string): Promise<GroupRecord | undefined>;
   message(chatId: string, messageId: string): Promise<MessageRecord | undefined>;
+  pendingUpdates(chatId: string, messageId: string): Promise<readonly DurableUpdate[]>;
+  setPendingUpdates(chatId: string, messageId: string, updates: readonly DurableUpdate[]): void;
   upsert(record: MirrorRecord): void;
   delete(record: MirrorDelete): void;
   alias(nativeId: string, contactId: string): Promise<void>;
@@ -66,6 +75,7 @@ function projectionState(
   const contactIds = new Map<string, string | undefined>();
   const groups = new Map<string, GroupRecord | undefined>();
   const messages = new Map<string, MessageRecord | undefined>();
+  const pendingUpdates = new Map<string, readonly DurableUpdate[]>();
   const messageKey = (chatId: string, messageId: string): string => `${chatId}\0${messageId}`;
 
   return {
@@ -92,6 +102,16 @@ function projectionState(
       const key = messageKey(chatId, messageId);
       if (!messages.has(key)) messages.set(key, await records.message(chatId, messageId));
       return messages.get(key);
+    },
+    async pendingUpdates(chatId, messageId) {
+      const key = messageKey(chatId, messageId);
+      if (!pendingUpdates.has(key))
+        pendingUpdates.set(key, await records.pendingUpdates(chatId, messageId));
+      return pendingUpdates.get(key)!;
+    },
+    setPendingUpdates(chatId, messageId, updates) {
+      pendingUpdates.set(messageKey(chatId, messageId), updates);
+      mutations.push({ type: "pending_updates", chatId, messageId, updates });
     },
     upsert(record) {
       switch (record.type) {
@@ -349,6 +369,9 @@ async function projectMessage(
       reactions: [],
     };
     state.upsert({ type: "message", message: withCurrentContent(base, message) });
+    const pending = await state.pendingUpdates(message.chatId, message.id);
+    for (const update of pending) await projectMessageUpdate(state, update);
+    if (pending.length > 0) state.setPendingUpdates(message.chatId, message.id, []);
   }
   await projectChat(state, {
     accountId,
@@ -360,7 +383,11 @@ async function projectMessage(
 
 async function projectMessageUpdate(state: ProjectionState, update: DurableUpdate): Promise<void> {
   const existing = await state.message(update.ref.chatId, update.ref.id);
-  if (!existing) return;
+  if (!existing) {
+    const pending = await state.pendingUpdates(update.ref.chatId, update.ref.id);
+    state.setPendingUpdates(update.ref.chatId, update.ref.id, [...pending, update]);
+    return;
+  }
 
   if (update.kind === "receipt") {
     const subject = update.by === undefined ? "aggregate" : `participant:${update.by}`;
@@ -474,7 +501,7 @@ async function projectEvent(
     case "update":
       return projectMessageUpdate(state, event.update);
     case "conversation_sync": {
-      const { context, chats, contacts, messages } = event.batch;
+      const { context, chats, contacts, messages, updates } = event.batch;
       if (context.projection.mode !== "upsert")
         throw new UnsupportedDurableEventError("an authoritative conversation-sync replacement");
       for (const chat of chats) await projectSyncedChat(state, accountId, chat);
@@ -486,6 +513,7 @@ async function projectEvent(
           ...(contact.displayName !== undefined && { displayName: contact.displayName }),
         });
       for (const message of messages) await projectMessage(state, accountId, message);
+      for (const update of updates ?? []) await projectMessageUpdate(state, update);
       return;
     }
     case "contact": {

@@ -84,4 +84,6 @@ export interface ConversationSyncBatch {
   readonly chats: readonly HistoryChat[];
   readonly contacts: readonly HistoryContact[];
   readonly messages: readonly InboundMessage[];
+  /** Target mutations carried inside history, applied after this batch's messages. */
+  readonly updates?: readonly import("./update.ts").Update[];
 }

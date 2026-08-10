@@ -73,8 +73,9 @@ type WithDurableMedia<Message> = Message extends { readonly media: MediaHandle }
 export type DurableInboundMessage = WithDurableMedia<InboundMessage>;
 
 /** A conversation-sync batch whose media handles have all been consumed. */
-export type DurableConversationSyncBatch = Omit<ConversationSyncBatch, "messages"> & {
+export type DurableConversationSyncBatch = Omit<ConversationSyncBatch, "messages" | "updates"> & {
   readonly messages: readonly DurableInboundMessage[];
+  readonly updates?: readonly DurableUpdate[];
 };
 
 type EditUpdate = Extract<Update, { kind: "edit" }>;

@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- SQL adapter stays cohesive; split only with a second SQL backend. */
 import type { Client, Row, Transaction } from "@libsql/client";
 import type { ContactUpdate } from "../model/contact.ts";
 import type { GroupUpdate } from "../model/group.ts";
@@ -152,6 +153,18 @@ const migrations = [
         WHERE sequence IS NULL;
       CREATE UNIQUE INDEX IF NOT EXISTS wa_operation_sequence
         ON wa_operations (account_id, sequence);
+    `,
+  },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS wa_pending_message_updates (
+        account_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        PRIMARY KEY (account_id, chat_id, message_id)
+      );
     `,
   },
 ] as const;
@@ -795,7 +808,8 @@ function conversationSync(value: unknown, label: string): DurableConversationSyn
   if (
     !Array.isArray(batch.chats) ||
     !Array.isArray(batch.contacts) ||
-    !Array.isArray(batch.messages)
+    !Array.isArray(batch.messages) ||
+    (batch.updates !== undefined && !Array.isArray(batch.updates))
   )
     throw new Error(`invalid libSQL ${label}`);
   const isLatest =
@@ -861,6 +875,9 @@ function conversationSync(value: unknown, label: string): DurableConversationSyn
     }),
     messages: batch.messages.map((message, index) =>
       durableMessage(message, `${label}.messages[${index}]`),
+    ),
+    updates: (batch.updates ?? []).map((update, index) =>
+      durableUpdate(update, `${label}.updates[${index}]`),
     ),
   };
 }
@@ -1156,6 +1173,18 @@ function projectionRecords(
         (record) => record.chatId === chatId && record.messageId === messageId,
         "message",
       ),
+    async pendingUpdates(chatId, messageId) {
+      const result = await transaction.execute({
+        sql: `SELECT data_json FROM wa_pending_message_updates
+          WHERE account_id = ? AND chat_id = ? AND message_id = ?`,
+        args: [accountId, chatId, messageId],
+      });
+      const value = result.rows[0]?.data_json;
+      if (value === undefined) return [];
+      const updates = parsed(value, "pending message updates data_json");
+      if (!Array.isArray(updates)) throw new Error("invalid libSQL pending message updates");
+      return updates.map((update, index) => durableUpdate(update, `pending updates[${index}]`));
+    },
   };
 }
 
@@ -1164,6 +1193,23 @@ async function applyMutation(
   accountId: string,
   mutation: CurrentMirrorMutation,
 ): Promise<void> {
+  if (mutation.type === "pending_updates") {
+    if (mutation.updates.length === 0) {
+      await transaction.execute({
+        sql: `DELETE FROM wa_pending_message_updates
+          WHERE account_id = ? AND chat_id = ? AND message_id = ?`,
+        args: [accountId, mutation.chatId, mutation.messageId],
+      });
+    } else {
+      await transaction.execute({
+        sql: `INSERT INTO wa_pending_message_updates (account_id, chat_id, message_id, data_json)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(account_id, chat_id, message_id) DO UPDATE SET data_json = excluded.data_json`,
+        args: [accountId, mutation.chatId, mutation.messageId, json(mutation.updates)],
+      });
+    }
+    return;
+  }
   if (mutation.type === "contact_alias") {
     await transaction.execute({
       sql: `INSERT INTO wa_contact_aliases (account_id, native_id, contact_id) VALUES (?, ?, ?)

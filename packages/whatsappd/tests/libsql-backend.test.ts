@@ -326,6 +326,160 @@ test("a new libSQL backend reconstructs one account through Runtime, DataStore, 
   }
 });
 
+test("historical controls wait durably for targets in a later process", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-controls-"));
+  const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;
+  const liveChat = "1777@s.whatsapp.net";
+  const actor = "1888@s.whatsapp.net";
+
+  try {
+    const firstBackend = libsqlBackend({ url, accountId: ACCOUNT, media: memoryMediaStore() });
+    const firstSession = createTestWhatsAppSession();
+    const firstRuntime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: firstBackend,
+      openSession: () => firstSession.session,
+    });
+    await firstRuntime.start();
+    await firstSession.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "recent", projection: { mode: "upsert" } },
+        chats: [],
+        contacts: [],
+        messages: [],
+        updates: [
+          {
+            kind: "reaction",
+            ref: { id: "reaction-target", chatId: CHAT, fromMe: false },
+            emoji: "👍",
+            by: actor,
+            removed: false,
+            at: AT + 1,
+          },
+          {
+            kind: "edit",
+            ref: { id: "edit-target", chatId: CHAT, fromMe: false },
+            at: AT + 2,
+            message: textMessage({
+              id: "edit-envelope",
+              chatId: CHAT,
+              text: "After",
+              timestamp: AT,
+            }),
+          },
+          {
+            kind: "revoke",
+            ref: { id: "revoke-target", chatId: CHAT, fromMe: false },
+            by: actor,
+            at: AT + 3,
+          },
+        ],
+      },
+    });
+    for (const message of [
+      textMessage({ id: "reaction-target", chatId: liveChat, text: "React", timestamp: AT }),
+      textMessage({ id: "edit-target", chatId: liveChat, text: "Before", timestamp: AT }),
+      textMessage({ id: "revoke-target", chatId: liveChat, text: "Remove", timestamp: AT }),
+    ])
+      await firstSession.emit({ type: "message", message });
+    for (const update of [
+      {
+        kind: "reaction" as const,
+        ref: { id: "reaction-target", chatId: liveChat, fromMe: false },
+        emoji: "👍",
+        by: actor,
+        removed: false,
+        at: AT + 1,
+      },
+      {
+        kind: "edit" as const,
+        ref: { id: "edit-target", chatId: liveChat, fromMe: false },
+        at: AT + 2,
+        message: textMessage({
+          id: "edit-envelope",
+          chatId: liveChat,
+          text: "After",
+          timestamp: AT,
+        }),
+      },
+      {
+        kind: "revoke" as const,
+        ref: { id: "revoke-target", chatId: liveChat, fromMe: false },
+        by: actor,
+        at: AT + 3,
+      },
+    ])
+      await firstSession.emit({ type: "update", update });
+    await firstRuntime.stop();
+    await firstBackend.close();
+
+    const replacementBackend = libsqlBackend({
+      url,
+      accountId: ACCOUNT,
+      media: memoryMediaStore(),
+    });
+    const replacementSession = createTestWhatsAppSession();
+    const replacementRuntime = createWhatsAppRuntime({
+      accountId: ACCOUNT,
+      backend: replacementBackend,
+      openSession: () => replacementSession.session,
+    });
+    const replacementClient = createRuntimeMirrorReader(replacementRuntime);
+    await replacementRuntime.start();
+    await replacementSession.emit({
+      type: "conversation_sync",
+      batch: {
+        context: { source: "recent", projection: { mode: "upsert" } },
+        chats: [{ id: CHAT, isGroup: false }],
+        contacts: [],
+        messages: [
+          textMessage({ id: "reaction-target", chatId: CHAT, text: "React", timestamp: AT }),
+          textMessage({ id: "edit-target", chatId: CHAT, text: "Before", timestamp: AT }),
+          textMessage({ id: "revoke-target", chatId: CHAT, text: "Remove", timestamp: AT }),
+        ],
+      },
+    });
+
+    const messages = await replacementClient.messages(CHAT);
+    const byId = new Map(messages.messages.map((message) => [message.messageId, message]));
+    expect(byId.get("reaction-target")?.reactions).toEqual([
+      { subject: actor, emoji: "👍", by: actor, at: AT + 1 },
+    ]);
+    expect(byId.get("edit-target")).toMatchObject({
+      kind: "text",
+      text: "After",
+      editedAt: AT + 2,
+    });
+    expect(byId.get("revoke-target")).toMatchObject({
+      kind: "revoked",
+      revokedBy: actor,
+      revokedAt: AT + 3,
+    });
+    const semantics = (chatId: string) =>
+      replacementClient.messages(chatId).then(({ messages }) =>
+        messages
+          .map((message) => ({
+            messageId: message.messageId,
+            kind: message.kind,
+            reactions: message.reactions,
+            ...(message.kind === "text" && { text: message.text, editedAt: message.editedAt }),
+            ...(message.kind === "revoked" && {
+              revokedAt: message.revokedAt,
+              revokedBy: message.revokedBy,
+            }),
+          }))
+          .sort((left, right) => left.messageId.localeCompare(right.messageId)),
+      );
+    expect(await semantics(CHAT)).toEqual(await semantics(liveChat));
+
+    await replacementRuntime.stop();
+    await replacementBackend.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a libSQL restart preserves unknown and authoritative empty group membership", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "whatsappd-libsql-groups-"));
   const url = pathToFileURL(path.join(directory, "whatsapp.db")).href;

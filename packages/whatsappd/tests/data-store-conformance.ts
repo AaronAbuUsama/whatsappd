@@ -102,6 +102,7 @@ test("the Current Mirror projection reads only the message key touched by an upd
       reads.push([chatId, messageId]);
       return chatId === PN && messageId === "current" ? current : undefined;
     },
+    pendingUpdates: async () => [],
   };
 
   const projection = await projectCurrentMirror(records, ACCOUNT, [
@@ -132,6 +133,7 @@ test("a delete names the forms that reached a contact whose record is gone", asy
     contactId: async (nativeId) => (nativeId === LID ? LID : nativeId === PN ? "gone" : undefined),
     group: async () => undefined,
     message: async () => undefined,
+    pendingUpdates: async () => [],
   };
 
   const projection = await projectCurrentMirror(records, ACCOUNT, [
@@ -482,6 +484,154 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
       ).toEqual(["work-message"]);
       expect((await resource.data.accepted(ACCOUNT, 0)).map(({ seq }) => seq)).toEqual([1, 2]);
       expect((await resource.data.accepted(OTHER_ACCOUNT, 0)).map(({ seq }) => seq)).toEqual([1]);
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] conversation sync applies embedded controls after their target messages`, async () => {
+    const resource = await create();
+    try {
+      const target = (id: string, text: string) =>
+        textMessage({ id, chatId: PN, text, timestamp: AT });
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "conversation_sync",
+            batch: {
+              context: { source: "recent", projection: { mode: "upsert" } },
+              chats: [{ id: PN, isGroup: false }],
+              contacts: [],
+              messages: [
+                target("reaction-target", "React to me"),
+                target("edit-target", "Before"),
+                target("revoke-target", "Remove me"),
+              ],
+              updates: [
+                {
+                  kind: "reaction",
+                  ref: { id: "reaction-target", chatId: PN, fromMe: false },
+                  emoji: "👍",
+                  by: PN,
+                  removed: false,
+                  at: AT + 1,
+                },
+                {
+                  kind: "edit",
+                  ref: { id: "edit-target", chatId: PN, fromMe: false },
+                  at: AT + 2,
+                  message: target("ignored-edit-envelope-id", "After"),
+                },
+                {
+                  kind: "revoke",
+                  ref: { id: "revoke-target", chatId: PN, fromMe: false },
+                  by: PN,
+                  at: AT + 3,
+                },
+              ],
+            },
+          }),
+        ],
+        1,
+      );
+
+      const messages = await resource.data.messages(ACCOUNT, PN);
+      const byId = new Map(messages.messages.map((message) => [message.messageId, message]));
+      expect(byId.get("reaction-target")?.reactions).toEqual([
+        { subject: PN, emoji: "👍", by: PN, at: AT + 1 },
+      ]);
+      expect(byId.get("edit-target")).toMatchObject({
+        messageId: "edit-target",
+        kind: "text",
+        text: "After",
+        editedAt: AT + 2,
+      });
+      expect(byId.get("revoke-target")).toMatchObject({
+        messageId: "revoke-target",
+        kind: "revoked",
+        revokedBy: PN,
+        revokedAt: AT + 3,
+      });
+      const accepted = await resource.data.accepted(ACCOUNT, 0);
+      expect(accepted[0]?.events[0]?.event).toMatchObject({
+        type: "conversation_sync",
+        batch: {
+          updates: [{ kind: "reaction" }, { kind: "edit" }, { kind: "revoke" }],
+        },
+      });
+    } finally {
+      await resource.close();
+    }
+  });
+
+  test(`[${name}] conversation sync retains controls that arrive before their targets`, async () => {
+    const resource = await create();
+    const target = (id: string, text: string) =>
+      textMessage({ id, chatId: PN, text, timestamp: AT });
+    try {
+      const first = await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "conversation_sync",
+            batch: {
+              context: { source: "recent", projection: { mode: "upsert" } },
+              chats: [],
+              contacts: [],
+              messages: [],
+              updates: [
+                {
+                  kind: "reaction",
+                  ref: { id: "late-reaction", chatId: PN, fromMe: false },
+                  emoji: "👍",
+                  by: PN,
+                  removed: false,
+                },
+                {
+                  kind: "edit",
+                  ref: { id: "late-edit", chatId: PN, fromMe: false },
+                  message: target("edit-envelope", "After"),
+                },
+                {
+                  kind: "revoke",
+                  ref: { id: "late-revoke", chatId: PN, fromMe: false },
+                  by: PN,
+                },
+              ],
+            },
+          }),
+        ],
+        1,
+      );
+      expect(first.revision).toBe(0);
+      expect((await resource.data.messages(ACCOUNT, PN)).messages).toEqual([]);
+
+      await resource.data.accept(
+        ACCOUNT,
+        [
+          observed({
+            type: "conversation_sync",
+            batch: {
+              context: { source: "recent", projection: { mode: "upsert" } },
+              chats: [],
+              contacts: [],
+              messages: [
+                target("late-reaction", "React"),
+                target("late-edit", "Before"),
+                target("late-revoke", "Remove"),
+              ],
+            },
+          }),
+        ],
+        1,
+      );
+
+      const messages = await resource.data.messages(ACCOUNT, PN);
+      const byId = new Map(messages.messages.map((message) => [message.messageId, message]));
+      expect(byId.get("late-reaction")?.reactions).toMatchObject([{ emoji: "👍", by: PN }]);
+      expect(byId.get("late-edit")).toMatchObject({ kind: "text", text: "After" });
+      expect(byId.get("late-revoke")).toMatchObject({ kind: "revoked", revokedBy: PN });
     } finally {
       await resource.close();
     }
