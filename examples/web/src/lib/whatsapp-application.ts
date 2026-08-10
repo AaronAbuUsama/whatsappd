@@ -24,6 +24,7 @@ import {
 } from "./whatsapp-projection.ts";
 import type {
   ApplicationChat,
+  ApplicationConnection,
   ApplicationConversation,
   ApplicationMessage,
   ApplicationMessageContent,
@@ -39,6 +40,29 @@ export type * from "./whatsapp-application-types.ts";
 const SIDEBAR_PREVIEW_COUNT = 40;
 const PAGE_TIMEOUT_MS = 10_000;
 const STATUS_CHAT_ID = "status@broadcast";
+const collator = new Intl.Collator(undefined, { sensitivity: "base" });
+
+function sendAvailability(
+  authorized: boolean,
+  connection: ApplicationConnection | undefined,
+): Pick<ApplicationChat, "canSend" | "sendDisabledReason"> {
+  if (!authorized)
+    return {
+      canSend: false,
+      sendDisabledReason: "This chat is not in the local send allowlist",
+    };
+  if (
+    connection?.phase !== "closed" &&
+    connection?.phase !== "logged_out" &&
+    connection?.phase !== "suspended"
+  )
+    return { canSend: true };
+  const phase = connection.phase.replace("_", " ");
+  return {
+    canSend: false,
+    sendDisabledReason: `Account is ${phase}${connection.detail ? `: ${connection.detail}` : ""}`,
+  };
+}
 
 type MessageOptions = {
   readonly quote?: string;
@@ -166,7 +190,11 @@ export function createWhatsAppApplication(
     return pending;
   };
 
-  const chatView = (chat: ChatRecord, includeAvatar = false): ApplicationChat => {
+  const chatView = (
+    chat: ChatRecord,
+    includeAvatar: boolean,
+    connection: ReturnType<typeof connectionOf>,
+  ): ApplicationChat => {
     const name = chatName(client, chat);
     const contact = chat.isGroup ? undefined : client.contacts.resolve(chat.chatId);
     const source = avatarUrl(contact?.imgUrl);
@@ -179,8 +207,10 @@ export function createWhatsAppApplication(
       ...(avatar && { avatar }),
       isGroup: chat.isGroup,
       lastMessageAt: chat.lastMessageAt,
-      canSend: canSend(chat.chatId),
+      ...sendAvailability(canSend(chat.chatId), connection),
       ...(previewOf(latest) && { preview: previewOf(latest) }),
+      ...(latest && { previewFromMe: latest.fromMe }),
+      ...(latest && receiptOf(latest)?.status && { previewReceipt: receiptOf(latest)?.status }),
       ...(!chat.isGroup &&
         client.contacts.presence(chat.chatId) && {
           presence: client.contacts.presence(chat.chatId),
@@ -328,14 +358,17 @@ export function createWhatsAppApplication(
     async state(selectedKey) {
       if (closed) throw new Error("WhatsApp application is closed");
       const records = client.chats.list();
+      const groupRecords = client.groups.list();
+      const account = client.account.get();
+      const connection = connectionOf(account);
       const selectedId = selectedKey ? chats.resolve(selectedKey) : undefined;
       const selected = selectedId
         ? (records.find((chat) => chat.chatId === selectedId) ?? {
             accountId,
             chatId: selectedId,
             isGroup: selectedId.endsWith("@g.us"),
-            ...(client.groups.list().find((group) => group.groupId === selectedId)?.subject && {
-              subject: client.groups.list().find((group) => group.groupId === selectedId)?.subject,
+            ...(groupRecords.find((group) => group.groupId === selectedId)?.subject && {
+              subject: groupRecords.find((group) => group.groupId === selectedId)?.subject,
             }),
             lastMessageAt: 0,
           })
@@ -348,8 +381,7 @@ export function createWhatsAppApplication(
       await Promise.all([...pageIds].map(page));
       const chatViews = records
         .filter((chat) => chat.chatId !== STATUS_CHAT_ID)
-        .map((chat, index) => chatView(chat, index < SIDEBAR_PREVIEW_COUNT));
-      const account = client.account.get();
+        .map((chat, index) => chatView(chat, index < SIDEBAR_PREVIEW_COUNT, connection));
       const updates: ApplicationUpdate[] = [];
       if (status) {
         for (const message of client.messages.get(status.chatId).messages) {
@@ -381,7 +413,7 @@ export function createWhatsAppApplication(
           ]),
         );
         const storedGroup = selected.isGroup
-          ? client.groups.list().find((candidate) => candidate.groupId === selected.chatId)
+          ? groupRecords.find((candidate) => candidate.groupId === selected.chatId)
           : undefined;
         let group = selected.isGroup ? groupMetadata.get(selected.chatId) : undefined;
         if (selected.isGroup && canSend(selected.chatId) && !group) {
@@ -398,9 +430,9 @@ export function createWhatsAppApplication(
         const optimistic = retained.outgoing.map((message, index) =>
           optimisticMessage(message, Date.now() + index),
         );
-        const participantRecords = (group ?? storedGroup)?.participants;
+        const participantRecords = storedGroup?.participants ?? group?.participants;
         conversation = {
-          chat: chatView(selected, true),
+          chat: chatView(selected, true, connection),
           messages: [...projected, ...optimistic],
           paging: retained.error ? "error" : retained.older,
           ...(group && {
@@ -423,7 +455,7 @@ export function createWhatsAppApplication(
         revision,
         account: {
           name: account.identity?.pushName ?? account.accountId,
-          ...(connectionOf(account) && { connection: connectionOf(account) }),
+          ...(connection && { connection }),
           ...(account.lastConnectedAt !== undefined && {
             lastConnectedAt: account.lastConnectedAt,
           }),
@@ -433,46 +465,76 @@ export function createWhatsAppApplication(
         },
         chats: chatViews,
         updates,
-        contacts: client.contacts.list().map((contact, index) => {
-          const nativeId =
-            contact.nativeIds.find(canSend) ?? contact.nativeIds[0] ?? contact.contactId;
-          const groupIds = contact.nativeIds.filter(canCreateGroupWith);
-          const groupId = groupIds.find((id) => id.endsWith("@s.whatsapp.net")) ?? groupIds[0];
-          const name = firstName(contact) ?? nativeId.split("@")[0] ?? "Unknown contact";
-          const source = avatarUrl(contact.imgUrl);
-          const avatar = index < SIDEBAR_PREVIEW_COUNT ? avatarToken(nativeId, source) : undefined;
-          return {
-            key: chats.token(nativeId, nativeId),
-            name,
-            initials: initials(name),
-            ...(avatar && { avatar }),
-            ...(contact.about && { about: contact.about }),
-            ...(contact.lastSeenAt !== undefined && { lastSeenAt: contact.lastSeenAt }),
-            ...(client.contacts.presence(nativeId) && {
-              presence: client.contacts.presence(nativeId),
-            }),
-            canSend: canSend(nativeId),
-            canCreateGroup: groupId !== undefined,
-            ...(groupId && { groupKey: chats.token(groupId, groupId) }),
-            ...(groupIds.length && {
-              groupKeys: groupIds.map((id) => chats.token(id, id)),
-            }),
-          };
-        }),
-        groups: client.groups.list().map((group, index) => {
-          const name = group.subject ?? "Unnamed group";
-          const avatar = index < SIDEBAR_PREVIEW_COUNT ? avatarToken(group.groupId) : undefined;
-          return {
-            key: chats.token(group.groupId, group.groupId),
-            name,
-            initials: initials(name),
-            ...(avatar && { avatar }),
-            ...(group.participants !== undefined && {
-              participantCount: group.participants.length,
-            }),
-            canSend: canSend(group.groupId),
-          };
-        }),
+        contacts: client.contacts
+          .list()
+          .map((contact, index) => {
+            const nativeId =
+              contact.nativeIds.find(canSend) ?? contact.nativeIds[0] ?? contact.contactId;
+            const groupIds = contact.nativeIds.filter(canCreateGroupWith);
+            const groupId = groupIds.find((id) => id.endsWith("@s.whatsapp.net")) ?? groupIds[0];
+            const name = firstName(contact) ?? nativeId.split("@")[0] ?? "Unknown contact";
+            const names = [
+              contact.displayName
+                ? { label: "Display name" as const, value: contact.displayName }
+                : undefined,
+              contact.profileName
+                ? { label: "Profile name" as const, value: contact.profileName }
+                : undefined,
+              contact.verifiedName
+                ? { label: "Verified name" as const, value: contact.verifiedName }
+                : undefined,
+              contact.username
+                ? { label: "Username" as const, value: contact.username }
+                : undefined,
+            ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+            const commonGroups = groupRecords
+              .filter((group) =>
+                group.participants?.some((participant) =>
+                  contact.nativeIds.includes(participant.id),
+                ),
+              )
+              .map((group) => ({
+                key: chats.token(group.groupId, group.groupId),
+                name: group.subject ?? "Unnamed group",
+              }))
+              .sort((left, right) => collator.compare(left.name, right.name));
+            const source = avatarUrl(contact.imgUrl);
+            const avatar =
+              index < SIDEBAR_PREVIEW_COUNT ? avatarToken(nativeId, source) : undefined;
+            return {
+              key: chats.token(nativeId, nativeId),
+              name,
+              initials: initials(name),
+              names,
+              ...(avatar && { avatar }),
+              ...(contact.about && { about: contact.about }),
+              ...(contact.lastSeenAt !== undefined && { lastSeenAt: contact.lastSeenAt }),
+              ...(client.contacts.presence(nativeId) && {
+                presence: client.contacts.presence(nativeId),
+              }),
+              canSend: canSend(nativeId),
+              canCreateGroup: groupId !== undefined,
+              ...(groupId && { groupKey: chats.token(groupId, groupId) }),
+              ...(commonGroups.length && { commonGroups }),
+            };
+          })
+          .sort((left, right) => collator.compare(left.name, right.name)),
+        groups: groupRecords
+          .map((group, index) => {
+            const name = group.subject ?? "Unnamed group";
+            const avatar = index < SIDEBAR_PREVIEW_COUNT ? avatarToken(group.groupId) : undefined;
+            return {
+              key: chats.token(group.groupId, group.groupId),
+              name,
+              initials: initials(name),
+              ...(avatar && { avatar }),
+              ...(group.participants !== undefined && {
+                participantCount: group.participants.length,
+              }),
+              canSend: canSend(group.groupId),
+            };
+          })
+          .sort((left, right) => collator.compare(left.name, right.name)),
         ...(conversation && { conversation }),
       };
     },

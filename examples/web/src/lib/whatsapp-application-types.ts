@@ -39,8 +39,11 @@ export type ApplicationChat = {
   readonly isGroup: boolean;
   readonly lastMessageAt: number;
   readonly preview?: string;
+  readonly previewFromMe?: boolean;
+  readonly previewReceipt?: ReceiptStatus;
   readonly presence?: PresenceKind;
   readonly canSend: boolean;
+  readonly sendDisabledReason?: string;
 };
 
 export type ApplicationMessageContent =
@@ -137,13 +140,17 @@ export type WhatsAppApplicationView = {
     readonly name: string;
     readonly initials: string;
     readonly avatar?: string;
+    readonly names: readonly {
+      readonly label: "Display name" | "Profile name" | "Verified name" | "Username";
+      readonly value: string;
+    }[];
     readonly about?: string;
     readonly lastSeenAt?: number;
     readonly presence?: PresenceKind;
     readonly canSend: boolean;
     readonly canCreateGroup: boolean;
     readonly groupKey?: string;
-    readonly groupKeys?: readonly string[];
+    readonly commonGroups?: readonly { readonly key: string; readonly name: string }[];
   }[];
   readonly groups: readonly {
     readonly key: string;

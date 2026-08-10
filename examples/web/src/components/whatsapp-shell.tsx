@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
+  CheckCheckIcon,
+  CheckIcon,
   CircleAlertIcon,
   LoaderCircleIcon,
   MessageCircleIcon,
@@ -14,6 +16,7 @@ import {
 import { toast } from "sonner";
 import { WhatsAppComposer } from "@/components/whatsapp-composer";
 import { WhatsAppAvatar } from "@/components/whatsapp-avatar";
+import { WhatsAppDirectoryDetail } from "@/components/whatsapp-directory-detail";
 import { WhatsAppGroupCreate, WhatsAppGroupDetails } from "@/components/whatsapp-groups";
 import { WhatsAppMessage } from "@/components/whatsapp-message";
 import {
@@ -22,6 +25,7 @@ import {
   type WhatsAppSection,
 } from "@/components/whatsapp-navigation";
 import { WhatsAppUpdates } from "@/components/whatsapp-updates";
+import { WhatsAppSettings } from "@/components/whatsapp-settings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,7 +60,6 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
@@ -105,14 +108,24 @@ const listTime = (timestamp: number): string => {
   }).format(timestamp);
 };
 const participantLabel = (count: number | undefined): string =>
-  count === undefined
-    ? "Participants unavailable"
-    : `${count} participant${count === 1 ? "" : "s"}`;
+  count === undefined ? "Participants not loaded" : `${count} participant${count === 1 ? "" : "s"}`;
 
 type ListEntry = Pick<ApplicationChat, "key" | "name" | "initials" | "avatar" | "canSend"> & {
   readonly description?: string;
   readonly lastMessageAt?: number;
+  readonly previewFromMe?: boolean;
+  readonly previewReceipt?: ApplicationChat["previewReceipt"];
+  readonly searchNames?: readonly string[];
 };
+
+function PreviewReceipt({ status }: { readonly status: ApplicationChat["previewReceipt"] }) {
+  if (!status) return null;
+  if (status === "delivered" || status === "read" || status === "played")
+    return <CheckCheckIcon className="size-3.5 shrink-0" aria-label={status} />;
+  if (status === "error")
+    return <CircleAlertIcon className="size-3.5 shrink-0 text-destructive" aria-label="error" />;
+  return <CheckIcon className="size-3.5 shrink-0" aria-label={status} />;
+}
 
 function DirectoryList({
   browser,
@@ -131,6 +144,7 @@ function DirectoryList({
       return view.contacts.map((contact) => ({
         ...contact,
         description: contact.presence ?? contact.about,
+        searchNames: contact.names.map(({ value }) => value),
       }));
     if (section === "groups")
       return view.groups.map((group) => ({
@@ -144,14 +158,18 @@ function DirectoryList({
   }, [section, view]);
   const normalized = query.trim().toLocaleLowerCase();
   const filtered = normalized
-    ? entries.filter((entry) => entry.name.toLocaleLowerCase().includes(normalized))
+    ? entries.filter((entry) =>
+        [entry.name, entry.description, ...(entry.searchNames ?? [])].some((value) =>
+          value?.toLocaleLowerCase().includes(normalized),
+        ),
+      )
     : entries;
   return (
     <section className="flex h-svh min-w-0 flex-col">
       <WhatsAppMobileNavigation section={section} setSection={setSection} />
       <header className="border-b px-4 py-3">
         <div className="mb-3 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold lg:text-lg">
+          <h1 className="text-2xl font-semibold md:text-lg">
             {section[0]!.toUpperCase() + section.slice(1)}
           </h1>
           {section === "groups" && <WhatsAppGroupCreate browser={browser} view={view} />}
@@ -189,8 +207,10 @@ function DirectoryList({
               </ItemMedia>
               <ItemContent className="min-w-0 gap-0">
                 <ItemTitle className="w-full truncate text-base">{entry.name}</ItemTitle>
-                <ItemDescription className="line-clamp-1 leading-snug">
-                  {entry.description}
+                <ItemDescription className="flex items-center gap-1 leading-snug">
+                  {entry.previewFromMe && <PreviewReceipt status={entry.previewReceipt} />}
+                  {entry.previewFromMe && <span className="shrink-0">You:</span>}
+                  <span className="truncate">{entry.description}</span>
                 </ItemDescription>
               </ItemContent>
               <ItemActions className="ml-auto shrink-0 self-start pt-0.5 text-xs text-muted-foreground">
@@ -244,7 +264,7 @@ function ConversationDetails({
   return (
     <Sheet>
       <SheetTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Conversation details">
+        <Button variant="ghost" size="icon" className="size-11" aria-label="Conversation details">
           <MoreHorizontalIcon />
         </Button>
       </SheetTrigger>
@@ -328,7 +348,7 @@ function Conversation({
         <Button
           variant="ghost"
           size="icon"
-          className="lg:hidden"
+          className="size-11 md:hidden"
           onClick={() => void browser.select()}
           aria-label="Back to chats"
         >
@@ -348,10 +368,10 @@ function Conversation({
                 : "WhatsApp contact")}
           </p>
         </div>
-        <Button variant="ghost" size="icon" disabled aria-label="Video call">
+        <Button variant="ghost" size="icon" className="size-11" disabled aria-label="Video call">
           <VideoIcon />
         </Button>
-        <Button variant="ghost" size="icon" disabled aria-label="Call">
+        <Button variant="ghost" size="icon" className="size-11" disabled aria-label="Call">
           <PhoneIcon />
         </Button>
         <ConversationDetails browser={browser} view={view} />
@@ -459,7 +479,13 @@ function Paging({
   );
 }
 
-export function WhatsAppShell({ initial }: { readonly initial: WhatsAppApplicationView }) {
+export function WhatsAppShell({
+  initial,
+  sidebarOpen = false,
+}: {
+  readonly initial: WhatsAppApplicationView;
+  readonly sidebarOpen?: boolean;
+}) {
   const [browser] = useState(() => createWhatsAppBrowser(initial));
   const { view, selected, pending, error } = useWhatsAppBrowser(browser);
   const [section, setSection] = useState<WhatsAppSection>("chats");
@@ -470,21 +496,48 @@ export function WhatsAppShell({ initial }: { readonly initial: WhatsAppApplicati
     setSection(next);
     void browser.select();
   };
+  const openChat = (key: string): void => {
+    setSection("chats");
+    void browser.select(key);
+  };
+  const openGroup = (key: string): void => {
+    setSection("groups");
+    void browser.select(key);
+  };
   const directory =
     section === "updates" ? (
       <WhatsAppUpdates
         view={view}
         navigation={<WhatsAppMobileNavigation section={section} setSection={changeSection} />}
       />
+    ) : section === "settings" ? (
+      <WhatsAppSettings
+        view={view}
+        navigation={<WhatsAppMobileNavigation section={section} setSection={changeSection} />}
+      />
     ) : (
       <DirectoryList browser={browser} view={view} section={section} setSection={changeSection} />
     );
+  const detail =
+    section === "contacts" || section === "groups" ? (
+      <WhatsAppDirectoryDetail
+        browser={browser}
+        view={view}
+        section={section}
+        selected={selected}
+        openChat={openChat}
+        openGroup={openGroup}
+      />
+    ) : (
+      <Conversation browser={browser} view={view} />
+    );
+  const standalone = section === "updates" || section === "settings";
   return (
-    <SidebarProvider defaultOpen={false}>
-      <div className="hidden lg:block">
+    <SidebarProvider defaultOpen={sidebarOpen}>
+      <div className="hidden md:block">
         <WhatsAppNavigation section={section} setSection={changeSection} />
       </div>
-      <SidebarInset>
+      <SidebarInset className="min-w-0 overflow-hidden">
         {pending > 0 && (
           <div className="fixed top-2 right-2 z-50">
             <Badge>
@@ -493,24 +546,16 @@ export function WhatsAppShell({ initial }: { readonly initial: WhatsAppApplicati
             </Badge>
           </div>
         )}
-        <div className="h-svh lg:hidden">
-          {selected ? <Conversation browser={browser} view={view} /> : directory}
-        </div>
-        <div className="hidden h-svh lg:block">
-          {section === "updates" ? (
-            directory
-          ) : (
-            <ResizablePanelGroup orientation="horizontal">
-              <ResizablePanel defaultSize="360px" minSize="280px" maxSize="520px">
-                {directory}
-              </ResizablePanel>
-              <ResizableHandle />
-              <ResizablePanel minSize="420px">
-                <Conversation browser={browser} view={view} />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          )}
-        </div>
+        {standalone ? (
+          directory
+        ) : (
+          <div className="grid h-svh min-w-0 md:grid-cols-[minmax(17.5rem,22.5rem)_minmax(0,1fr)]">
+            <div className={selected ? "hidden min-w-0 border-r md:block" : "min-w-0 border-r"}>
+              {directory}
+            </div>
+            <div className={selected ? "min-w-0" : "hidden min-w-0 md:block"}>{detail}</div>
+          </div>
+        )}
       </SidebarInset>
     </SidebarProvider>
   );

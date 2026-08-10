@@ -20,10 +20,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
+  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-export type WhatsAppSection = "chats" | "updates" | "contacts" | "groups";
+export type WhatsAppSection = "chats" | "updates" | "contacts" | "groups" | "settings";
 
 type NavigationProps = {
   readonly section: WhatsAppSection;
@@ -46,7 +48,12 @@ export function WhatsAppNavigation({ section, setSection }: NavigationProps) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
-        <SidebarMenu>{item("chats", "Chats", MessageCircleIcon)}</SidebarMenu>
+        <SidebarMenu>
+          {item("chats", "Chats", MessageCircleIcon)}
+          <SidebarMenuItem>
+            <SidebarTrigger className="size-8" />
+          </SidebarMenuItem>
+        </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -72,15 +79,9 @@ export function WhatsAppNavigation({ section, setSection }: NavigationProps) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton disabled tooltip="Settings">
-              <SettingsIcon />
-              <span>Settings</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <SidebarMenu>{item("settings", "Settings", SettingsIcon)}</SidebarMenu>
       </SidebarFooter>
+      <SidebarRail />
     </Sidebar>
   );
 }
@@ -96,13 +97,14 @@ export function WhatsAppMobileNavigation({ section, setSection }: NavigationProp
     <Tabs
       value={section}
       onValueChange={(value) => setSection(value as WhatsAppSection)}
-      className="lg:hidden"
+      className="md:hidden"
     >
-      <TabsList variant="line" className="grid h-11 w-full grid-cols-4 border-b px-2">
+      <TabsList variant="line" className="grid h-12 w-full grid-cols-5 border-b px-2">
         {item("chats", "Chats", MessageCircleIcon)}
         {item("updates", "Updates", CircleDashedIcon)}
         {item("contacts", "Contacts", ContactRoundIcon)}
         {item("groups", "Groups", UsersIcon)}
+        {item("settings", "Settings", SettingsIcon)}
       </TabsList>
     </Tabs>
   );

@@ -405,9 +405,9 @@ export function WhatsAppComposer({
         {!canSend && (
           <Alert>
             <CircleAlertIcon />
-            <AlertTitle>Read-only in this local build</AlertTitle>
+            <AlertTitle>Sending unavailable</AlertTitle>
             <AlertDescription>
-              Real-account actions are limited to the machine allowlist.
+              {chat.sendDisabledReason ?? "This chat is read-only."}
             </AlertDescription>
           </Alert>
         )}

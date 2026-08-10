@@ -1,5 +1,6 @@
 import { WhatsAppShell } from "@/components/whatsapp-shell";
 import { applicationState } from "@/lib/whatsapp.server";
+import { cookies } from "next/headers";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -18,5 +19,6 @@ export default async function Home() {
     );
   }
 
-  return <WhatsAppShell initial={await applicationState()} />;
+  const sidebarOpen = (await cookies()).get("sidebar_state")?.value === "true";
+  return <WhatsAppShell initial={await applicationState()} sidebarOpen={sidebarOpen} />;
 }
