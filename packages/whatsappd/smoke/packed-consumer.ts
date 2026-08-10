@@ -12,6 +12,12 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const reactPackageRoot = path.resolve(packageRoot, "../react");
 const root = path.resolve(packageRoot, "../..");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-packed-"));
+const registry = process.argv.includes("--registry");
+const coreVersion = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"))
+  .version as string;
+const reactVersion = JSON.parse(await readFile(path.join(reactPackageRoot, "package.json"), "utf8"))
+  .version as string;
+assert.equal(reactVersion, coreVersion);
 
 const digests = async (directory: string): Promise<Record<string, string>> =>
   Object.fromEntries(
@@ -29,15 +35,21 @@ const digests = async (directory: string): Promise<Record<string, string>> =>
   );
 
 try {
-  await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: packageRoot });
-  await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: reactPackageRoot });
-  const archives = await readdir(consumer);
-  const archive = archives.find((file) => file.startsWith("whatsappd-") && file.endsWith(".tgz"));
-  const reactArchive = archives.find(
-    (file) => file.startsWith("whatsappd-react-") && file.endsWith(".tgz"),
-  );
-  assert.ok(archive, "pnpm pack did not produce an archive");
-  assert.ok(reactArchive, "pnpm pack did not produce a React archive");
+  let coreDependency = coreVersion;
+  let reactDependency = reactVersion;
+  if (!registry) {
+    await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: packageRoot });
+    await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: reactPackageRoot });
+    const archives = await readdir(consumer);
+    const archive = archives.find((file) => file.startsWith("whatsappd-") && file.endsWith(".tgz"));
+    const reactArchive = archives.find(
+      (file) => file.startsWith("whatsappd-react-") && file.endsWith(".tgz"),
+    );
+    assert.ok(archive, "pnpm pack did not produce an archive");
+    assert.ok(reactArchive, "pnpm pack did not produce a React archive");
+    coreDependency = `file:./${archive}`;
+    reactDependency = `file:./${reactArchive}`;
+  }
 
   await writeFile(
     path.join(consumer, "package.json"),
@@ -45,16 +57,20 @@ try {
       private: true,
       type: "module",
       dependencies: {
-        "@whatsappd/react": `file:./${reactArchive}`,
+        "@whatsappd/react": reactDependency,
         "@libsql/client": "0.15.15",
         "@types/node": "^26.1.1",
         react: "19.2.8",
         typescript: "^6.0.3",
-        whatsappd: `file:./${archive}`,
+        whatsappd: coreDependency,
       },
     }),
   );
-  await execFile("pnpm", ["install", "--ignore-scripts"], { cwd: consumer });
+  await execFile(
+    "pnpm",
+    ["install", "--ignore-scripts", ...(registry ? ["--prefer-online"] : [])],
+    { cwd: consumer },
+  );
 
   const snippets = (await readdir(path.join(root, "apps/docs/snippets"))).filter((file) =>
     file.endsWith(".ts"),
@@ -200,7 +216,7 @@ try {
   assert.deepEqual(
     packedDist,
     await digests(path.join(packageRoot, "dist")),
-    "the packed dist/ is not this working tree's build — `pnpm pack` archives whatever dist/ already holds",
+    "the installed dist/ is not this working tree's build",
   );
   for (const removed of [
     "SessionStore",

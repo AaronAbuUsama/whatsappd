@@ -59,3 +59,19 @@ jobs:
 
           publish whatsappd whatsappd whatsappd
           publish @whatsappd/react react whatsappd-react
+      - name: Reinstall and verify the exact published package family
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if node --experimental-strip-types packages/whatsappd/smoke/packed-consumer.ts --registry; then
+              break
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              exit 1
+            fi
+            sleep 10
+          done
+          version="$(node -p "require('./packages/whatsappd/package.json').version")"
+          for package in whatsappd @whatsappd/react; do
+            test "$(npm view "$package" dist-tags.alpha)" = "$version"
+            test -n "$(npm view "$package@$version" dist.attestations.url)"
+          done

@@ -36,7 +36,13 @@ async function assertTaggedRendererRegistry(family: "web" | "opentui"): Promise<
     readonly items?: ReadonlyArray<{
       readonly name?: string;
       readonly dependencies?: readonly string[];
+      readonly files?: ReadonlyArray<{
+        readonly path: string;
+        readonly target?: string;
+        readonly type?: string;
+      }>;
       readonly meta?: { readonly version?: string };
+      readonly [key: string]: unknown;
     }>;
   };
   for (const item of registry.items ?? []) {
@@ -52,8 +58,22 @@ async function assertTaggedRendererRegistry(family: "web" | "opentui"): Promise<
     }
     const hosted = JSON.parse(
       await readFile(path.join(root, `apps/docs/public/r/${item.name}.json`), "utf8"),
-    ) as { readonly meta?: { readonly version?: string } };
-    assert.equal(hosted.meta?.version, item.meta?.version, `${item.name} hosted version`);
+    ) as Record<string, unknown>;
+    const { $schema: _schema, ...hostedItem } = hosted;
+    const files = await Promise.all(
+      (item.files ?? []).map(async (file) => {
+        const source = await fetch(
+          `https://raw.githubusercontent.com/AaronAbuUsama/whatsappd/${ref}/${file.path}`,
+        );
+        assert.equal(source.ok, true, `tagged ${item.name} source returned ${source.status}`);
+        return { ...file, content: await source.text() };
+      }),
+    );
+    assert.deepEqual(
+      hostedItem,
+      item.files ? { ...item, files } : item,
+      `${item.name} hosted and tagged items differ`,
+    );
   }
 }
 
@@ -113,6 +133,25 @@ try {
   );
   assert.match(stdout, new RegExp(`whatsappd@${core.version.replaceAll(".", "\\.")}`));
   assert.match(stdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
+
+  const { stdout: webStdout } = await execFile(
+    "pnpm",
+    [
+      "--filter",
+      "@whatsappd/docs",
+      "exec",
+      "shadcn",
+      "add",
+      `AaronAbuUsama/whatsappd/whatsapp-inbox#${ref}`,
+      "--dry-run",
+      "--yes",
+      "--cwd",
+      consumer,
+    ],
+    { cwd: root, env: { NODE_ENV: "test", PATH: process.env.PATH ?? "" } },
+  );
+  assert.match(webStdout, /whatsapp-inbox\.tsx/u);
+  assert.match(webStdout, new RegExp(`@whatsappd/react@${react.version.replaceAll(".", "\\.")}`));
 
   const { stdout: opentuiStdout } = await execFile(
     "pnpm",
