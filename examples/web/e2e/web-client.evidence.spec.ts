@@ -157,7 +157,7 @@ test("WC-14 stored media renders and seeks through opaque routes", async ({ page
     expectHealthy(page, failures));
 });
 
-test("WC-12 WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({
+test("WC-12 WC-13 WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({
   page,
 }, testInfo) => {
   const failures = browserHealth(page);
@@ -175,6 +175,16 @@ test("WC-12 WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({
     await expect(page.getByText("1 vote", { exact: true })).toBeAttached();
     await expect(page.getByText("Unsupported message (inventedEnvelope)")).toBeAttached();
     await expect(page.getByText(/pollUpdateMessage/)).toHaveCount(0);
+  });
+
+  await test.step("WC-13: every receipt and durable operation state is explicit", async () => {
+    for (const label of ["Pending", "Sent", "delivered", "read", "played", "Failed"])
+      await expect(page.getByLabel(label).first()).toBeAttached();
+    await expect(page.getByText("2 delivered · 1 read", { exact: true })).toBeAttached();
+    for (const label of ["Queued", "Preparing", "Sending", "Sent, syncing"])
+      await expect(page.getByText(label, { exact: true })).toBeAttached();
+    await expect(page.getByText("Could not send")).toBeAttached();
+    await expect(page.getByText("Delivery could not be confirmed")).toBeAttached();
   });
 
   await test.step("WC-32: a real pointer hover exposes message actions", async () => {
@@ -205,7 +215,7 @@ test("WC-12 WC-30 WC-31 WC-32 WC-33 WC-35 conversation interactions", async ({
     await expect(page.getByText("Could not send")).toBeAttached();
   });
 
-  await attachEvidence(page, testInfo, "WC-12-30-31-32-33-35");
+  await attachEvidence(page, testInfo, "WC-12-13-30-31-32-33-35");
   await test.step("WC-02: browser health and viewport integrity", () =>
     expectHealthy(page, failures));
 });

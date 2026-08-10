@@ -7,7 +7,7 @@ import { createWhatsAppApplication } from "../src/lib/whatsapp-application.ts";
 const CHAT = "peer@s.whatsapp.net";
 const ROOM = "room@g.us";
 
-void test("historical and live receipts reach the application through the public Client", async () => {
+void test("WC-13 historical and live receipts reach the application through the public Client", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
   const runtime = createWhatsAppRuntime({
@@ -91,7 +91,7 @@ void test("historical and live receipts reach the application through the public
   }
 });
 
-void test("every durable operation state reaches the application and terminal states survive replacement", async () => {
+void test("WC-13 every durable operation state reaches the application and survives replacement", async () => {
   const accountId = "web-operation-states";
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
