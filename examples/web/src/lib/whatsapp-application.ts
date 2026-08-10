@@ -9,7 +9,7 @@ import {
   type OptimisticMessage,
   type WhatsAppOperation,
 } from "whatsappd";
-import { subscribeWhatsAppClient } from "@whatsappd/react";
+import { subscribeWhatsAppClient } from "@whatsappd/react/subscribe";
 import {
   avatarUrl,
   chatName,

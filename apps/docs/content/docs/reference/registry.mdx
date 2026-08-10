@@ -18,9 +18,20 @@ Register the hosted namespace once in `components.json`:
 ```bash
 # Hosted namespace
 pnpm dlx shadcn@latest add @whatsappd/whatsappd
+pnpm dlx shadcn@latest add @whatsappd/whatsapp-inbox
 
 # Reproducible Git tag (replace <tag> with a release that includes the registry)
-pnpm dlx shadcn@latest add AaronAbuUsama/whatsappd/whatsappd#<tag>
+pnpm dlx shadcn@latest add AaronAbuUsama/whatsappd/whatsapp-inbox#<tag>
 ```
 
-Both addresses resolve the same canonical root registry. Web and OpenTUI items declare their own WhatsApp Runtime and registry dependencies; generated `/r/*.json` files are build output, not committed source.
+The web catalogue also exposes `whatsapp-chat-list`, `whatsapp-conversation`,
+`whatsapp-message`, `whatsapp-composer`, `whatsapp-account-state`, and
+`whatsapp-operation-status` as individually installable source. The complete
+`whatsapp-inbox` block composes those same files and accepts a
+`WhatsAppBrowser` store; the consuming application keeps its routes,
+authorization, media URLs, and theme tokens.
+
+Pairing/onboarding is not published as a web block yet because the working web
+example has not proved protected QR challenge consumption. Both registry
+addresses resolve canonical source at one package-family version; generated
+`/r/*.json` files are build output, not committed source.

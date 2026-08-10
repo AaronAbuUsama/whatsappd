@@ -2,5 +2,297 @@
   "$schema": "https://ui.shadcn.com/schema/registry.json",
   "name": "@whatsappd/web",
   "homepage": "https://aaronabuusama.github.io/whatsappd/docs/reference/registry",
-  "items": []
+  "items": [
+    {
+      "name": "whatsapp-web-contract",
+      "title": "WhatsApp web contract",
+      "description": "Renderer-facing snapshots, commands, and browser store contract.",
+      "type": "registry:lib",
+      "dependencies": ["react@>=18.0.0", "whatsappd@0.3.0"],
+      "devDependencies": ["@types/react@^19"],
+      "files": [
+        {
+          "path": "src/lib/web-contract.ts",
+          "type": "registry:lib",
+          "target": "lib/whatsappd/web-contract.ts"
+        },
+        {
+          "path": "src/lib/whatsapp-assets.tsx",
+          "type": "registry:lib",
+          "target": "lib/whatsappd/whatsapp-assets.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-chat-primitives",
+      "title": "WhatsApp chat primitives",
+      "description": "Message, bubble, attachment, marker, and prepend-safe scroller primitives.",
+      "type": "registry:ui",
+      "dependencies": [
+        "@shadcn/react@^0.3.0",
+        "class-variance-authority@^0.7.1",
+        "lucide-react@^1.30.0",
+        "radix-ui@^1.6.7",
+        "use-stick-to-bottom@^1.1.6"
+      ],
+      "registryDependencies": ["button"],
+      "files": [
+        {
+          "path": "src/components/ui/attachment.tsx",
+          "type": "registry:ui",
+          "target": "components/ui/attachment.tsx"
+        },
+        {
+          "path": "src/components/ui/bubble.tsx",
+          "type": "registry:ui",
+          "target": "components/ui/bubble.tsx"
+        },
+        {
+          "path": "src/components/ui/marker.tsx",
+          "type": "registry:ui",
+          "target": "components/ui/marker.tsx"
+        },
+        {
+          "path": "src/components/ui/message.tsx",
+          "type": "registry:ui",
+          "target": "components/ui/message.tsx"
+        },
+        {
+          "path": "src/components/ui/message-scroller.tsx",
+          "type": "registry:ui",
+          "target": "components/ui/message-scroller.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-avatar",
+      "title": "WhatsApp avatar",
+      "description": "Lazy avatar renderer with an application-owned source resolver.",
+      "type": "registry:component",
+      "registryDependencies": ["@whatsappd/whatsapp-web-contract", "avatar"],
+      "files": [
+        {
+          "path": "src/components/whatsapp-avatar.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-avatar.tsx"
+        },
+        {
+          "path": "src/lib/avatar-cache.ts",
+          "type": "registry:lib",
+          "target": "lib/avatar-cache.ts"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-account-state",
+      "title": "WhatsApp account state",
+      "description": "Connection, sync, stale, and terminal account presentation.",
+      "type": "registry:component",
+      "dependencies": ["lucide-react@^1.30.0"],
+      "registryDependencies": ["@whatsappd/whatsapp-web-contract", "alert"],
+      "files": [
+        {
+          "path": "src/components/whatsapp-account-state.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-account-state.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-operation-status",
+      "title": "WhatsApp operation status",
+      "description": "Queued, sending, failed, and outcome-unknown durable operation presentation.",
+      "type": "registry:component",
+      "dependencies": ["lucide-react@^1.30.0"],
+      "registryDependencies": ["@whatsappd/whatsapp-web-contract", "alert", "button"],
+      "files": [
+        {
+          "path": "src/components/whatsapp-operation-status.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-operation-status.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-composer",
+      "title": "WhatsApp composer",
+      "description": "Text, mention, reply, attachment, location, contact, typing, and voice-note composer.",
+      "type": "registry:component",
+      "dependencies": ["emoji-picker-react@^4.19.1", "lucide-react@^1.30.0", "sonner@^2.0.7"],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-chat-primitives",
+        "@whatsappd/whatsapp-web-contract",
+        "alert",
+        "button",
+        "dialog",
+        "dropdown-menu",
+        "input",
+        "input-group",
+        "item",
+        "popover"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-composer.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-composer.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-message",
+      "title": "WhatsApp message",
+      "description": "All stored message kinds, attachments, reactions, receipts, and message actions.",
+      "type": "registry:component",
+      "dependencies": ["emoji-picker-react@^4.19.1", "lucide-react@^1.30.0", "sonner@^2.0.7"],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-chat-primitives",
+        "@whatsappd/whatsapp-operation-status",
+        "@whatsappd/whatsapp-web-contract",
+        "alert",
+        "button",
+        "dropdown-menu",
+        "item",
+        "popover"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-message.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-message.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-chat-list",
+      "title": "WhatsApp chat list",
+      "description": "Responsive chats, contacts, and groups directory with real previews and avatars.",
+      "type": "registry:component",
+      "dependencies": ["lucide-react@^1.30.0", "sonner@^2.0.7"],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-avatar",
+        "@whatsappd/whatsapp-web-contract",
+        "alert-dialog",
+        "button",
+        "dialog",
+        "dropdown-menu",
+        "field",
+        "input",
+        "item",
+        "scroll-area",
+        "separator",
+        "sidebar",
+        "switch",
+        "textarea",
+        "toggle-group"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-chat-list.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-chat-list.tsx"
+        },
+        {
+          "path": "src/components/whatsapp-groups.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-groups.tsx"
+        },
+        {
+          "path": "src/components/whatsapp-navigation.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-navigation.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-conversation",
+      "title": "WhatsApp conversation",
+      "description": "Conversation header, history paging, transcript, message actions, and composer.",
+      "type": "registry:component",
+      "dependencies": ["lucide-react@^1.30.0"],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-account-state",
+        "@whatsappd/whatsapp-avatar",
+        "@whatsappd/whatsapp-chat-list",
+        "@whatsappd/whatsapp-chat-primitives",
+        "@whatsappd/whatsapp-composer",
+        "@whatsappd/whatsapp-message",
+        "@whatsappd/whatsapp-web-contract",
+        "alert",
+        "button",
+        "dropdown-menu",
+        "empty",
+        "item",
+        "scroll-area",
+        "sheet",
+        "spinner"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-conversation.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-conversation.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    },
+    {
+      "name": "whatsapp-inbox",
+      "title": "WhatsApp inbox",
+      "description": "Complete responsive inbox block. Supply the browser store; routes, auth, media URLs, and styling stay application-owned.",
+      "type": "registry:block",
+      "dependencies": [
+        "@whatsappd/react@0.3.0",
+        "lucide-react@^1.30.0",
+        "next-themes@^0.4.6",
+        "sonner@^2.0.7"
+      ],
+      "registryDependencies": [
+        "@whatsappd/whatsapp-chat-list",
+        "@whatsappd/whatsapp-conversation",
+        "@whatsappd/whatsapp-web-contract",
+        "alert",
+        "badge",
+        "button",
+        "card",
+        "empty",
+        "item",
+        "scroll-area",
+        "select",
+        "sidebar",
+        "spinner"
+      ],
+      "files": [
+        {
+          "path": "src/components/whatsapp-shell.tsx",
+          "type": "registry:block",
+          "target": "components/whatsapp-shell.tsx"
+        },
+        {
+          "path": "src/components/whatsapp-directory-detail.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-directory-detail.tsx"
+        },
+        {
+          "path": "src/components/whatsapp-settings.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-settings.tsx"
+        },
+        {
+          "path": "src/components/whatsapp-updates.tsx",
+          "type": "registry:component",
+          "target": "components/whatsapp-updates.tsx"
+        }
+      ],
+      "meta": { "version": "0.3.0" }
+    }
+  ]
 }

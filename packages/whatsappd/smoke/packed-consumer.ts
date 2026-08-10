@@ -93,7 +93,11 @@ try {
   const reactPackageJson = JSON.parse(
     await readFile(path.join(consumer, "node_modules/@whatsappd/react/package.json"), "utf8"),
   ) as { readonly exports: Record<string, unknown> };
-  assert.deepEqual(Object.keys(reactPackageJson.exports).sort(), [".", "./package.json"]);
+  assert.deepEqual(Object.keys(reactPackageJson.exports).sort(), [
+    ".",
+    "./package.json",
+    "./subscribe",
+  ]);
   const reactDeclarations = await readFile(
     path.join(consumer, "node_modules/@whatsappd/react/dist/index.d.mts"),
     "utf8",
