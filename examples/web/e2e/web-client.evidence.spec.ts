@@ -118,6 +118,56 @@ test("WC-10 WC-11 WC-23 WC-24 contact and group directory truth", async ({ page 
     expectHealthy(page, failures));
 });
 
+test("WC-25 settings disclose capabilities and persist preferences", async ({ page }, testInfo) => {
+  const failures = browserHealth(page);
+  const mobile = testInfo.project.name === "mobile";
+  const openSettings = () =>
+    mobile
+      ? page.getByLabel("Settings").click()
+      : page.getByRole("button", { name: "Settings", exact: true }).first().click();
+  await gotoScenario(page, "directory");
+
+  if (!mobile) {
+    const sidebar = page.locator('[data-slot="sidebar"][data-state]');
+    await expect(sidebar).toHaveAttribute("data-state", "collapsed");
+    await page.locator('[data-slot="sidebar-trigger"]').click();
+    await expect(sidebar).toHaveAttribute("data-state", "expanded");
+  }
+
+  await openSettings();
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByText("State Lab", { exact: true })).toBeVisible();
+  await expect(page.getByText("online", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Calls, archives, and publishing Updates/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Calls unavailable" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Archive unavailable" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Publish Update unavailable" })).toBeDisabled();
+
+  await page.getByRole("combobox", { name: "Theme" }).click();
+  await page.getByRole("option", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  expect(
+    await page.evaluate(() =>
+      Object.fromEntries(Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)])),
+    ),
+  ).toEqual({ theme: "dark" });
+
+  await page.reload();
+  await page.getByTestId("state-lab-ready").waitFor({ state: "attached" });
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  if (!mobile)
+    await expect(page.locator('[data-slot="sidebar"][data-state]')).toHaveAttribute(
+      "data-state",
+      "expanded",
+    );
+  await openSettings();
+  await expect(page.getByRole("combobox", { name: "Theme" })).toContainText("Dark");
+
+  await attachEvidence(page, testInfo, "WC-25");
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
+});
+
 test("WC-22 avatars render or fall back without retrying failures", async ({ page }, testInfo) => {
   const failures = browserHealth(page);
   const requests = new Map<string, number>();

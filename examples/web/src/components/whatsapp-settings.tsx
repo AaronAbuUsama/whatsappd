@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ArchiveIcon, CircleAlertIcon, PhoneIcon, RadioIcon } from "lucide-react";
+import { ArchiveIcon, CircleAlertIcon, CircleDashedIcon, PhoneIcon, RadioIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -74,6 +74,10 @@ export function WhatsAppSettings({
           <Button disabled variant="outline">
             <ArchiveIcon />
             Archive unavailable
+          </Button>
+          <Button disabled variant="outline">
+            <CircleDashedIcon />
+            Publish Update unavailable
           </Button>
         </div>
       </div>

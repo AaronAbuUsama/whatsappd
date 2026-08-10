@@ -12,11 +12,12 @@ export default async function Home({
 }: {
   readonly searchParams: Promise<{ readonly __stateLab?: string }>;
 }) {
+  const sidebarOpen = (await cookies()).get("sidebar_state")?.value === "true";
   const lab =
     process.env.NODE_ENV === "development"
       ? stateLabView((await searchParams).__stateLab)
       : undefined;
-  if (lab) return <WhatsAppStateLabShell initial={lab} />;
+  if (lab) return <WhatsAppStateLabShell initial={lab} sidebarOpen={sidebarOpen} />;
 
   if (!process.env.WHATSAPPD_PROFILE_DIR || !process.env.WHATSAPPD_ACCOUNT_ID) {
     return (
@@ -31,6 +32,5 @@ export default async function Home({
     );
   }
 
-  const sidebarOpen = (await cookies()).get("sidebar_state")?.value === "true";
   return <WhatsAppShell initial={await applicationState()} sidebarOpen={sidebarOpen} />;
 }
