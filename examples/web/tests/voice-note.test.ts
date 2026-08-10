@@ -34,7 +34,7 @@ async function waitForSend(values: readonly unknown[]): Promise<void> {
   ]);
 }
 
-void test("recorded audio becomes an Ogg Opus voice note", async () => {
+void test("WC-34 recorded audio becomes an Ogg Opus voice note", async () => {
   const voice = await transcodeVoiceNote(
     (async function* () {
       yield silentWav();
@@ -49,7 +49,7 @@ void test("recorded audio becomes an Ogg Opus voice note", async () => {
   }
 });
 
-void test("converted recordings cross the public Client as accepted PTT audio", async () => {
+void test("WC-34 converted recordings cross the public Client as accepted PTT audio", async () => {
   const backend = memoryBackend();
   const driver = createTestWhatsAppSession();
   const runtime = createWhatsAppRuntime({
@@ -103,7 +103,7 @@ void test("converted recordings cross the public Client as accepted PTT audio", 
   }
 });
 
-void test("an aborted conversion rejects without publishing a voice note", async () => {
+void test("WC-34 an aborted conversion rejects without publishing a voice note", async () => {
   const controller = new AbortController();
   controller.abort();
   await assert.rejects(
@@ -117,7 +117,7 @@ void test("an aborted conversion rejects without publishing a voice note", async
   );
 });
 
-void test("voice-note conversion rejects input beyond its hard byte bound", async () => {
+void test("WC-34 voice-note conversion rejects input beyond its hard byte bound", async () => {
   const chunk = new Uint8Array(1024 * 1024);
   await assert.rejects(
     transcodeVoiceNote(
@@ -127,5 +127,15 @@ void test("voice-note conversion rejects input beyond its hard byte bound", asyn
       })(),
     ),
     { name: "RangeError", message: "Voice note is too large" },
+  );
+});
+
+void test("WC-34 invalid recorded audio fails before it can be published", async () => {
+  await assert.rejects(
+    transcodeVoiceNote(
+      (async function* () {
+        yield Buffer.from("not audio");
+      })(),
+    ),
   );
 });

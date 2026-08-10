@@ -17,6 +17,9 @@ export default defineConfig({
   ],
   use: {
     baseURL: "http://127.0.0.1:3102",
+    launchOptions: {
+      args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+    },
     video: "on",
     trace: "retain-on-failure",
   },

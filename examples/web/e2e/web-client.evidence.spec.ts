@@ -197,7 +197,9 @@ test("WC-22 avatars render or fall back without retrying failures", async ({ pag
     expectHealthy(page, failures));
 });
 
-test("WC-14 stored media renders and seeks through opaque routes", async ({ page }, testInfo) => {
+test("WC-14 WC-34 stored media renders and seeks through opaque routes", async ({
+  page,
+}, testInfo) => {
   const failures = browserHealth(page);
   await gotoScenario(page, "conversation");
 
@@ -213,11 +215,29 @@ test("WC-14 stored media renders and seeks through opaque routes", async ({ page
     await expect
       .poll(() => video.evaluate((element) => (element as HTMLMediaElement).readyState))
       .toBeGreaterThanOrEqual(1);
+    const playback = await audio.evaluate(async (element) => {
+      const media = element as HTMLMediaElement;
+      await media.play();
+      const played = !media.paused;
+      media.pause();
+      media.currentTime = Math.min(media.duration / 2, 0.1);
+      return {
+        played,
+        paused: media.paused,
+        duration: media.duration,
+        currentTime: media.currentTime,
+      };
+    });
+    expect(playback.played).toBe(true);
+    expect(playback.paused).toBe(true);
+    expect(playback.duration).toBeGreaterThan(0);
+    expect(playback.currentTime).toBeGreaterThan(0);
   });
 
   await test.step("WC-14: missing and failed media remain distinct", async () => {
-    await expect(page.getByText("Media reference missing")).toBeVisible();
-    await expect(page.getByText("Media download failed")).toBeVisible();
+    await expect(page.getByText("Media reference missing").first()).toBeVisible();
+    await expect(page.getByText("Media download failed").first()).toBeVisible();
+    await expect(page.getByText("Invented voice-note capture failure")).toBeVisible();
   });
 
   await test.step("WC-14: browser seeking receives a private byte range", async () => {
@@ -240,7 +260,57 @@ test("WC-14 stored media renders and seeks through opaque routes", async ({ page
     });
   });
 
-  await attachEvidence(page, testInfo, "WC-14");
+  await attachEvidence(page, testInfo, "WC-14-34");
+  await test.step("WC-02: browser health and viewport integrity", () =>
+    expectHealthy(page, failures));
+});
+
+test("WC-34 records, cancels, recovers, and accepts a voice note", async ({
+  context,
+  page,
+}, testInfo) => {
+  const failures = browserHealth(page);
+  await context.grantPermissions(["microphone"], { origin: "http://127.0.0.1:3102" });
+  await gotoScenario(page, "conversation");
+
+  await test.step("WC-34: microphone denial is recoverable", async () => {
+    await page.evaluate(() => {
+      const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      Object.defineProperty(window, "__stateLabGetUserMedia", {
+        value: original,
+        configurable: true,
+      });
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: async () => {
+          throw new DOMException("Microphone denied", "NotAllowedError");
+        },
+      });
+    });
+    await page.getByRole("button", { name: "Record audio" }).click();
+    await expect(page.getByText("Microphone denied", { exact: true })).toBeVisible();
+    await page.reload();
+    await page.getByTestId("state-lab-ready").waitFor({ state: "attached" });
+  });
+
+  await test.step("WC-34: cancellation leaves no staged recording", async () => {
+    await page.getByRole("button", { name: "Record audio" }).click();
+    await expect(page.getByRole("button", { name: "Stop recording" })).toBeVisible();
+    await page.getByRole("button", { name: "Cancel recording" }).click();
+    await expect(page.getByText("recording.webm", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Record audio" })).toBeVisible();
+  });
+
+  await test.step("WC-34: a retry stages and accepts one voice note", async () => {
+    await page.getByRole("button", { name: "Record audio" }).click();
+    await expect(page.getByRole("button", { name: "Stop recording" })).toBeVisible();
+    await page.getByRole("button", { name: "Stop recording" }).click();
+    await expect(page.getByText("recording.webm", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText("recording.webm", { exact: true })).toHaveCount(0);
+  });
+
+  await attachEvidence(page, testInfo, "WC-34-recording");
   await test.step("WC-02: browser health and viewport integrity", () =>
     expectHealthy(page, failures));
 });

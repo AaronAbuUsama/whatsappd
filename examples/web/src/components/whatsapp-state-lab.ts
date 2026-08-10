@@ -245,6 +245,18 @@ const messages: readonly ApplicationMessage[] = [
     seconds: 0.25,
     ptt: true,
   }),
+  baseMessage("message-audio-missing", {
+    kind: "audio",
+    state: "stored",
+    mimetype: "audio/ogg",
+    ptt: true,
+  }),
+  baseMessage("message-audio-failed", {
+    kind: "audio",
+    state: "failed",
+    failure: "Invented voice-note capture failure",
+    ptt: true,
+  }),
   baseMessage("message-document-stored", {
     kind: "document",
     state: "stored",
