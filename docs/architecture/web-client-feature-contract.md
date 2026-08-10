@@ -38,6 +38,8 @@ source. It proves the product before reusable behavior is extracted.
 
 Each feature below has an identifier that issues and tests may cite. A feature
 is done only when every listed test is green and its Definition of Done holds.
+`pnpm check:docs` enforces that every WC identifier remains unique and retains
+numbered concrete tests plus a Definition of Done.
 The proof ladder has its ADR-0017 meaning:
 
 | Rung | Required evidence here                                                            |
