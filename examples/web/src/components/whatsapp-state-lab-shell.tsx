@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { WhatsAppShell } from "@/components/whatsapp-shell";
+import { whatsappAssetSources } from "@/lib/whatsapp-assets";
 import { createStateLabBrowser } from "@/components/whatsapp-state-lab";
 import type { WhatsAppApplicationView } from "@/lib/whatsapp-application";
 
@@ -17,7 +18,11 @@ export function WhatsAppStateLabShell({
   useEffect(() => setReady(true), []);
   return (
     <>
-      <WhatsAppShell initial={initial} sidebarOpen={sidebarOpen} browser={browser} />
+      <WhatsAppShell
+        sidebarOpen={sidebarOpen}
+        browser={browser}
+        assetSources={whatsappAssetSources}
+      />
       {ready && <span data-testid="state-lab-ready" hidden />}
     </>
   );

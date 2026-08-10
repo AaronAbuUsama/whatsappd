@@ -16,6 +16,7 @@
   "sideEffects": false,
   "exports": {
     ".": "./dist/index.mjs",
+    "./subscribe": "./dist/subscribe.mjs",
     "./package.json": "./package.json"
   },
   "publishConfig": {

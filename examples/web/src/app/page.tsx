@@ -1,4 +1,4 @@
-import { WhatsAppShell } from "@/components/whatsapp-shell";
+import { WhatsAppBrowserShell } from "@/components/whatsapp-browser-shell";
 import { stateLabView } from "@/components/whatsapp-state-lab";
 import { WhatsAppStateLabShell } from "@/components/whatsapp-state-lab-shell";
 import { applicationState } from "@/lib/whatsapp.server";
@@ -32,5 +32,5 @@ export default async function Home({
     );
   }
 
-  return <WhatsAppShell initial={await applicationState()} sidebarOpen={sidebarOpen} />;
+  return <WhatsAppBrowserShell initial={await applicationState()} sidebarOpen={sidebarOpen} />;
 }

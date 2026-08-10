@@ -1,33 +1,13 @@
 "use client";
 
 import type {
-  WhatsAppApplicationCommand,
   WhatsAppApplicationCommandResult,
   WhatsAppApplicationView,
-} from "@/lib/whatsapp-application";
+  WhatsAppBrowser,
+  WhatsAppBrowserSnapshot,
+} from "@/lib/whatsappd/web-contract";
 
-export type WhatsAppBrowserSnapshot = {
-  readonly view: WhatsAppApplicationView;
-  readonly selected?: string;
-  readonly pending: number;
-  readonly error?: string;
-};
-
-type WithoutSource<Command> = Command extends { readonly source: unknown }
-  ? Omit<Command, "source">
-  : never;
-
-export type WhatsAppMediaMetadata = WithoutSource<WhatsAppApplicationCommand>;
-
-export type WhatsAppBrowser = {
-  readonly subscribe: (listener: () => void) => () => void;
-  readonly getSnapshot: () => WhatsAppBrowserSnapshot;
-  readonly getServerSnapshot: () => WhatsAppBrowserSnapshot;
-  select(chat?: string): Promise<void>;
-  command(command: WhatsAppApplicationCommand): Promise<WhatsAppApplicationCommandResult>;
-  sendMedia(metadata: WhatsAppMediaMetadata, file: Blob): Promise<WhatsAppApplicationCommandResult>;
-  refresh(): Promise<void>;
-};
+export type { WhatsAppBrowser, WhatsAppBrowserSnapshot } from "@/lib/whatsappd/web-contract";
 
 export function createWhatsAppBrowser(initial: WhatsAppApplicationView): WhatsAppBrowser {
   const listeners = new Set<() => void>();

@@ -23,7 +23,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const DesktopDirectory: Story = {
-  args: { initial: stateLabDirectory, browser: createStateLabBrowser(stateLabDirectory) },
+  args: { browser: createStateLabBrowser(stateLabDirectory) },
   play: async ({ canvas }) => {
     await expect(canvas.getByRole("heading", { name: "Chats" })).toBeVisible();
     const search = canvas.getByRole("searchbox", { name: "Search chats" });
@@ -35,7 +35,7 @@ export const DesktopDirectory: Story = {
 
 export const MobileSelection: Story = {
   globals: { viewport: { value: "mobile1", isRotated: false } },
-  args: { initial: stateLabDirectory, browser: createStateLabBrowser(stateLabDirectory) },
+  args: { browser: createStateLabBrowser(stateLabDirectory) },
   play: async ({ canvas }) => {
     await userEvent.click(canvas.getByRole("button", { name: /Beacon Workshop/ }));
     await expect(canvas.getByRole("heading", { name: "Beacon Workshop" })).toBeVisible();
@@ -51,19 +51,19 @@ export const MobileSelection: Story = {
 };
 
 export const DesktopConversationMatrix: Story = {
-  args: { initial: stateLabConversation, browser: createStateLabBrowser(stateLabConversation) },
+  args: { browser: createStateLabBrowser(stateLabConversation) },
 };
 
 export const MobileConversationMatrix: Story = {
   globals: { viewport: { value: "mobile1", isRotated: false } },
-  args: { initial: stateLabConversation, browser: createStateLabBrowser(stateLabConversation) },
+  args: { browser: createStateLabBrowser(stateLabConversation) },
 };
 
 const interactionCommands: WhatsAppApplicationCommand[] = [];
 const interactionBrowser = createStateLabBrowser(stateLabConversation, interactionCommands);
 
 export const ConversationInteractions: Story = {
-  args: { initial: stateLabConversation, browser: interactionBrowser },
+  args: { browser: interactionBrowser },
   play: async ({ canvas }) => {
     await expect(canvas.getByRole("heading", { name: "Beacon Workshop" })).toBeVisible();
     interactionCommands.length = 0;
@@ -82,7 +82,7 @@ export const ConversationInteractions: Story = {
 };
 
 const storyFor = (view: WhatsAppApplicationView): Story => ({
-  args: { initial: view, browser: createStateLabBrowser(view) },
+  args: { browser: createStateLabBrowser(view) },
 });
 const mobileStoryFor = (view: WhatsAppApplicationView): Story => ({
   ...storyFor(view),

@@ -16,6 +16,10 @@
     "apps/docs": {
       "entry": ["app/**/*.{ts,tsx}", "source.config.ts", "snippets/*.ts", "tests/*.test.ts"],
       "project": ["**/*.{ts,tsx,mdx,css}"]
+    },
+    "registry/web": {
+      "entry": ["src/**/*.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx}"]
     }
   },
 

@@ -5,7 +5,7 @@
 1. **Version the pending changesets.**
 
    ```bash
-   pnpm changeset version   # consumes .changeset/*.md, bumps package.json, writes CHANGELOG.md
+   pnpm changeset:version   # consumes changesets and keeps registry metadata on the same version
    git commit -am "Release <version>"
    ```
 

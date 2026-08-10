@@ -29,6 +29,11 @@ createWhatsAppClient`, observed inbound text through both Client read seams,
   report covers every WC feature id with semantic/interaction assertions,
   console and network health, screenshots, video, and a clean privacy scan;
   implementation head `7aef5e4`.
+- Web source registry: **run at the clean source-consumer seam** — the proven
+  web presentation is the canonical `registry/web` source, the example consumes
+  byte-identical installed files, and a clean application installs and
+  typechecks the complete `whatsapp-inbox` block. Packed-package P6 remains the
+  separate whole-goal proof in issue #164.
 - OpenTUI: **run at the deterministic renderer seam** — issue #160's private
   OpenTUI React consumer composes the public Client, projects saved/live and
   optimistic state, and passed native-renderer checks for desktop and compact

@@ -24,4 +24,7 @@ export function App({ store }: { store: WhatsAppStore<Snapshot> }) {
 
 The generated `WhatsAppProvider` and hooks retain the store's exact snapshot type. The Provider follows the supplied store with React's external-store contract. Replacing or unmounting it releases only that React subscription; it never closes the application-owned Client, Runtime, Backend, browser transport, or terminal application.
 
-Use `subscribeWhatsAppClient(client, listener)` when a renderer-neutral store needs one notification from any public Client namespace. Selection, scrolling, transport, authorization, and presentation remain application-owned.
+Use `subscribeWhatsAppClient(client, listener)` from `@whatsappd/react/subscribe`
+when a server-side renderer store needs one notification from any public Client
+namespace. Selection, scrolling, transport, authorization, and presentation
+remain application-owned.

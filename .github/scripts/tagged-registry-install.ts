@@ -27,6 +27,37 @@ const hosted = JSON.parse(
 ) as Record<string, unknown>;
 const { $schema: _schema, ...hostedItem } = hosted;
 assert.deepEqual(hostedItem, taggedItem);
+const taggedWebResponse = await fetch(
+  `https://raw.githubusercontent.com/AaronAbuUsama/whatsappd/${ref}/registry/web/registry.json`,
+);
+assert.equal(
+  taggedWebResponse.ok,
+  true,
+  `tagged web registry returned ${taggedWebResponse.status}`,
+);
+const taggedWeb = (await taggedWebResponse.json()) as {
+  readonly items?: ReadonlyArray<{
+    readonly name?: string;
+    readonly dependencies?: readonly string[];
+    readonly meta?: { readonly version?: string };
+  }>;
+};
+for (const item of taggedWeb.items ?? []) {
+  assert.ok(item.name, "tagged web item has no name");
+  assert.equal(item.meta?.version, core.version, `${item.name} tagged version`);
+  for (const dependency of item.dependencies ?? []) {
+    if (dependency.startsWith("whatsappd@") || dependency.startsWith("@whatsappd/react@"))
+      assert.equal(
+        dependency.endsWith(`@${core.version}`),
+        true,
+        `${item.name} dependency version`,
+      );
+  }
+  const hostedWeb = JSON.parse(
+    await readFile(path.join(root, `apps/docs/public/r/${item.name}.json`), "utf8"),
+  ) as { readonly meta?: { readonly version?: string } };
+  assert.equal(hostedWeb.meta?.version, item.meta?.version, `${item.name} hosted version`);
+}
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-tagged-registry-"));
 
 try {
