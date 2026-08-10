@@ -38,6 +38,27 @@ test("ignores contact updates without any usable identity", () => {
   expect(mapContactUpdates([{ name: "No id" }], 123)).toEqual([]);
 });
 
+test("ignores group, broadcast, and channel addresses in contact updates", () => {
+  expect(
+    mapContactUpdates(
+      [
+        { id: "room@g.us", name: "Room" },
+        { id: "status@broadcast", name: "Status" },
+        { id: "news@newsletter", name: "News" },
+        { id: "1555@s.whatsapp.net", name: "Person" },
+      ],
+      123,
+    ),
+  ).toEqual([
+    {
+      id: "1555@s.whatsapp.net",
+      nativeIds: ["1555@s.whatsapp.net"],
+      displayName: "Person",
+      at: 123,
+    },
+  ]);
+});
+
 test("native ids are trimmed and fall back from an empty primary form", () => {
   expect(
     mapContactUpdates(

@@ -25,3 +25,7 @@ export interface ContactUpdate {
   /** When the update occurred, as a millisecond epoch timestamp. */
   readonly at?: number;
 }
+
+/** Whether a native WhatsApp id denotes a contact rather than a conversation surface. */
+export const isContactNativeId = (id: string): boolean =>
+  !id.endsWith("@g.us") && !id.endsWith("@broadcast") && !id.endsWith("@newsletter");

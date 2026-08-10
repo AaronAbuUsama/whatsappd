@@ -19,6 +19,7 @@
  *
  * @packageDocumentation
  */
+import { isContactNativeId } from "../model/contact.ts";
 import type { MessageRef } from "../model/outbound.ts";
 import type { PresenceKind } from "../model/presence.ts";
 import type { Status, WaIdentity } from "../model/status.ts";
@@ -31,11 +32,8 @@ import type {
   MessageRecord,
   WhatsAppDurableFrame,
 } from "./contracts.ts";
-import type {
-  WhatsAppOperation,
-  WhatsAppOperationInput,
-  WhatsAppOperationState,
-} from "./operations.ts";
+import type { WhatsAppOperation, WhatsAppOperationInput } from "./operations.ts";
+import type { WhatsAppOperationState } from "./operations.ts";
 import { createClientOperationApis, type OptimisticMessage } from "./client-operations.ts";
 import type { ClientSubscribeOptions, WhatsAppClient } from "./client-api.ts";
 import {
@@ -579,6 +577,7 @@ export async function createWhatsAppClient(runtime: WhatsAppRuntime): Promise<Wh
         touch("chats");
       },
       contact: (contact: ContactRecord): void => {
+        if (![contact.contactId, ...contact.nativeIds].every(isContactNativeId)) return;
         contacts.set(contact.contactId, own(contact));
         touch("contacts");
       },

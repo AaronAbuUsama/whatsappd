@@ -1,4 +1,4 @@
-import type { ContactUpdate } from "../model/contact.ts";
+import { isContactNativeId, type ContactUpdate } from "../model/contact.ts";
 
 export interface ContactNativeIds {
   readonly id?: string | null;
@@ -41,7 +41,7 @@ export function mapContactUpdates(
   for (const contact of contacts) {
     const nativeIds = contactNativeIds(contact);
     const id = nativeIds[0];
-    if (!id) continue;
+    if (!id || !nativeIds.every(isContactNativeId)) continue;
     out.push({
       id,
       nativeIds,

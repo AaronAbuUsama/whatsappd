@@ -55,6 +55,7 @@ test("conversation sync chats and contacts map without leaking Baileys types", (
         } as HistoryPayload["chats"][number],
       ],
       contacts: [
+        { id: "123-456@g.us", name: "Funding Group" },
         { id: "1555@s.whatsapp.net", name: "Alice" },
         { id: "1666@s.whatsapp.net", notify: "Bob" },
       ] as HistoryPayload["contacts"],

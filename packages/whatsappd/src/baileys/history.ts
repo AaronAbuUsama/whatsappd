@@ -6,6 +6,7 @@ import type {
   InboundMessage,
   WhatsAppAddress,
 } from "../model/index.ts";
+import { isContactNativeId } from "../model/contact.ts";
 import { contactNativeIds } from "./contacts.ts";
 import { noDownloader, type DownloadThunk } from "./download.ts";
 import { toInbound } from "./inbound.ts";
@@ -76,7 +77,7 @@ function toHistoryChat(chat: HistoryPayload["chats"][number]): HistoryChat | und
 function toHistoryContact(contact: HistoryPayload["contacts"][number]): HistoryContact | undefined {
   const nativeIds = contactNativeIds(contact);
   const id = nativeIds[0];
-  if (!id) return undefined;
+  if (!id || !nativeIds.every(isContactNativeId)) return undefined;
   const displayName = firstText(
     contact.name,
     contact.notify,
