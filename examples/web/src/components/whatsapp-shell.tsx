@@ -14,6 +14,7 @@ import {
   VideoIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { createWhatsAppBindings } from "@whatsappd/react";
 import { WhatsAppComposer } from "@/components/whatsapp-composer";
 import { WhatsAppAvatar } from "@/components/whatsapp-avatar";
 import { WhatsAppDirectoryDetail } from "@/components/whatsapp-directory-detail";
@@ -73,14 +74,19 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Spinner } from "@/components/ui/spinner";
 import {
   createWhatsAppBrowser,
-  useWhatsAppBrowser,
   type WhatsAppBrowser,
+  type WhatsAppBrowserSnapshot,
 } from "@/lib/whatsapp-browser";
 import type {
   ApplicationChat,
   ApplicationMessage,
   WhatsAppApplicationView,
 } from "@/lib/whatsapp-application";
+
+const { WhatsAppProvider, useWhatsAppSnapshot, useWhatsAppStore } = createWhatsAppBindings<
+  WhatsAppBrowserSnapshot,
+  WhatsAppBrowser
+>();
 
 const shortTime = (timestamp: number): string =>
   timestamp
@@ -491,7 +497,16 @@ export function WhatsAppShell({
   readonly browser?: WhatsAppBrowser;
 }) {
   const [browser] = useState(() => suppliedBrowser ?? createWhatsAppBrowser(initial));
-  const { view, selected, pending, error } = useWhatsAppBrowser(browser);
+  return (
+    <WhatsAppProvider store={browser}>
+      <WhatsAppShellContent sidebarOpen={sidebarOpen} />
+    </WhatsAppProvider>
+  );
+}
+
+function WhatsAppShellContent({ sidebarOpen }: { readonly sidebarOpen: boolean }) {
+  const browser = useWhatsAppStore();
+  const { view, selected, pending, error } = useWhatsAppSnapshot();
   const [section, setSection] = useState<WhatsAppSection>("chats");
   useEffect(() => {
     if (error) toast.error(error);

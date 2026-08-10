@@ -279,14 +279,14 @@ authorization and URLs remain application-owned.
 
 ## Shared React behavior
 
-| Behavior                                      | Shared binding                                        | Renderer-owned work                                             |
-| --------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------- |
-| Client lifetime and subscription              | `WhatsAppProvider`, `useWhatsAppClient`, `useAccount` | Process/server composition and Runtime ownership                |
-| Chat list and selection state                 | `useChats`, `useChatSelection`                        | List markup, keyboard/mouse interaction, terminal focus         |
-| One chat's messages and actions               | `useMessages`                                         | Transcript rows, bubbles, layout, colors, typography            |
-| Stored-page request state                     | `useMessages().older`                                 | Browser/terminal scroller anchoring and viewport measurement    |
-| Connection/pairing/operation state            | `useConnection`, `usePairing`, `useOperation`         | Modal/screen/dialog presentation and secret transport route     |
-| Reusable behavior-only workflows proven twice | Render-slot Module with state/actions only            | DOM elements, CSS, ARIA wiring, OpenTUI nodes, platform effects |
+| Behavior                           | Shared binding                                                                    | Application/renderer-owned work                                           |
+| ---------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| React store lifetime               | `createWhatsAppBindings()` returns a typed Provider, store hook and snapshot hook | Store construction, Runtime/Backend ownership                             |
+| Public Client namespace fanout     | `subscribeWhatsAppClient`                                                         | Snapshot projection and application authorization                         |
+| Chat and message selection         | Not extracted: the web uses remote opaque keys; OpenTUI selects locally           | URL/keyboard state, list markup, terminal focus                           |
+| Stored-page anchoring              | Not extracted: only the Client paging command is shared                           | Browser scroller measurement and OpenTUI terminal child anchoring         |
+| Connection and operation rendering | Stable source snapshots through `useWhatsAppSnapshot`                             | Alerts, bubbles, retry confirmation and `outcome_unknown` presentation    |
+| Pairing challenge consumption      | Not extracted; the Client has no protected challenge capability after #109        | Application authorization and a future explicitly scoped secret transport |
 
 ## Current public exports
 

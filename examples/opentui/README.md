@@ -1,6 +1,6 @@
 # OpenTUI WhatsApp example
 
-Private proof consumer for the public `whatsappd` Client. OpenTUI owns the terminal tree, focus, keyboard input, layout and scroll anchoring; `src/application.ts` is deliberately local until the web and terminal examples establish the shared renderer-neutral contract.
+Private proof consumer for the public `whatsappd` Client and `@whatsappd/react`. The shared package owns React store and Client subscription lifetime; OpenTUI owns the terminal tree, projection, selection, focus, keyboard input, layout and scroll anchoring.
 
 ## Run
 

@@ -1,13 +1,25 @@
 import type { InputRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { TerminalApplication } from "./application.ts";
+import { useEffect, useRef, useState } from "react";
+import { createWhatsAppBindings } from "@whatsappd/react";
+import type { TerminalApplication, TerminalSnapshot } from "./application.ts";
+
+const { WhatsAppProvider, useWhatsAppSnapshot, useWhatsAppStore } = createWhatsAppBindings<
+  TerminalSnapshot,
+  TerminalApplication
+>();
 
 export function WhatsAppTui({ application }: { readonly application: TerminalApplication }) {
-  const snapshot = useSyncExternalStore(
-    (listener) => application.subscribe(listener),
-    () => application.getSnapshot(),
+  return (
+    <WhatsAppProvider store={application}>
+      <WhatsAppTuiContent />
+    </WhatsAppProvider>
   );
+}
+
+function WhatsAppTuiContent() {
+  const application = useWhatsAppStore();
+  const snapshot = useWhatsAppSnapshot();
   const renderer = useRenderer();
   const { width } = useTerminalDimensions();
   const compact = width < 80;

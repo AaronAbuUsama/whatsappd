@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const execFile = promisify(execFileCallback);
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const reactPackageRoot = path.resolve(packageRoot, "../react");
 const root = path.resolve(packageRoot, "../..");
 const consumer = await mkdtemp(path.join(tmpdir(), "whatsappd-packed-"));
 
@@ -29,8 +30,14 @@ const digests = async (directory: string): Promise<Record<string, string>> =>
 
 try {
   await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: packageRoot });
-  const archive = (await readdir(consumer)).find((file) => file.endsWith(".tgz"));
+  await execFile("pnpm", ["pack", "--pack-destination", consumer], { cwd: reactPackageRoot });
+  const archives = await readdir(consumer);
+  const archive = archives.find((file) => file.startsWith("whatsappd-") && file.endsWith(".tgz"));
+  const reactArchive = archives.find(
+    (file) => file.startsWith("whatsappd-react-") && file.endsWith(".tgz"),
+  );
   assert.ok(archive, "pnpm pack did not produce an archive");
+  assert.ok(reactArchive, "pnpm pack did not produce a React archive");
 
   await writeFile(
     path.join(consumer, "package.json"),
@@ -38,7 +45,9 @@ try {
       private: true,
       type: "module",
       dependencies: {
+        "@whatsappd/react": `file:./${reactArchive}`,
         "@libsql/client": "0.15.15",
+        react: "19.2.8",
         whatsappd: `file:./${archive}`,
       },
     }),
@@ -54,6 +63,17 @@ try {
   };
   assert.equal(packageJson.bin, undefined);
   assert.deepEqual(Object.keys(packageJson.exports).sort(), [".", "./package.json", "./testing"]);
+  const reactPackageJson = JSON.parse(
+    await readFile(path.join(consumer, "node_modules/@whatsappd/react/package.json"), "utf8"),
+  ) as { readonly exports: Record<string, unknown> };
+  assert.deepEqual(Object.keys(reactPackageJson.exports).sort(), [".", "./package.json"]);
+  const reactDeclarations = await readFile(
+    path.join(consumer, "node_modules/@whatsappd/react/dist/index.d.mts"),
+    "utf8",
+  );
+  for (const rendererOwned of ["HTMLElement", "@opentui", "next/", "shadcn", "tailwind"]) {
+    assert.equal(reactDeclarations.includes(rendererOwned), false);
+  }
   const dist = path.join(consumer, "node_modules/whatsappd/dist");
   const declarations = (
     await Promise.all(
@@ -199,6 +219,7 @@ try {
       import path from "node:path";
       import { pathToFileURL } from "node:url";
       import * as root from "whatsappd";
+      import * as reactBindings from "@whatsappd/react";
       import { createTestWhatsAppSession, textMessage } from "whatsappd/testing";
 
       const ACCOUNT = "packed";
@@ -214,6 +235,8 @@ try {
       assert.equal(typeof root.memoryStore, "function");
       assert.equal(typeof root.createWhatsAppRuntime, "function");
       assert.equal(typeof root.createWhatsAppClient, "function");
+      assert.equal(typeof reactBindings.createWhatsAppBindings, "function");
+      assert.equal(typeof reactBindings.subscribeWhatsAppClient, "function");
       assert.equal("createInProcessWhatsAppClient" in root, false);
       assert.equal(typeof root.memoryBackend, "function");
       assert.equal(typeof root.libsqlBackend, "function");

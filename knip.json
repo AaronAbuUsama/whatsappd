@@ -8,6 +8,10 @@
     "packages/whatsappd": {
       "entry": ["smoke/*.ts", "src/index.ts", "src/testing.ts", "tests/*.test.ts"],
       "project": ["smoke/**/*.ts", "src/**/*.ts", "tests/**/*.ts"]
+    },
+    "packages/react": {
+      "entry": ["src/index.ts", "tests/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
     }
   },
 
