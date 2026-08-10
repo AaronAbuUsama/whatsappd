@@ -1,6 +1,10 @@
 # OpenTUI WhatsApp example
 
-Private proof consumer for the public `whatsappd` Client and `@whatsappd/react`. The shared package owns React store and Client subscription lifetime; OpenTUI owns the terminal tree, projection, selection, focus, keyboard input, layout and scroll anchoring.
+Private proof consumer for the public `whatsappd` Client, `@whatsappd/react`,
+and the byte-identical source installed from `registry/opentui`. The shared
+package owns React store and Client subscription lifetime; OpenTUI owns the
+terminal tree, projection, selection, focus, keyboard input, layout and scroll
+anchoring.
 
 ## Run
 

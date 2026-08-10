@@ -40,6 +40,10 @@ createWhatsAppClient`, observed inbound text through both Client read seams,
   layouts, older-page anchoring, keyboard composition, durable send dispatch,
   attachments, and queued/failed/outcome-unknown presentation. No linked
   account was opened for this proof.
+- OpenTUI source registry: **run at the clean source-consumer seam** — the
+  example consumes byte-identical `registry/opentui` files and a clean project
+  installs and typechecks the complete `whatsapp-tui-inbox` block with its
+  declared OpenTUI and package-family dependencies.
 
 Automated tests do not establish real-account or rendered behavior. A P4 run at
 one layer establishes nothing about another: the Session-layer history proof and

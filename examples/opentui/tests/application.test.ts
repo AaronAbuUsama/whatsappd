@@ -7,7 +7,10 @@ import type {
   MessageRecord,
   WhatsAppClient,
 } from "whatsappd";
-import { accountPhase, createTerminalApplication } from "../src/application.ts";
+import {
+  accountPhase,
+  createTerminalApplication,
+} from "../src/components/whatsappd-tui/lib/whatsapp-terminal.ts";
 
 const chat = (chatId: string, subject: string, lastMessageAt: number): ChatRecord => ({
   accountId: "fixture-account",

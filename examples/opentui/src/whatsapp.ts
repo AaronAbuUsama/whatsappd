@@ -11,7 +11,10 @@ import {
   libsqlBackend,
   qrAuth,
 } from "whatsappd";
-import { createTerminalApplication, type TerminalApplication } from "./application.ts";
+import {
+  createTerminalApplication,
+  type TerminalApplication,
+} from "./components/whatsappd-tui/lib/whatsapp-terminal.ts";
 
 export interface TerminalWorker {
   readonly application: TerminalApplication;

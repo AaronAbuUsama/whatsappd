@@ -504,6 +504,31 @@ importers:
         specifier: 0.15.15
         version: 0.15.15
 
+  registry/opentui:
+    dependencies:
+      '@opentui/core':
+        specifier: 0.4.5
+        version: 0.4.5(typescript@6.0.3)(web-tree-sitter@0.25.10)
+      '@opentui/react':
+        specifier: 0.4.5
+        version: 0.4.5(react-devtools-core@7.0.1)(react@19.2.8)(typescript@6.0.3)(web-tree-sitter@0.25.10)(ws@8.21.3)
+      '@whatsappd/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      whatsappd:
+        specifier: workspace:*
+        version: link:../../packages/whatsappd
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.1
+        version: 26.1.1
+      '@types/react':
+        specifier: ^19
+        version: 19.2.18
+
   registry/web:
     dependencies:
       '@shadcn/react':

@@ -20,6 +20,10 @@
     "registry/web": {
       "entry": ["src/**/*.{ts,tsx}"],
       "project": ["src/**/*.{ts,tsx}"]
+    },
+    "registry/opentui": {
+      "entry": ["src/**/*.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx}"]
     }
   },
 
