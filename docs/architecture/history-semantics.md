@@ -18,8 +18,15 @@ fragments reaching further back. A consumer watching thousands of messages
 arrive at pairing has no protocol signal that this is everything — because
 it is not.
 
-whatsappd deliberately pairs light and requests full history only on a
-registered reconnect (`shouldRequestFullHistoryOnOpen`, `packages/whatsappd/src/baileys/socket.ts`).
+whatsappd deliberately pairs light and requests full history only once pairing
+has completed (`shouldRequestFullHistoryOnOpen`, `packages/whatsappd/src/baileys/socket.ts`).
+The two pairing methods prove completion with different fields — pairing-code
+by `creds.registered`, QR by `creds.me` — because upstream writes `registered`
+only in the pairing-code companion-finish handler. Until 2026-08-16 both were
+gated on `registered`, so **every QR-paired account silently received the short
+sync instead** (#203). Any history depth measured before that fix was measured
+with `syncFullHistory` off, whatever the run intended.
+
 A returning device whose `accountSyncCounter` proves initial sync already
 completed receives no history redelivery at all — only messages queued while
 it was offline (ADR-0002: connection readiness is separate from history

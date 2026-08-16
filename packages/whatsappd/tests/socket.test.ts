@@ -32,23 +32,72 @@ test("only unregistered pairing-code sockets use WhatsApp's canonical web compan
   expect(browserForOpen("qr", { creds: {} })).toEqual(Browsers.macOS("Desktop"));
 });
 
+const PAIRED_ME = { id: "15551234567:1@s.whatsapp.net", name: "~" };
+
 test("fresh companion registration defers full-history until registration completes", () => {
-  expect(shouldRequestFullHistoryOnOpen({ creds: {} })).toBe(false);
+  // Pairing-code only: `creds.me` is written from the typed phone number before
+  // the user enters the code, so it cannot stand for "pairing finished" here.
+  // Asking mid-registration is what leaves the phone stuck at "logging in".
+  expect(shouldRequestFullHistoryOnOpen("pairing_code", { creds: {} })).toBe(false);
+  expect(shouldRequestFullHistoryOnOpen("pairing_code", { creds: { me: PAIRED_ME } })).toBe(false);
   expect(
-    shouldRequestFullHistoryOnOpen({
-      creds: { me: { id: "15551234567:1@s.whatsapp.net", name: "~" } },
-    }),
+    shouldRequestFullHistoryOnOpen("pairing_code", { creds: { registered: false, me: PAIRED_ME } }),
   ).toBe(false);
   expect(
-    shouldRequestFullHistoryOnOpen({
-      creds: { registered: false, me: { id: "15551234567:1@s.whatsapp.net", name: "~" } },
-    }),
-  ).toBe(false);
-  expect(
-    shouldRequestFullHistoryOnOpen({
-      creds: { registered: true, me: { id: "15551234567:1@s.whatsapp.net", name: "~" } },
-    }),
+    shouldRequestFullHistoryOnOpen("pairing_code", { creds: { registered: true, me: PAIRED_ME } }),
   ).toBe(true);
+});
+
+test("a QR-paired credential requests full history even though `registered` stays false", () => {
+  // #203: Baileys sets `creds.registered` only in the pairing-code companion
+  // finish handler, so a QR credential holds `false` for its whole life. Gating
+  // QR on it capped every QR-paired account at the short sync, silently, while
+  // Baileys' own default for `syncFullHistory` is `true`. For QR, `creds.me` is
+  // written from the server's pair-success stanza and never before it.
+  expect(
+    shouldRequestFullHistoryOnOpen("qr", { creds: { registered: false, me: PAIRED_ME } }),
+  ).toBe(true);
+  expect(shouldRequestFullHistoryOnOpen("qr", { creds: { me: PAIRED_ME } })).toBe(true);
+
+  // Not yet paired: no identity, so nothing to sync a history for.
+  expect(shouldRequestFullHistoryOnOpen("qr", { creds: {} })).toBe(false);
+  expect(shouldRequestFullHistoryOnOpen("qr", { creds: { me: null } })).toBe(false);
+  expect(shouldRequestFullHistoryOnOpen("qr", { creds: { me: { id: "" } } })).toBe(false);
+});
+
+test("the open socket carries syncFullHistory for a QR-paired credential", async () => {
+  // The predicate above is only half the fix; the other half is that the call
+  // site passes the auth method at all. This asserts what Baileys is actually
+  // constructed with, which is the thing the phone answers to.
+  const socket = { ev: { on() {} }, end() {} } as unknown as WASocket;
+  const openWith = async (
+    authMethod: "qr" | "pairing_code",
+    creds: Record<string, unknown>,
+  ): Promise<boolean> => {
+    const auth = await loadAuth(memoryStore());
+    let syncFullHistory: boolean | undefined;
+    await openSocketWith(
+      {
+        auth: { creds: { ...auth.creds, ...creds }, keys: auth.keys },
+        authMethod,
+        logger: pino({ level: "silent" }),
+        saveCreds: async () => {},
+      },
+      {
+        fetchLatestVersion: async () => ({ version: [2, 3000, 0], isLatest: true }),
+        makeSocket: ((config: { syncFullHistory?: boolean }) => {
+          syncFullHistory = config.syncFullHistory;
+          return socket;
+        }) as never,
+      },
+    );
+    return syncFullHistory === true;
+  };
+
+  expect(await openWith("qr", { registered: false, me: PAIRED_ME })).toBe(true);
+  expect(await openWith("qr", { me: undefined })).toBe(false);
+  expect(await openWith("pairing_code", { registered: false, me: PAIRED_ME })).toBe(false);
+  expect(await openWith("pairing_code", { registered: true, me: PAIRED_ME })).toBe(true);
 });
 
 test("openSocket end drains late credential writes and keeps the first rejection", async () => {
