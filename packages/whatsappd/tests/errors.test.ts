@@ -1,6 +1,13 @@
 import { expect, test } from "./_expect.ts";
 import { DisconnectReason } from "baileys";
-import { assertE164, classifyDisconnect, isRetryable, PairingError } from "../src/index.ts";
+import {
+  assertE164,
+  classifyDisconnect,
+  isRetryable,
+  MediaDownloadError,
+  PairingError,
+} from "../src/index.ts";
+import { classifyMediaDownload } from "../src/errors.ts";
 
 const boom = (statusCode: number) => ({ output: { statusCode } });
 
@@ -71,4 +78,48 @@ test("E.164 is validated at the edge (Lesson 4)", () => {
   expect(assertE164("+15551234567")).toBe("+15551234567");
   expect(() => assertE164("15551234567")).toThrow(PairingError);
   expect(() => assertE164("+0123")).toThrow(PairingError);
+});
+
+test("a media download failure classifies by status so a caller can retry correctly", () => {
+  // #205: 404-expired and 429-throttled reached callers as the same opaque
+  // failure. They demand opposite responses, so `retryable` is the point.
+  const of = (statusCode?: number) =>
+    classifyMediaDownload(statusCode === undefined ? new Error("boom") : boom(statusCode));
+
+  expect(of(404).reason).toBe("expired");
+  expect(of(410).reason).toBe("expired");
+  expect(of(404).retryable).toBe(false);
+
+  expect(of(429).reason).toBe("throttled");
+  expect(of(429).retryable).toBe(true);
+
+  expect(of(503).reason).toBe("unavailable");
+  expect(of(503).retryable).toBe(true);
+
+  expect(of(403).reason).toBe("unknown");
+  expect(of(403).statusCode).toBe(403);
+
+  // No status at all — a transport failure, or bytes that would not decrypt.
+  // Not retryable: retrying never fixes a bad key.
+  expect(of(undefined).reason).toBe("unknown");
+  expect(of(undefined).statusCode).toBe(undefined);
+  expect(of(undefined).retryable).toBe(false);
+
+  // Already ours: classifying twice must not relabel it.
+  const once = classifyMediaDownload(boom(429));
+  expect(classifyMediaDownload(once)).toBe(once);
+});
+
+test("a media download error never leaks the signed CDN url", () => {
+  const url = "https://mmg.whatsapp.net/d/f/SIGNED-TOKEN.enc";
+  const error = classifyMediaDownload({
+    message: `Failed to fetch stream from ${url}`,
+    output: { statusCode: 410, payload: { message: `Failed to fetch stream from ${url}` } },
+    data: { url },
+  });
+
+  expect(error instanceof MediaDownloadError).toBe(true);
+  expect(error.message).not.toContain(url);
+  expect(JSON.stringify(error)).not.toContain("mmg.whatsapp.net");
+  expect(error.statusCode).toBe(410);
 });

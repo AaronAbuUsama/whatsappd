@@ -8,14 +8,27 @@
  */
 import { downloadMediaMessage, type WAMessage, type WASocket } from "baileys";
 import type { Logger } from "pino";
+import { classifyMediaDownload } from "../errors.ts";
 
 /** A no-arg fetch-and-decrypt-now. */
 export type DownloadThunk = () => Promise<Buffer>;
 
 /** Given the live socket, produce a per-message download-thunk factory. */
 export function mediaDownloader(sock: WASocket, logger: Logger): (raw: WAMessage) => DownloadThunk {
-  return (raw) => () =>
-    downloadMediaMessage(raw, "buffer", {}, { logger, reuploadRequest: sock.updateMediaMessage });
+  return (raw) => async () => {
+    try {
+      return await downloadMediaMessage(
+        raw,
+        "buffer",
+        {},
+        { logger, reuploadRequest: sock.updateMediaMessage },
+      );
+    } catch (error) {
+      // The status only exists on the Boom, and the Boom is the one thing that
+      // must not leave this directory — it carries the signed CDN URL.
+      throw classifyMediaDownload(error);
+    }
+  };
 }
 
 /** Default when no socket is wired (pure tests): the handle exists but won't fetch. */

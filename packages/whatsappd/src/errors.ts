@@ -146,6 +146,66 @@ export class PairingError extends Error {
   }
 }
 
+/** Why a media download failed, in the terms a caller can act on. */
+export type MediaDownloadReason =
+  /** 404/410 — gone from the CDN, and the stale-`directPath` re-upload already ran. */
+  | "expired"
+  /** 429 — too many downloads; the same fetch will work after a wait. */
+  | "throttled"
+  /** 5xx — the far side is broken, not the request. */
+  | "unavailable"
+  /** No status to read: transport failure, or the bytes would not decrypt. */
+  | "unknown";
+
+/**
+ * A media download that failed, carrying enough to decide what to do next.
+ *
+ * @remarks
+ * The status is on the underlying error the whole time — Baileys' `getHttpStream`
+ * builds a `Boom` with `statusCode: response.status` — but reaching it required a
+ * consumer to know it had been handed a Boom, which is the coupling
+ * `src/baileys/` exists to prevent.
+ *
+ * The original is not attached, matching {@link PairingError}. Its message
+ * embeds the signed CDN URL and repeats it under `data.url`, and an error from
+ * Baileys is an object nobody here constructed — the reason `REDACTED_PATHS`
+ * exists. The status code and the reason are the parts that are both safe and
+ * useful.
+ */
+export class MediaDownloadError extends Error {
+  // fallow-ignore-next-line unused-class-member
+  readonly _tag = "MediaDownloadError";
+  readonly reason: MediaDownloadReason;
+  readonly statusCode?: number;
+  /**
+   * Whether the identical download could plausibly succeed later. `unknown` is
+   * false on purpose: unlike a transport fault, the common no-status media
+   * failure is a decryption error, and no amount of retrying fixes a bad key.
+   */
+  readonly retryable: boolean;
+
+  constructor(reason: MediaDownloadReason, statusCode?: number) {
+    super(`MediaDownloadError(${reason}${statusCode ? `, ${statusCode}` : ""})`);
+    this.name = "MediaDownloadError";
+    this.reason = reason;
+    this.statusCode = statusCode;
+    this.retryable = reason === "throttled" || reason === "unavailable";
+  }
+}
+
+/** Classify a failed media download without letting the raw error escape. */
+export function classifyMediaDownload(error: unknown): MediaDownloadError {
+  if (error instanceof MediaDownloadError) return error;
+  const boom = error as { output?: { statusCode?: number } } | undefined;
+  const statusCode = boom?.output?.statusCode;
+  if (statusCode === undefined) return new MediaDownloadError("unknown");
+  if (statusCode === 404 || statusCode === 410)
+    return new MediaDownloadError("expired", statusCode);
+  if (statusCode === 429) return new MediaDownloadError("throttled", statusCode);
+  if (statusCode >= 500) return new MediaDownloadError("unavailable", statusCode);
+  return new MediaDownloadError("unknown", statusCode);
+}
+
 /** Validate E.164 at the edge so bad input fails loudly before reaching Baileys. */
 export function assertE164(input: string): string {
   if (!/^\+[1-9]\d{7,14}$/.test(input)) throw new PairingError("invalid_phone");
