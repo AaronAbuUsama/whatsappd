@@ -34,6 +34,16 @@ source-record type. It is not a second public live-consumption API.
 
 - Slow handlers deliberately backpressure live ingestion; persistence and media
   capture dominate the negligible dispatcher cost.
+- The backpressure reaches the connection state machine, because subscriber
+  dispatch and the session's own transitions share one serialized chain. A
+  handler that never returns therefore holds the session at `authenticated` /
+  `draining` rather than merely delaying events, and does so silently: the
+  grace timer that would force `online`, and any diagnostic the session might
+  log, are queued behind the handler that is not finishing. This is the price
+  of the ordering guarantee and is accepted; it is documented in
+  `docs/runbooks/operations/session-faults.md` §3 rather than mitigated,
+  because a watchdog cannot fire on the blocked event loop that produces the
+  worst case.
 - `whatsappd/testing` supplies a deterministic session driver whose `emit()`
   resolves only after matching handlers complete, records outbound commands,
   and requires neither WhatsApp nor sleeps nor application-built session fakes.

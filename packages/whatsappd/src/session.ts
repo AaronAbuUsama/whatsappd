@@ -150,7 +150,27 @@ export interface SessionConfig {
 export interface WhatsAppSession {
   /** The current connection status. */
   readonly status: Status;
-  /** Register any subset of handlers and receive one cleanup function. */
+  /**
+   * Register any subset of handlers and receive one cleanup function.
+   *
+   * @remarks
+   * Handlers run on the session's own event pipeline, which also carries the
+   * session's connection transitions. That serialization is the ordering
+   * guarantee (ADR-0013): a handler is awaited before the next event, and
+   * before the transition that would move the session to `online`.
+   *
+   * The consequence is that a handler which never returns does not merely
+   * delay ingestion — it holds the connection state machine where it is. The
+   * session stays at `phase: "authenticated"`, `sync.step: "draining"`
+   * indefinitely, no timeout fires, and nothing is logged, because every one
+   * of those would have to run behind the handler that is not finishing. A
+   * synchronous infinite loop additionally blocks the event loop, so even a
+   * timer the library could arm on your behalf would never fire.
+   *
+   * If a session hangs before `online` with no fault and no log line, suspect
+   * a handler before suspecting the transport. See
+   * `docs/runbooks/operations/session-faults.md`.
+   */
   subscribe(
     handlers: WhatsAppSessionHandlers,
     options?: { readonly signal?: AbortSignal },
