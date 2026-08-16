@@ -1,6 +1,10 @@
 # WhatsApp history semantics — what a linked device can honestly promise
 
-Status: proven on the live account in issue #18 and reviewed in PR #51.
+Status: proven on the live account in issue #18 and reviewed in PR #51, then
+amended on 2026-08-16 (issue #199) after a second live run on the same profile
+answered requests the P4 run recorded as unanswered. Both runs are kept below;
+neither is deleted, and the conclusions the first one carried are now marked
+conditional.
 Protocol-level facts are cited against Baileys 7.0.0-rc14 sources. This file is
 the single prose home for the live observations. Historical run artifacts
 remain available in issue/PR discussion and git history; they are not current
@@ -70,8 +74,12 @@ flow through the same subscription pipeline as every other non-live message.
 `context.requestSessionId` on an on-demand batch is the only correlation
 signal. It carries the phone's `peerDataRequestSessionId` from the history
 notification; whether that echoes the submission `requestId` is the intended
-protocol design but — because no response has ever been observed live (see
-below) — remains an unverified assumption, not a proven contract.
+protocol design, and a third-party report on an Android primary says it does
+(Baileys#2452, below). whatsappd has still not receipted the echo itself: the
+P4 runs had no response to correlate, and the 2026-08-16 run that received
+nine on-demand batches did not record the field. It remains an unverified
+assumption here — now for want of a measurement rather than for want of a
+response.
 
 ## What is NOT promised (explicitly unsupported claims)
 
@@ -80,7 +88,9 @@ below) — remains an unverified assumption, not a proven contract.
 - **No exhaustion signal.** For on-demand syncs Baileys forces
   `isLatest: undefined` (`process-message.js`, ON_DEMAND branch), so the one
   candidate exhaustion flag is structurally absent. An empty result cannot
-  distinguish "no older messages exist" from "the phone did not answer".
+  distinguish "no older messages exist" from "the phone did not answer". The
+  2026-08-16 run walked into exactly that: eight consecutive requests returned
+  nothing while the chat demonstrably still held older history.
 - **No delivered-count contract.** The number of returned messages relates to
   `count` only loosely; chunking is the phone's choice.
 
@@ -89,6 +99,11 @@ it may not say "all history loaded", "no more WhatsApp messages", or report a
 delivered count tied to the request (ADR-0010 consequence).
 
 ## The observed reality (P4, live linked phone, 2026-07-30)
+
+This run is preserved exactly as observed and reported — it was both. It is no
+longer the whole picture: a run on the same profile and the same Baileys
+answered on 2026-08-16, and that section follows this one. Read both before
+concluding anything about whether the phone answers.
 
 The central live finding: **the phone acknowledges receipt of every on-demand
 request, and no answer was ever observed.** The full chain was observed on a
@@ -123,8 +138,10 @@ with an Android primary** — including third-party confirmation that
 `fetchMessageHistory`, and that responses arrive chunked. That report also
 notes official WhatsApp Web itself caps deep history ("check your phone to
 see older messages"), so even a working on-demand path does not promise
-unbounded backfill. The iOS-vs-Android split is the leading hypothesis for
-the observed silence (tracked with an experiment matrix in issue #50).
+unbounded backfill. The iOS-vs-Android split was the leading hypothesis for the
+observed silence. It no longer accounts for it on its own: the 2026-08-16 run
+answered on the same iPhone primary, so platform cannot be what separates
+answer from silence. Issue #50 carries the re-planned matrix.
 
 Because the failing decision runs inside the closed-source phone app after
 confirmed delivery, no client-side change is known to unblock it. Candidate
@@ -158,3 +175,70 @@ delivery acks and the repeated-request-on-one-anchor row are run 2
 delivery evidence is the operator-note timeline in the historical receipt plus
 the transport-log excerpt on PR #51. Historical receipts remain in git history;
 current and future runs salt identities per run at capture time.
+
+## The contradicting run (same profile, same Baileys, 2026-08-16)
+
+On 2026-08-16 a downstream spike ran against the `.proof-private/ios` profile —
+the same account behind the P4 runs, the same Baileys 7.0.0-rc14,
+`creds.platform === "iphone"` — and the phone answered.
+
+| Signal                                    | P4 (2026-07-30) | This run (2026-08-16)        |
+| ----------------------------------------- | --------------- | ---------------------------- |
+| Requests submitted                        | 7               | 17                           |
+| Answered                                  | **0**           | **9**                        |
+| Messages delivered as `on_demand` batches | 0               | **419**, in one chat         |
+| Depth reached                             | —               | ~5 weeks back, then 8 silent |
+| Wall clock                                | —               | 251s                         |
+| Baileys                                   | 7.0.0-rc14      | 7.0.0-rc14 (identical)       |
+| Primary phone                             | iPhone          | iPhone (the same account)    |
+
+So neither the library version nor the account is the variable.
+
+### What differed — candidates, not causes
+
+One run, one chat, three variables that moved together. This isolates nothing;
+it only shows the silence is not unconditional on iOS. The untested variables,
+stated plainly:
+
+- **Chat type.** The answered chat was a **group** (`…@g.us`). P4 varied only
+  personal DM vs. self-chat — a group anchor appears never to have been tried.
+- **Anchor depth.** P4 anchored minutes old. This run anchored on the oldest
+  message held and paged backwards over weeks.
+- **Credential age.** The device link was created the same day, the previous
+  credential having been revoked server-side. The P4 runs used an older link.
+
+Which of the three matters is the open question, and issue #50 is re-planned
+around it rather than around the falsified platform premise. The profile
+resumes without a scan, so a controlled matrix is cheap.
+
+### What this changes, and what it does not
+
+| Claim                                          | Before                          | After                                                                        |
+| ---------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------- |
+| The phone never answers on an iPhone primary   | settled from 0 of 7             | **false as an unconditional claim** — 9 of 17 answered on the same profile   |
+| iOS-vs-Android is the leading hypothesis       | leading                         | **necessary at best, not sufficient** — silence and answer share a platform  |
+| `peerDataRequestSessionId` id-echo             | unverified: no response existed | still unverified: responses exist now, but this run did not record the field |
+| No completion signal                           | settled                         | unchanged — nine answers arrived, none marking a request finished            |
+| No exhaustion signal                           | settled                         | **unchanged, and now evidenced rather than assumed** — see below             |
+| Delivered counts, boundary inclusivity, chunks | unobservable without a response | observable in principle now, still unmeasured                                |
+
+**The empty-result seam is the strongest result of the run.** Requests 10–17
+returned nothing while the chat demonstrably still held older history in the
+durable mirror, and the anchor stopped advancing. A consumer watching the seam
+sees one identical picture across three genuinely different worlds: the phone
+exhausted what it will serve, the phone declined to answer, or the phone
+answered with an empty payload that `toMessagingHistoryEvents` correctly emits
+no batch for. Nothing in the protocol separates them. Every "no completion
+signal" and "no exhaustion signal" claim above therefore stands, and now rests
+on an observation instead of on an absence of observations.
+
+Depth is bounded in any case: 419 messages reached about five weeks into a chat
+whose stored history runs to 2022 — consistent with the #2452 note that
+official WhatsApp Web also caps deep history behind "check your phone".
+
+Provenance, stated so it is not mistaken for a P4 rung: this was a downstream
+spike that copied the profile out and left the baseline byte-identical. It
+carries no sanitized receipt at a git head in this repository; the evidence
+table lives on issue #50 (comment, 2026-08-16) and issue #199. It is strong
+enough to falsify a claim built on absence, and not the same currency as the
+receipted P4 chain above.
