@@ -13,16 +13,21 @@ import { classifyMediaDownload } from "../errors.ts";
 /** A no-arg fetch-and-decrypt-now. */
 export type DownloadThunk = () => Promise<Buffer>;
 
-/** Given the live socket, produce a per-message download-thunk factory. */
-export function mediaDownloader(sock: WASocket, logger: Logger): (raw: WAMessage) => DownloadThunk {
+/**
+ * Given the live socket, produce a per-message download-thunk factory.
+ *
+ * `fetch` is the replaceable protocol constructor, same seam as
+ * `openSocketWith` — the conversion below is only worth having if a test can
+ * make the real thing fail.
+ */
+export function mediaDownloader(
+  sock: WASocket,
+  logger: Logger,
+  fetch: typeof downloadMediaMessage = downloadMediaMessage,
+): (raw: WAMessage) => DownloadThunk {
   return (raw) => async () => {
     try {
-      return await downloadMediaMessage(
-        raw,
-        "buffer",
-        {},
-        { logger, reuploadRequest: sock.updateMediaMessage },
-      );
+      return await fetch(raw, "buffer", {}, { logger, reuploadRequest: sock.updateMediaMessage });
     } catch (error) {
       // The status only exists on the Boom, and the Boom is the one thing that
       // must not leave this directory — it carries the signed CDN URL.

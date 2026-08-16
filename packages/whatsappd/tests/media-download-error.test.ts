@@ -3,40 +3,27 @@
  * half: that the download thunk actually routes through it, so no Baileys `Boom`
  * — and therefore no signed CDN url — reaches a consumer.
  *
- * `mock.module` is the only seam available. `downloadMediaMessage` is imported
- * by name inside `src/baileys/download.ts`, so the specifier has to be replaced
- * before that module is first loaded — hence the dynamic import below.
+ * The failing fetch is injected rather than module-mocked. `mock.module` works
+ * on Node 24 and takes the whole file down on Node 22, and an experimental API
+ * is a poor thing to owe a version matrix for when the module can just accept a
+ * replaceable protocol constructor, as `openSocketWith` already does.
  */
-import { mock } from "node:test";
+import type { downloadMediaMessage, WAMessage, WASocket } from "baileys";
 import pino from "pino";
-import type { WAMessage, WASocket } from "baileys";
 import { expect, test } from "./_expect.ts";
-
-let nextFailure: unknown;
-const baileys = await import("baileys");
-
-mock.module("baileys", {
-  namedExports: {
-    ...baileys,
-    downloadMediaMessage: async (): Promise<Buffer> => {
-      throw nextFailure;
-    },
-  },
-});
-
-// Both imports must follow the mock: anything that pulls in `src/baileys/`
-// eagerly would bind the real `downloadMediaMessage` first and win the cache.
-const { mediaDownloader } = await import("../src/baileys/download.ts");
-const { MediaDownloadError } = await import("../src/errors.ts");
-type MediaDownloadError = InstanceType<typeof MediaDownloadError>;
+import { MediaDownloadError } from "../src/index.ts";
+import { mediaDownloader } from "../src/baileys/download.ts";
 
 const CDN_URL = "https://mmg.whatsapp.net/d/f/SIGNED-TOKEN.enc";
 const socket = { updateMediaMessage: async () => ({}) } as unknown as WASocket;
 const raw = {} as WAMessage;
+const logger = pino({ level: "silent" });
 
 const downloadFailure = async (failure: unknown): Promise<MediaDownloadError> => {
-  nextFailure = failure;
-  const download = mediaDownloader(socket, pino({ level: "silent" }))(raw);
+  const fetch = (() => {
+    throw failure;
+  }) as unknown as typeof downloadMediaMessage;
+  const download = mediaDownloader(socket, logger, fetch)(raw);
   try {
     await download();
   } catch (error) {
@@ -57,6 +44,7 @@ test("a failed download rejects with a classified error, not the upstream Boom",
   expect(error.statusCode).toBe(429);
   expect(error.retryable).toBe(true);
   expect(error.message).not.toContain("mmg.whatsapp.net");
+  expect(JSON.stringify(error)).not.toContain("mmg.whatsapp.net");
 });
 
 test("expired media is distinguishable from a throttle at the download seam", async () => {
@@ -71,4 +59,11 @@ test("a decryption failure carries no status and is not retryable", async () => 
   expect(undecryptable.statusCode).toBe(undefined);
   expect(undecryptable.retryable).toBe(false);
   expect(undecryptable.message).not.toContain("Invalid media key");
+});
+
+test("a successful download is handed back untouched", async () => {
+  const bytes = Buffer.from("media");
+  const fetch = (async () => bytes) as unknown as typeof downloadMediaMessage;
+  const download = mediaDownloader(socket, logger, fetch)(raw);
+  expect(await download()).toBe(bytes);
 });
