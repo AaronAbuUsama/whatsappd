@@ -18,14 +18,26 @@ fragments reaching further back. A consumer watching thousands of messages
 arrive at pairing has no protocol signal that this is everything — because
 it is not.
 
-whatsappd deliberately pairs light and requests full history only once pairing
-has completed (`shouldRequestFullHistoryOnOpen`, `packages/whatsappd/src/baileys/socket.ts`).
-The two pairing methods prove completion with different fields — pairing-code
-by `creds.registered`, QR by `creds.me` — because upstream writes `registered`
-only in the pairing-code companion-finish handler. Until 2026-08-16 both were
-gated on `registered`, so **every QR-paired account silently received the short
-sync instead** (#203). Any history depth measured before that fix was measured
-with `syncFullHistory` off, whatever the run intended.
+The request for a full history sync can be made **once, at Pairing, and never
+again**. It rides in `companion.requireFullSync` on the registration node
+(Baileys `validate-connection.js`), and Baileys sends that node only while
+`creds.me` is absent (`socket.js`); every later connect is a login node, which
+has no such field. `syncFullHistory` also decides a second thing on every
+connect — `webInfo.webSubPlatform` upgrades from `WEB_BROWSER` to `DARWIN` only
+when it is true _and_ the browser is a desktop one, which is why whatsappd pairs
+as `Browsers.macOS("Desktop")`. Baileys' documentation pairs the two settings
+for the same reason.
+
+Until 2026-08-16 whatsappd gated this on `creds.registered`, a field upstream
+writes only in the pairing-code companion-finish handler. At the Pairing connect
+that field is always absent, so the request was never sent, by either method,
+and the companion announced a macOS Desktop identity in three fields while
+asking like a browser in the two that gate history (#203). It is now on by
+default, and `syncFullHistory: false` on the session config is how a caller
+declines — a permanent choice for that credential.
+
+**Every history depth recorded in this document was measured with the request
+off.** That includes the issue #9 figures above and both P4 runs below.
 
 A returning device whose `accountSyncCounter` proves initial sync already
 completed receives no history redelivery at all — only messages queued while

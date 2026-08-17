@@ -269,6 +269,14 @@ export interface OpenSocketOpts {
   /** Persist creds on every `creds.update`. */
   saveCreds: () => Promise<void>;
   logger: Logger;
+  /**
+   * Ask WhatsApp for a full history sync. Only the Pairing connect can carry
+   * the request; later logins use it solely for the desktop sub-platform.
+   *
+   * @defaultValue `true` — Baileys' own default, and the pairing WhatsApp's
+   * desktop client performs.
+   */
+  syncFullHistory?: boolean;
 }
 
 export interface OpenSocketDependencies {
@@ -283,43 +291,6 @@ export function browserForOpen(
   return authMethod === "pairing_code" && auth.creds.registered !== true
     ? PAIRING_BROWSER
     : Browsers.macOS("Desktop");
-}
-
-/**
- * Whether this socket should ask WhatsApp for a full history sync on open.
- *
- * The question is "is pairing finished?", and the two methods prove it with
- * different fields — asking one field for both is the defect this replaced.
- *
- * `creds.registered` is written in exactly one place upstream, the
- * `link_code_companion_reg` / `companion_finish` handler in Baileys'
- * `messages-recv.js`, which belongs to pairing-code pairing. QR pairing never
- * reaches it, and `initAuthCreds` starts the field at `false`, so gating both
- * methods on it left every QR-paired account permanently on the short sync —
- * silently, and against Baileys' own `syncFullHistory: true` default.
- *
- * Pairing-code cannot switch to `creds.me` in exchange. `requestPairingCode`
- * writes `me` from the typed phone number before the user has entered the
- * code, so `me` is already present during the in-between state where asking
- * for full history leaves the phone stuck at "logging in" and the socket in a
- * reconnect/backoff loop. Only `registered` proves that state is over.
- *
- * QR pairing has no equivalent in-between state: `creds.me` is written from
- * the server's `pair-success` stanza and never before it, so its presence is
- * the completion signal.
- */
-export function shouldRequestFullHistoryOnOpen(
-  authMethod: AuthStrategy["method"],
-  auth: {
-    readonly creds: {
-      readonly registered?: boolean;
-      readonly me?: { readonly id?: string } | null;
-    };
-  },
-): boolean {
-  return authMethod === "pairing_code"
-    ? auth.creds.registered === true
-    : Boolean(auth.creds.me?.id);
 }
 
 type PromiseResolver<T> = {
@@ -443,7 +414,7 @@ export async function openSocketWith(
   const { version } = await dependencies.fetchLatestVersion();
   const queue = new EventQueue();
   let intentional = false;
-  const requestFullHistory = shouldRequestFullHistoryOnOpen(authMethod, auth);
+  const requestFullHistory = opts.syncFullHistory ?? true;
   const browser = browserForOpen(authMethod, auth);
   logger.info(
     {
@@ -460,10 +431,15 @@ export async function openSocketWith(
     version,
     logger,
     browser,
-    // Withheld only while pairing is still in flight — see
-    // shouldRequestFullHistoryOnOpen for why each method proves that
-    // differently. Asking during a pairing-code companion registration leaves
-    // the phone stuck at "logging in" and the socket in a reconnect/backoff loop.
+    // Two fields downstream depend on this, and only one is about the request.
+    // `companion.requireFullSync` ships in the registration node ONLY — Baileys
+    // picks that node by `!creds.me` (socket.js), so a credential can ask for
+    // full history exactly once, at Pairing, and never again on a login.
+    // `webInfo.webSubPlatform` is the other: it upgrades WEB_BROWSER → DARWIN on
+    // every connect, but only when this is true AND the browser is a desktop one.
+    // Gating this on credential state therefore did not defer the request, it
+    // deleted it, and left the companion claiming to be a macOS Desktop client
+    // in three fields while asking like a browser in the two that gate history.
     syncFullHistory: requestFullHistory,
     shouldSyncHistoryMessage: () => true,
     auth: {

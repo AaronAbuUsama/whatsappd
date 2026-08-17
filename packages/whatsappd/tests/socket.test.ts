@@ -11,7 +11,7 @@ import { expect, test } from "./_expect.ts";
 import {
   browserForOpen,
   openSocketWith,
-  shouldRequestFullHistoryOnOpen,
+  PAIRING_BROWSER,
   toMessagingHistoryEvents,
   toMessagingHistoryStatusEvents,
   toMessagesUpsertEvents,
@@ -34,70 +34,62 @@ test("only unregistered pairing-code sockets use WhatsApp's canonical web compan
 
 const PAIRED_ME = { id: "15551234567:1@s.whatsapp.net", name: "~" };
 
-test("fresh companion registration defers full-history until registration completes", () => {
-  // Pairing-code only: `creds.me` is written from the typed phone number before
-  // the user enters the code, so it cannot stand for "pairing finished" here.
-  // Asking mid-registration is what leaves the phone stuck at "logging in".
-  expect(shouldRequestFullHistoryOnOpen("pairing_code", { creds: {} })).toBe(false);
-  expect(shouldRequestFullHistoryOnOpen("pairing_code", { creds: { me: PAIRED_ME } })).toBe(false);
+const openWith = async (
+  authMethod: "qr" | "pairing_code",
+  creds: Record<string, unknown>,
+  syncFullHistory?: boolean,
+): Promise<{ syncFullHistory?: boolean; browser?: string[] }> => {
+  const auth = await loadAuth(memoryStore());
+  let seen: { syncFullHistory?: boolean; browser?: string[] } = {};
+  await openSocketWith(
+    {
+      auth: { creds: { ...auth.creds, ...creds }, keys: auth.keys },
+      authMethod,
+      logger: pino({ level: "silent" }),
+      saveCreds: async () => {},
+      ...(syncFullHistory !== undefined && { syncFullHistory }),
+    },
+    {
+      fetchLatestVersion: async () => ({ version: [2, 3000, 0], isLatest: true }),
+      makeSocket: ((config: { syncFullHistory?: boolean; browser?: string[] }) => {
+        seen = { syncFullHistory: config.syncFullHistory, browser: config.browser };
+        return { ev: { on() {} }, end() {} } as unknown as WASocket;
+      }) as never,
+    },
+  );
+  return seen;
+};
+
+test("full history is asked for by default, on the Pairing connect where it can be", async () => {
+  // #203. `companion.requireFullSync` ships in the registration node only, and
+  // Baileys picks that node by `!creds.me` — so the unpaired connect below is
+  // the single moment in a credential's life that can carry the request.
+  // Gating it on `creds.registered` (never set by QR) or on `creds.me` (set only
+  // once the node is no longer sent) both amount to never asking at all.
+  expect((await openWith("qr", {})).syncFullHistory).toBe(true);
+  expect((await openWith("pairing_code", {})).syncFullHistory).toBe(true);
+
+  // Later logins keep it true: it is what upgrades webSubPlatform to DARWIN,
+  // which is the half of the desktop identity that depends on this flag.
+  expect((await openWith("qr", { me: PAIRED_ME })).syncFullHistory).toBe(true);
   expect(
-    shouldRequestFullHistoryOnOpen("pairing_code", { creds: { registered: false, me: PAIRED_ME } }),
-  ).toBe(false);
-  expect(
-    shouldRequestFullHistoryOnOpen("pairing_code", { creds: { registered: true, me: PAIRED_ME } }),
+    (await openWith("pairing_code", { registered: true, me: PAIRED_ME })).syncFullHistory,
   ).toBe(true);
 });
 
-test("a QR-paired credential requests full history even though `registered` stays false", () => {
-  // #203: Baileys sets `creds.registered` only in the pairing-code companion
-  // finish handler, so a QR credential holds `false` for its whole life. Gating
-  // QR on it capped every QR-paired account at the short sync, silently, while
-  // Baileys' own default for `syncFullHistory` is `true`. For QR, `creds.me` is
-  // written from the server's pair-success stanza and never before it.
-  expect(
-    shouldRequestFullHistoryOnOpen("qr", { creds: { registered: false, me: PAIRED_ME } }),
-  ).toBe(true);
-  expect(shouldRequestFullHistoryOnOpen("qr", { creds: { me: PAIRED_ME } })).toBe(true);
-
-  // Not yet paired: no identity, so nothing to sync a history for.
-  expect(shouldRequestFullHistoryOnOpen("qr", { creds: {} })).toBe(false);
-  expect(shouldRequestFullHistoryOnOpen("qr", { creds: { me: null } })).toBe(false);
-  expect(shouldRequestFullHistoryOnOpen("qr", { creds: { me: { id: "" } } })).toBe(false);
+test("a caller can link light, and the choice reaches the socket", async () => {
+  expect((await openWith("qr", {}, false)).syncFullHistory).toBe(false);
+  expect((await openWith("qr", {}, true)).syncFullHistory).toBe(true);
 });
 
-test("the open socket carries syncFullHistory for a QR-paired credential", async () => {
-  // The predicate above is only half the fix; the other half is that the call
-  // site passes the auth method at all. This asserts what Baileys is actually
-  // constructed with, which is the thing the phone answers to.
-  const socket = { ev: { on() {} }, end() {} } as unknown as WASocket;
-  const openWith = async (
-    authMethod: "qr" | "pairing_code",
-    creds: Record<string, unknown>,
-  ): Promise<boolean> => {
-    const auth = await loadAuth(memoryStore());
-    let syncFullHistory: boolean | undefined;
-    await openSocketWith(
-      {
-        auth: { creds: { ...auth.creds, ...creds }, keys: auth.keys },
-        authMethod,
-        logger: pino({ level: "silent" }),
-        saveCreds: async () => {},
-      },
-      {
-        fetchLatestVersion: async () => ({ version: [2, 3000, 0], isLatest: true }),
-        makeSocket: ((config: { syncFullHistory?: boolean }) => {
-          syncFullHistory = config.syncFullHistory;
-          return socket;
-        }) as never,
-      },
-    );
-    return syncFullHistory === true;
-  };
-
-  expect(await openWith("qr", { registered: false, me: PAIRED_ME })).toBe(true);
-  expect(await openWith("qr", { me: undefined })).toBe(false);
-  expect(await openWith("pairing_code", { registered: false, me: PAIRED_ME })).toBe(false);
-  expect(await openWith("pairing_code", { registered: true, me: PAIRED_ME })).toBe(true);
+test("the desktop companion identity is unchanged by the flag", async () => {
+  // `getWebInfo` upgrades to DARWIN only when syncFullHistory is true AND the
+  // browser is ["Mac OS", "Desktop", ...]. The browser half must keep matching,
+  // or the flag silently buys nothing.
+  expect((await openWith("qr", {}, true)).browser).toEqual(Browsers.macOS("Desktop"));
+  expect((await openWith("qr", {}, false)).browser).toEqual(Browsers.macOS("Desktop"));
+  // Pairing-code registration still needs the canonical Chrome companion id.
+  expect((await openWith("pairing_code", {})).browser).toEqual(PAIRING_BROWSER);
 });
 
 test("openSocket end drains late credential writes and keeps the first rejection", async () => {
