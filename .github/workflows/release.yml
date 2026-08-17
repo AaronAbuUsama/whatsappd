@@ -71,7 +71,32 @@ jobs:
             sleep 10
           done
           version="$(node -p "require('./packages/whatsappd/package.json').version")"
+          # NOTE: `view` is listed in knip.json's `ignoreBinaries`. knip reads
+          # `pnpm <word>` in a workflow as invoking a binary called `<word>`, and
+          # `view` is a pnpm builtin (the alias of `pnpm info`) that no dependency
+          # could ever satisfy. Delete that entry if these calls ever go away.
+          #
+          # `pnpm view`, not `npm view`. devEngines.packageManager names pnpm, so
+          # npm refuses to run at all from this directory - including a read-only
+          # `view` - and 0.4.0-alpha.3 published correctly and then failed its own
+          # verification on exactly that. pnpm satisfies the constraint instead of
+          # working around it, and needs no `cd` out of the repository.
+          #
+          # The publish step above still uses `npm publish`, because pnpm has no
+          # `--provenance` flag and provenance via OIDC is why this repository
+          # stores no npm token. Its `cd "$RUNNER_TEMP"` is that exception, not a
+          # pattern to copy.
+          #
+          # The tag is derived rather than hardcoded to `alpha`: a stable release
+          # publishes to `latest`, and asserting `dist-tags.alpha` would have
+          # failed the first non-prerelease release for the same shape of reason.
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            tag="${prerelease%%.*}"
+          else
+            tag="latest"
+          fi
           for package in whatsappd @whatsappd/react; do
-            test "$(npm view "$package" dist-tags.alpha)" = "$version"
-            test -n "$(npm view "$package@$version" dist.attestations.url)"
+            test "$(pnpm view "$package" "dist-tags.$tag")" = "$version"
+            test -n "$(pnpm view "$package@$version" dist.attestations.url)"
           done

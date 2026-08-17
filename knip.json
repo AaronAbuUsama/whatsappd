@@ -29,6 +29,8 @@
 
   "ignore": ["examples/web/src/components/ui/**"],
 
+  "ignoreBinaries": ["view"],
+
   "ignoreDependencies": [
     "@base-ui/react",
     "@typescript/native-preview",
