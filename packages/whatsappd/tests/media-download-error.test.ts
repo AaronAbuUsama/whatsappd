@@ -111,3 +111,35 @@ test("the classifier reads a real Baileys failure, not one shaped to fit it", as
     server.close();
   }
 });
+
+test("expired media is NOT silently recovered — the upstream reupload gate cannot fire", async () => {
+  // `downloadMediaMessage` retries through `ctx.reuploadRequest` only when
+  // `typeof error?.status === "number"` and the status is 404 or 410. But the
+  // error it is inspecting comes from `getHttpStream`, which throws a Boom —
+  // status at `output.statusCode`, and no `status` property at all. The gate is
+  // therefore unreachable for a CDN 404/410, and the "transparently re-uploads
+  // expired media" recovery never runs in 7.0.0-rc14.
+  //
+  // Pinned here because two doc comments in this repo asserted the opposite, and
+  // because a consumer deciding what to do about `expired` needs to know the
+  // recovery did not already happen. If upstream fixes the gate, this test fails
+  // and tells us to revisit that wording.
+  const server = createServer((_request, response) => {
+    response.writeHead(410);
+    response.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+
+  try {
+    await getHttpStream(`http://127.0.0.1:${port}/gone`);
+    throw new Error("expected a 410 to reject");
+  } catch (error) {
+    const boom = error as { status?: number; output?: { statusCode?: number } };
+    expect(boom.output?.statusCode).toBe(410);
+    expect(typeof boom.status).toBe("undefined"); // ← what makes the gate unreachable
+  } finally {
+    server.close();
+  }
+});

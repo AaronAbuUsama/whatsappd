@@ -148,7 +148,14 @@ export class PairingError extends Error {
 
 /** Why a media download failed, in the terms a caller can act on. */
 export type MediaDownloadReason =
-  /** 404/410 — gone from the CDN, and the stale-`directPath` re-upload already ran. */
+  /**
+   * 404/410 — the CDN no longer serves it.
+   *
+   * Note what this does **not** mean: that recovery was attempted. Baileys gates
+   * its `reuploadRequest` retry on `typeof error.status === "number"`, and the
+   * error it inspects is a Boom carrying `output.statusCode` instead, so in
+   * 7.0.0-rc14 that retry is unreachable for a 404/410 and never runs.
+   */
   | "expired"
   /** 429 — too many downloads; the same fetch will work after a wait. */
   | "throttled"

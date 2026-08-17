@@ -1,10 +1,18 @@
 /**
  * Media download-handle factory. Bytes never sit in the event payload — each
  * inbound media message carries a `download()` thunk that fetches and decrypts
- * on demand. The thunk closes over the live socket so expired media is
- * transparently re-uploaded via `updateMediaMessage` (the only way to recover a
- * stale `directPath`). This is the one impure piece; the inbound mapper stays
- * pure and just receives the factory.
+ * on demand. The thunk closes over the live socket to hand Baileys a
+ * `reuploadRequest`, which is the only way to recover a stale `directPath`.
+ *
+ * That recovery does not currently happen. Baileys gates the retry on
+ * `typeof error.status === "number"`, while the failure it inspects is a Boom
+ * carrying `output.statusCode`, so the gate is unreachable for the 404/410 it
+ * exists to catch. Expired media therefore surfaces as a `MediaDownloadError`
+ * with reason `expired` rather than being re-uploaded — measured, and pinned in
+ * `tests/media-download-error.test.ts`.
+ *
+ * This is the one impure piece; the inbound mapper stays pure and just receives
+ * the factory.
  */
 import { downloadMediaMessage, type WAMessage, type WASocket } from "baileys";
 import type { Logger } from "pino";
