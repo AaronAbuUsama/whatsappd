@@ -71,6 +71,11 @@ jobs:
             sleep 10
           done
           version="$(node -p "require('./packages/whatsappd/package.json').version")"
+          # NOTE: `view` is listed in knip.json's `ignoreBinaries`. knip reads
+          # `pnpm <word>` in a workflow as invoking a binary called `<word>`, and
+          # `view` is a pnpm builtin (the alias of `pnpm info`) that no dependency
+          # could ever satisfy. Delete that entry if these calls ever go away.
+          #
           # `pnpm view`, not `npm view`. devEngines.packageManager names pnpm, so
           # npm refuses to run at all from this directory - including a read-only
           # `view` - and 0.4.0-alpha.3 published correctly and then failed its own
