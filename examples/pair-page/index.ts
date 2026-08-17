@@ -88,6 +88,8 @@ interface View {
   tone: "working" | "ok" | "stop";
   qr: { d: string; n: number; expiresAt: number; lifetime: number } | null;
   kinds: Record<ConversationSyncSource, number>;
+  /** When the last history batch arrived. The page turns this into "quiet for N". */
+  lastBatchAt: number;
   chats: number;
   chatsTotal: number;
   messages: number;
@@ -102,6 +104,7 @@ let state: View = {
   tone: "working",
   qr: null,
   kinds: { ...kinds },
+  lastBatchAt: 0,
   chats: 0,
   chatsTotal: 0,
   messages: 0,
@@ -255,10 +258,13 @@ function onStatus(status: Status): void {
       return push({
         view: "sheet",
         title: "Syncing your account",
-        label: "Linked — still receiving",
+        label: "Linked — history still arriving",
         icon: "done",
         tone: "ok",
-        detail: "You can leave this open.",
+        // Deliberately not "done". The RECENT phase completing is what puts the
+        // session online; FULL batches keep coming afterwards and nothing marks
+        // the last of them. The quiet line below reports the only fact there is.
+        detail: "Leave this open — later batches still arrive after this point.",
         qr: null,
       });
 
@@ -320,6 +326,7 @@ function live(): void {
       for (const m of batch.messages) if (!oldest || m.timestamp < oldest) oldest = m.timestamp;
       push({
         kinds: { ...kinds },
+        lastBatchAt: Date.now(),
         chats: seenChats.size,
         chatsTotal: Math.max(state.chatsTotal, seenChats.size),
         messages: state.messages + batch.messages.length,
@@ -406,6 +413,7 @@ async function demo(): Promise<void> {
     kinds.initial_bootstrap = p > 0 ? 1 : 0;
     push({
       kinds: { ...kinds },
+      lastBatchAt: Date.now(),
       chats: Math.round(913 * (p / 100)),
       chatsTotal: 913,
       messages: Math.round(2739 * (p / 100)),
@@ -424,6 +432,8 @@ async function demo(): Promise<void> {
     await wait(320);
   }
   onStatus({ phase: "online" });
-  await wait(6000);
+  // Hold here: the quiet line only means anything once nothing is arriving, so
+  // a demo that races past it never shows the state it exists to explain.
+  await wait(40_000);
   onStatus({ phase: "logged_out", reason: "logged_out_remote" });
 }

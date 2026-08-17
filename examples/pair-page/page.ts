@@ -83,18 +83,16 @@ body[data-view="qr"] .life{opacity:1}
 .life i{display:block;height:100%;background:var(--safelight);
   transform-origin:left center;transition:transform .95s linear}
 
-/* Contact sheet: one frame per slice of the account, lit as chats arrive. */
-.contact{position:absolute;inset:0;display:grid;grid-template-columns:repeat(12,1fr);
-  gap:2px;padding:.6rem;opacity:0;transition:opacity .6s ease}
-.contact i{background:var(--cell);border-radius:1px;transform:scale(.72);
-  transition:background .5s ease,transform .5s cubic-bezier(.16,1,.3,1)}
-.contact i.lit{background:var(--cell-lit);transform:scale(1)}
-body[data-view="sheet"] .contact{opacity:1}
-body[data-view="sheet"] svg.qr{opacity:0;transition:opacity .5s ease}
+/* The print holds the QR and nothing else, so once the code is scanned it goes
+   away entirely rather than standing there empty. There is no honest picture of
+   "how far through" a history sync is — WhatsApp never sends a total, so any
+   fill level is invented. An earlier version lit a grid from chats/chatsTotal
+   where chatsTotal was assigned from the same counter, so it read 100% on the
+   first batch and never moved again. A confident wrong gauge is worse than no
+   gauge, and an empty slab where a picture was is worse than either: it reads as
+   a broken image rather than an absent one. The counts below carry the state. */
 .stage{display:grid;gap:.75rem;justify-items:center}
-/* Nothing is on the paper in a terminal state, and an empty grey slab is worse
-   than no slab: it reads as a broken image rather than an absent one. */
-body[data-tone="stop"] .stage{display:none}
+body[data-tone="stop"] .stage,body[data-view="sheet"] .stage{display:none}
 
 /* Status */
 .status{display:flex;align-items:center;gap:.6rem;font-size:.9375rem;min-height:1.5rem}
@@ -160,10 +158,6 @@ function counts(s){
     const el=document.getElementById("k-"+kind); if(!el) continue;
     el.querySelector("i").textContent=n; el.classList.toggle("has",n>0);
   }
-  // One frame per slice of the account; they light as chats arrive.
-  const cells=document.querySelectorAll(".contact i");
-  const lit=s.chats>0?Math.min(cells.length,Math.ceil(s.chats/Math.max(1,s.chatsTotal||s.chats)*cells.length)):0;
-  cells.forEach((c,i)=>c.classList.toggle("lit",i<lit));
 }
 
 function render(s){
@@ -180,7 +174,29 @@ function render(s){
     $(".sheet").classList.remove("developing");
     clock(s.qr.expiresAt,s.qr.lifetime); }
   if(s.view==="sheet") clearInterval(tick);
+  if(s.lastBatchAt!==quietSince) quiet(s.lastBatchAt);
   counts(s);
+}
+
+// A full sync has no completion signal. A progress of 100 closes the RECENT
+// phase and is what puts the session online, but FULL batches keep arriving
+// after that with nothing marking the last one. isLatest is not it either:
+// upstream computes it from processedHistoryMessages being empty, so it is
+// true on the FIRST payload, not the last.
+//
+// So the page reports the one thing actually observed — how long since anything
+// arrived — and says plainly that quiet is not the same as finished.
+let quietSince=0,quietTick=null;
+function quiet(since){
+  quietSince=since; clearInterval(quietTick);
+  const el=$("#quiet"); if(!el) return;
+  const paint=()=>{
+    if(!quietSince||document.body.dataset.view!=="sheet"){el.textContent="";return}
+    const s=Math.floor((Date.now()-quietSince)/1000);
+    el.textContent=s<15?"":"No new history for "+(s<60?s+"s":Math.floor(s/60)+"m "+(s%60)+"s")+
+      ". A full sync has no completion signal, so this is quiet — not confirmed finished.";
+  };
+  paint(); quietTick=setInterval(paint,1000);
 }
 
 const es=new EventSource("/events");
@@ -195,8 +211,9 @@ THESIS: a first sync is a print developing — it cannot be rushed, so show the 
 arriving. Refuses the category default: a white card, a QR, and a spinner.
 OWN-WORLD: darkroom under safelight. Near-black ground, one amber light source, oxblood
 rebate, true paper for the print. Tabular timer digits. Lights-on variant for light mode.
-STORY: the code is a negative on the lightbox; scanning puts it in the tray; the account
-develops in as a contact sheet, one frame per slice, until the image is whole.
+STORY: the code is a negative on the lightbox; scanning puts it in the tray; the counts
+come up as the history arrives, and the page reports when they stop rather than
+claiming a completeness the protocol never signals.
 FIRST VIEWPORT: the print centred, QR on paper inside a photographic rebate, a depleting
 ring around it carrying the code's own 20s life; status beneath it; three counters below,
 undeveloped until they hold data.
@@ -233,7 +250,6 @@ export function page(initial: string): string {
   <div class="sheet developing">
    <svg class="qr" viewBox="-2 -2 29 29" shape-rendering="crispEdges" role="img"
         aria-label="Pairing QR code"><path d=""/></svg>
-   <div class="contact" aria-hidden="true">${"<i></i>".repeat(96)}</div>
   </div>
  </div>
  <div class="life" aria-hidden="true"><i id="life"></i></div>
@@ -244,6 +260,7 @@ export function page(initial: string): string {
    <svg class="mark pulse" viewBox="0 0 24 24" aria-hidden="true"><use id="markUse" href="#i-wait"/></svg>
    <span id="label">Starting up</span></p>
   <p class="detail" id="detail"></p>
+  <p class="detail" id="quiet" role="status" aria-live="polite"></p>
  </div>
 
  <dl class="counts">
