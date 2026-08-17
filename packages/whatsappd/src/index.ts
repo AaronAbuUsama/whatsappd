@@ -127,9 +127,10 @@ export type {
 // ── Error model ──
 export {
   PairingError,
+  MediaDownloadError,
   classifyDisconnect,
   isRetryable,
   dispositionFor,
   assertE164,
 } from "./errors.ts";
-export type { FaultReason, WhatsAppFault, Disposition } from "./errors.ts";
+export type { FaultReason, WhatsAppFault, Disposition, MediaDownloadReason } from "./errors.ts";

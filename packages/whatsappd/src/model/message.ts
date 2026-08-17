@@ -105,6 +105,9 @@ export interface MediaMeta {
  * Opaque, on-demand media: metadata now, bytes when you ask.
  * `download()` fetches + decrypts, transparently re-uploading expired media.
  * Bytes never travel in the event payload — the consumer pulls them when ready.
+ *
+ * A failure rejects with `MediaDownloadError`, whose `reason` and `retryable`
+ * separate media that is gone from media you are merely being throttled on.
  */
 export interface MediaHandle extends MediaMeta {
   download(): Promise<Buffer>;
