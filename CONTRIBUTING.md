@@ -16,6 +16,17 @@ Node 20 or newer is required; CI runs 22 and 24. There is no database to start,
 no service to run, and no credential to obtain: the default backend is in-memory
 and the test suite never contacts WhatsApp.
 
+To see a pairing flow end to end without linking anything:
+
+```bash
+pnpm example:pair --demo
+```
+
+That serves the pairing screen on 127.0.0.1 and walks every status it can
+render — QR, scanned, syncing, a dropped connection, unlinked — with no socket
+and no account. The QR it shows is synthetic and says so on the screen, because
+a code that looks right and silently fails to scan is worse than no code.
+
 There is no dev server. This is a library, so the equivalent inner loop is
 `pnpm dev` (`vp pack --watch`) if you want the built artifact rebuilt as you
 edit, or a test file run directly:

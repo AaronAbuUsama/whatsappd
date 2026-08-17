@@ -955,3 +955,59 @@ test("live fromMe messages stay visible to consumers and can be replied to", asy
     ],
   ]);
 });
+
+test("a QR pairing asks for full history at Pairing, and the caller can decline", async () => {
+  // #203 end to end. The Pairing connect is the only one whose node carries the
+  // request, so this asserts what whatsappd sends *there*, not on the reconnect.
+  const run = async (syncFullHistory?: boolean): Promise<(boolean | undefined)[]> => {
+    const store = memoryStore();
+    const sent: (boolean | undefined)[] = [];
+    const pairingConn = {
+      events: (async function* () {
+        yield { t: "qr", qr: "scan-me" } as const;
+        yield { t: "paired" } as const;
+        await store.write({
+          creds: JSON.stringify({ me: { id: "15551234567:1@s.whatsapp.net", name: "~" } }),
+        });
+        yield {
+          t: "close",
+          fault: { reason: "restart_required", retryable: true, disposition: "retryable" },
+        } as const;
+      })(),
+      end: () => {},
+    };
+    const returningConn = {
+      events: (async function* () {
+        yield { t: "open" } as const;
+        yield { t: "pending_drained" } as const;
+        yield { t: "conversation_sync_complete" } as const;
+        yield {
+          t: "close",
+          fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+        } as const;
+      })(),
+      end: () => {},
+    };
+    const session = createSession({
+      store,
+      auth: qrAuth(),
+      ...(syncFullHistory !== undefined && { syncFullHistory }),
+      openSocket: async (opts: { syncFullHistory?: boolean }) => {
+        sent.push(opts.syncFullHistory);
+        return sent.length === 1 ? pairingConn : returningConn;
+      },
+    } as unknown as Parameters<typeof createSession>[0]);
+    session.subscribe({
+      connection(status) {
+        if (status.phase === "online") void session.stop();
+      },
+    });
+    await session.start();
+    return sent;
+  };
+
+  // Default: asked for on the Pairing connect, which is the one that counts.
+  expect(await run()).toEqual([undefined, undefined]); // openSocket defaults it
+  expect(await run(true)).toEqual([true, true]);
+  expect(await run(false)).toEqual([false, false]);
+});

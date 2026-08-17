@@ -18,8 +18,31 @@ fragments reaching further back. A consumer watching thousands of messages
 arrive at pairing has no protocol signal that this is everything — because
 it is not.
 
-whatsappd deliberately pairs light and requests full history only on a
-registered reconnect (`shouldRequestFullHistoryOnOpen`, `packages/whatsappd/src/baileys/socket.ts`).
+The request for a full history sync can be made **once, at Pairing, and never
+again**. It rides in `companion.requireFullSync` on the registration node
+(Baileys `validate-connection.js`), and Baileys sends that node only while
+`creds.me` is absent (`socket.js`); every later connect is a login node, which
+has no such field. `syncFullHistory` also decides a second thing on every
+connect — `webInfo.webSubPlatform` upgrades from `WEB_BROWSER` to `DARWIN` only
+when it is true _and_ the browser is `["Mac OS"|"Windows", "Desktop", …]`, and
+**WhatsApp refuses a registration node carrying `DARWIN`**. Measured on
+2026-08-17: with `macOS("Desktop")` the socket never reached a QR at all
+(`connection_lost`, reconnect, repeat); with a non-`Desktop` browser it paired in
+about a second and delivered a full sync. `"Desktop"` was therefore only ever
+survivable while full history was switched off, and whatsappd now announces
+`Browsers.macOS("Chrome")` — Baileys' own default.
+
+Until 2026-08-16 whatsappd gated this on `creds.registered`, a field upstream
+writes only in the pairing-code companion-finish handler. At the Pairing connect
+that field is always absent, so the request was never sent, by either method,
+and the companion announced a macOS Desktop identity in three fields while
+asking like a browser in the two that gate history (#203). It is now on by
+default, and `syncFullHistory: false` on the session config is how a caller
+declines — a permanent choice for that credential.
+
+**Every history depth recorded in this document was measured with the request
+off.** That includes the issue #9 figures above and both P4 runs below.
+
 A returning device whose `accountSyncCounter` proves initial sync already
 completed receives no history redelivery at all — only messages queued while
 it was offline (ADR-0002: connection readiness is separate from history
@@ -94,13 +117,19 @@ the time (published 2026-07-29):
 | Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ **receipted for run 2's 2 requests** (`deliveryAcksAt`, from the run's own transport log). Run 1 predates ack embedding: its receipt substantiates only the offline row's 4m16s-late ack (operator notes); the remaining run-1 delivery and server-relay acks were observed in that run's transport trace and are quoted, unreceipted, on PR #51 |
 | Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **none observed** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)                                                                                                                                                                                                                                                                                  |
 
-One seam caveat sharpens, rather than weakens, the verdict: whatsappd's
-normalization (`toMessagingHistoryEvents`, `packages/whatsappd/src/baileys/socket.ts`) emits no
-batch for a history payload whose normalized chats, contacts, and messages
-are all empty — so a hypothetical entirely-empty response is
-indistinguishable from silence at this seam. "0 of 7" is therefore a claim
-about _observable_ batches, and one more reason no empty-result or
-exhaustion signal can honestly be offered.
+One seam caveat sharpens, rather than weakens, the verdict: at the time of this
+run whatsappd's normalization (`toMessagingHistoryEvents`,
+`packages/whatsappd/src/baileys/socket.ts`) emitted no batch for a history
+payload whose normalized chats, contacts, and messages were all empty — so an
+entirely-empty response was indistinguishable from silence at this seam. "0 of
+7" is therefore a claim about _observable_ batches.
+
+That seam is now open (#207): a payload carrying `requestSessionId`, or typed
+`ON_DEMAND`, emits a batch whether or not it has rows. Every run recorded in
+this document predates that change, so none of them could have seen an empty
+answer, and each "no response" reading includes "answered with nothing" as an
+unexcluded possibility. Whether WhatsApp ever sends one remains unobserved —
+the change makes it reachable, not proven.
 
 Conditions varied without effect: phone idle vs. WhatsApp foregrounded during
 an active conversation, personal DM vs. self-chat, `count` 50/25/10, anchors

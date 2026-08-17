@@ -136,6 +136,22 @@ export interface SessionConfig {
    */
   sendMinGapMs?: number;
   /**
+   * Whether to ask WhatsApp for a full history sync.
+   *
+   * @remarks
+   * The request rides in the registration node, which the protocol sends only
+   * while the credential is unpaired — so this has effect at **Pairing and
+   * nowhere else**. A linked account cannot ask for more history by
+   * reconnecting; use {@link WhatsAppSession.requestHistory} for that, and see
+   * `docs/architecture/history-semantics.md`.
+   *
+   * Set it `false` to link light. That is a permanent choice for the
+   * credential: undoing it means pairing again.
+   *
+   * @defaultValue `true`
+   */
+  syncFullHistory?: boolean;
+  /**
    * Fire-and-forget observability hook. Errors it throws are swallowed so
    * instrumentation can never disrupt the session.
    */
@@ -548,6 +564,9 @@ export function createSession(config: SessionConfig): WhatsAppSession {
           authMethod: config.auth.method,
           saveCreds: auth.saveCreds,
           logger,
+          ...(config.syncFullHistory !== undefined && {
+            syncFullHistory: config.syncFullHistory,
+          }),
         });
 
         // stop() may have run while openSocket() was in flight — conn was still
