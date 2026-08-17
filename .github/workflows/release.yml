@@ -71,7 +71,22 @@ jobs:
             sleep 10
           done
           version="$(node -p "require('./packages/whatsappd/package.json').version")"
+          # `npm view` from the repository root exits EBADDEVENGINES, because
+          # devEngines.packageManager names pnpm and the caller is npm. The
+          # publish step above already runs every `npm view` from RUNNER_TEMP for
+          # this reason; this one did not, so 0.4.0-alpha.3 published correctly
+          # and then failed its own verification.
+          #
+          # The tag is derived rather than hardcoded to `alpha`: a stable release
+          # publishes to `latest`, and asserting `dist-tags.alpha` would have
+          # failed the first non-prerelease release for the same shape of reason.
+          if [[ "$version" == *-* ]]; then
+            prerelease="${version#*-}"
+            tag="${prerelease%%.*}"
+          else
+            tag="latest"
+          fi
           for package in whatsappd @whatsappd/react; do
-            test "$(npm view "$package" dist-tags.alpha)" = "$version"
-            test -n "$(npm view "$package@$version" dist.attestations.url)"
+            test "$(cd "$RUNNER_TEMP" && npm view "$package" "dist-tags.$tag")" = "$version"
+            test -n "$(cd "$RUNNER_TEMP" && npm view "$package@$version" dist.attestations.url)"
           done
