@@ -42,6 +42,46 @@ try {
 
 `online` means the socket is ready. Initial WhatsApp sync is separate and may continue afterwards.
 
+### History arrives once, at Pairing
+
+whatsappd asks WhatsApp for a **full** history sync when an account pairs. That
+request can only be made at Pairing — the protocol carries it on the registration
+node, and a credential that is already linked has no way to ask again. Link an
+account light instead if you would rather not receive it:
+
+```ts
+createSession({ auth: qrAuth(), store: fileStore("./.wa-auth"), syncFullHistory: false });
+```
+
+That is a permanent choice for that credential. Undoing it means pairing again.
+
+`session.requestHistory(anchor)` is the separate, per-chat way to ask the phone
+for older messages after linking. See
+[`docs/architecture/history-semantics.md`](docs/architecture/history-semantics.md)
+for what it does and does not promise.
+
+### Media failures say why
+
+`message.media.download()` rejects with a `MediaDownloadError` carrying `reason`,
+`statusCode` and `retryable`, so an expired file and a throttle are not the same
+event:
+
+```ts
+try {
+  const bytes = await message.media.download();
+} catch (error) {
+  if (error instanceof MediaDownloadError && error.retryable) scheduleRetry();
+  else markUnavailable();
+}
+```
+
+| `reason`      | Cause                                 | `retryable` |
+| ------------- | ------------------------------------- | ----------- |
+| `expired`     | 404/410 from the CDN                  | no          |
+| `throttled`   | 429                                   | **yes**     |
+| `unavailable` | 5xx                                   | **yes**     |
+| `unknown`     | no status; often a decryption failure | no          |
+
 ## Choose the right layer
 
 - **Session** is the direct, live WhatsApp boundary: normalized updates plus send, typing, read, group, profile-picture, and history commands.
