@@ -318,6 +318,13 @@ function live(): void {
       // ON_DEMAND with no rows is it saying "there is nothing older"
       // (whatsappd#207). Count the kind before looking at the contents.
       kinds[batch.context.source] += 1;
+      // One line per batch. The screen shows totals, which is right for someone
+      // watching it, and useless afterwards for saying what actually arrived and
+      // when. This is what made a real run readable: the empty `unknown +0 msgs`
+      // batch and the seven `full` ones are only visible here.
+      say(
+        `batch: ${batch.context.source} +${batch.messages.length} msgs, +${batch.chats.length} chats`,
+      );
       // `HistoryChat.id`, not `chatId` — the spike this came from used the wrong
       // field, so every chat collapsed to one undefined entry and the counter
       // stuck at 1. Type-checking against the package caught it.
