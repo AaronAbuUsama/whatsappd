@@ -24,9 +24,13 @@ again**. It rides in `companion.requireFullSync` on the registration node
 `creds.me` is absent (`socket.js`); every later connect is a login node, which
 has no such field. `syncFullHistory` also decides a second thing on every
 connect — `webInfo.webSubPlatform` upgrades from `WEB_BROWSER` to `DARWIN` only
-when it is true _and_ the browser is a desktop one, which is why whatsappd pairs
-as `Browsers.macOS("Desktop")`. Baileys' documentation pairs the two settings
-for the same reason.
+when it is true _and_ the browser is `["Mac OS"|"Windows", "Desktop", …]`, and
+**WhatsApp refuses a registration node carrying `DARWIN`**. Measured on
+2026-08-17: with `macOS("Desktop")` the socket never reached a QR at all
+(`connection_lost`, reconnect, repeat); with a non-`Desktop` browser it paired in
+about a second and delivered a full sync. `"Desktop"` was therefore only ever
+survivable while full history was switched off, and whatsappd now announces
+`Browsers.macOS("Chrome")` — Baileys' own default.
 
 Until 2026-08-16 whatsappd gated this on `creds.registered`, a field upstream
 writes only in the pairing-code companion-finish handler. At the Pairing connect

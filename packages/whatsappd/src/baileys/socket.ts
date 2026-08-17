@@ -284,13 +284,33 @@ export interface OpenSocketDependencies {
   makeSocket: typeof makeWASocket;
 }
 
+/**
+ * The companion identity this socket announces.
+ *
+ * @remarks
+ * `Browsers.macOS("Chrome")` — Baileys' own default — rather than the
+ * `macOS("Desktop")` this replaced, and the reason is a coupling that is not
+ * visible from here. Upstream's `getWebInfo` upgrades `webInfo.webSubPlatform`
+ * from `WEB_BROWSER` to `DARWIN` when `syncFullHistory` is set **and** the
+ * browser is `["Mac OS"|"Windows", "Desktop", …]`. WhatsApp refuses a
+ * registration node carrying `DARWIN`.
+ *
+ * That was measured, not reasoned about. Same commit, same machine, one field
+ * apart: with `Desktop` the socket never reached a QR at all — `connection_lost`,
+ * reconnect, repeat — and with a non-`Desktop` browser it paired in about a
+ * second and delivered a full history sync. `"Desktop"` therefore only works
+ * while full history is switched off, which is how it survived this long.
+ *
+ * Pairing-code registration keeps its own identity: WhatsApp requires the
+ * canonical Chrome web companion (`CompanionWebClientType.CHROME`) there.
+ */
 export function browserForOpen(
   authMethod: AuthStrategy["method"],
   auth: { readonly creds: { readonly registered?: boolean } },
 ): WABrowserDescription {
   return authMethod === "pairing_code" && auth.creds.registered !== true
     ? PAIRING_BROWSER
-    : Browsers.macOS("Desktop");
+    : Browsers.macOS("Chrome");
 }
 
 type PromiseResolver<T> = {

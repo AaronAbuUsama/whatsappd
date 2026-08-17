@@ -27,9 +27,9 @@ type MessagesUpsert = BaileysEventMap["messages.upsert"];
 test("only unregistered pairing-code sockets use WhatsApp's canonical web companion platform", () => {
   expect(getCompanionPlatformId(browserForOpen("pairing_code", { creds: {} }))).toBe("1");
   expect(browserForOpen("pairing_code", { creds: { registered: true } })).toEqual(
-    Browsers.macOS("Desktop"),
+    Browsers.macOS("Chrome"),
   );
-  expect(browserForOpen("qr", { creds: {} })).toEqual(Browsers.macOS("Desktop"));
+  expect(browserForOpen("qr", { creds: {} })).toEqual(Browsers.macOS("Chrome"));
 });
 
 const PAIRED_ME = { id: "15551234567:1@s.whatsapp.net", name: "~" };
@@ -82,12 +82,37 @@ test("a caller can link light, and the choice reaches the socket", async () => {
   expect((await openWith("qr", {}, true)).syncFullHistory).toBe(true);
 });
 
-test("the desktop companion identity is unchanged by the flag", async () => {
+test("no browser we announce can trip the sub-platform WhatsApp refuses", () => {
+  // The defect this pins is invisible in either file alone. Upstream's
+  // `getWebInfo` sets `webSubPlatform` to DARWIN/WIN32 — instead of WEB_BROWSER
+  // — only when `syncFullHistory` is true AND the browser is
+  // ["Mac OS"|"Windows", "Desktop", ...]. WhatsApp then refuses the registration
+  // node, and the socket never reaches a QR: connection_lost, reconnect, repeat.
+  //
+  // Measured, not inferred. `macOS("Desktop")` never produced a QR; a
+  // non-"Desktop" browser paired in ~1s and delivered a full history sync on the
+  // same commit. Since full history is now on by default, the pair is unusable.
+  //
+  // Asserted as the upstream condition rather than as an expected browser value,
+  // so changing the identity stays free and re-introducing the collision does not.
+  const TRIPS_SUB_PLATFORM = new Set(["Mac OS", "Windows"]);
+  const announced = [
+    browserForOpen("qr", { creds: {} }),
+    browserForOpen("qr", { creds: { registered: false } }),
+    browserForOpen("pairing_code", { creds: {} }),
+    browserForOpen("pairing_code", { creds: { registered: true } }),
+  ];
+
+  for (const browser of announced)
+    expect(TRIPS_SUB_PLATFORM.has(browser[0]) && browser[1] === "Desktop").toBe(false);
+});
+
+test("the companion identity is unchanged by the flag", async () => {
   // `getWebInfo` upgrades to DARWIN only when syncFullHistory is true AND the
   // browser is ["Mac OS", "Desktop", ...]. The browser half must keep matching,
   // or the flag silently buys nothing.
-  expect((await openWith("qr", {}, true)).browser).toEqual(Browsers.macOS("Desktop"));
-  expect((await openWith("qr", {}, false)).browser).toEqual(Browsers.macOS("Desktop"));
+  expect((await openWith("qr", {}, true)).browser).toEqual(Browsers.macOS("Chrome"));
+  expect((await openWith("qr", {}, false)).browser).toEqual(Browsers.macOS("Chrome"));
   // Pairing-code registration still needs the canonical Chrome companion id.
   expect((await openWith("pairing_code", {})).browser).toEqual(PAIRING_BROWSER);
 });
