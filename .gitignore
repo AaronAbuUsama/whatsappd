@@ -26,3 +26,7 @@ examples/qr-cli/.data/
 .env
 .env.*
 !.env.example
+
+# The pair-page example writes a linked credential here; never commit one.
+examples/pair-page/.account/
+examples/pair-page/qr.txt
