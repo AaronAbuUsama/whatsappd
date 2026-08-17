@@ -201,8 +201,17 @@ function quiet(since){
 
 const es=new EventSource("/events");
 es.onmessage=e=>render(JSON.parse(e.data));
-es.onerror=()=>{ $("#label").textContent="Lost the connection to this page";
-  $(".mark").classList.add("stop"); $(".mark").classList.remove("pulse"); };
+// The stream died, not the account. Swap the icon too: leaving the previous
+// state's tick beside a failure is how a killed server reads as a finished sync.
+// Clear the quiet timer as well, since seconds-since-last-batch stops meaning
+// anything the moment we stopped being told about batches.
+es.onerror=()=>{
+  $("#label").textContent="Lost the connection to this page";
+  $("#markUse").setAttribute("href","#i-stop");
+  $(".mark").classList.add("stop"); $(".mark").classList.remove("pulse");
+  $("#detail").textContent="The sync itself is unaffected — this page stopped being told about it. Run the command again to watch.";
+  clearInterval(quietTick); $("#quiet").textContent="";
+};
 `;
 
 /** The direction contract. Emitted into the served markup, first child of body. */
