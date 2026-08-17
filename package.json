@@ -26,11 +26,11 @@
     "prepare": "vp config"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.0",
-    "@types/node": "^26.1.1",
+    "@changesets/cli": "^2.31.1",
+    "@types/node": "^26.2.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "knip": "^6.31.0",
+    "knip": "^6.32.0",
     "pino": "^10.3.1",
     "qrcode-terminal": "^0.12.0",
     "typescript": "^6.0.3",
