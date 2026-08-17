@@ -185,6 +185,55 @@ test("messaging-history.set completion remains a status signal without a data ba
   expect(events).toEqual([{ t: "conversation_sync_complete" }]);
 });
 
+test("an EMPTY on-demand reply is delivered, so silence becomes distinguishable", () => {
+  // The bug: this reply is WhatsApp saying "there is nothing older". Dropped for
+  // being empty, it looks exactly like a phone that never answered.
+  const events = toMessagingHistoryEvents(
+    {
+      chats: [],
+      contacts: [],
+      messages: [],
+      isLatest: false,
+      progress: null,
+      syncType: proto.HistorySync.HistorySyncType.ON_DEMAND,
+      peerDataRequestSessionId: "REQ-123",
+    } as HistoryPayload,
+    SELF,
+  );
+
+  const sync = events.find((event) => event.t === "conversation_sync");
+  if (sync?.t !== "conversation_sync") throw new Error("expected an empty conversation_sync");
+  expect(sync.sync.messages.length).toBe(0);
+  expect(sync.sync.chats.length).toBe(0);
+  expect(sync.sync.context.source).toBe("on_demand");
+  expect(sync.sync.context.requestSessionId).toBe("REQ-123");
+});
+
+test("an on-demand reply is delivered even when it carries no session id", () => {
+  const events = toMessagingHistoryEvents(
+    {
+      chats: [],
+      contacts: [],
+      messages: [],
+      isLatest: false,
+      progress: null,
+      syncType: proto.HistorySync.HistorySyncType.ON_DEMAND,
+    } as HistoryPayload,
+    SELF,
+  );
+  expect(events.some((event) => event.t === "conversation_sync")).toBe(true);
+});
+
+test("an empty payload that answers nothing stays silent, exactly as before", () => {
+  // The guard must stay narrow, or every idle history frame becomes an event.
+  expect(
+    toMessagingHistoryEvents(
+      { chats: [], contacts: [], messages: [], isLatest: false, progress: null } as HistoryPayload,
+      SELF,
+    ),
+  ).toEqual([]);
+});
+
 test("messaging-history.set isLatest alone does not mark sync complete", () => {
   const events = toMessagingHistoryEvents(
     {
