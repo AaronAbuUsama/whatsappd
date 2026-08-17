@@ -1,5 +1,7 @@
 # @whatsappd/react
 
+## 0.4.0-alpha.3
+
 ## 0.4.0-alpha.2
 
 ### Patch Changes

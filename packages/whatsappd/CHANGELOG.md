@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0-alpha.3
+
+### Minor Changes
+
+- 3ce4545: Deliver an empty on-demand history reply instead of dropping it. A payload that
+  names your `requestHistory` request, or that WhatsApp typed `ON_DEMAND`, now
+  emits a `conversationSync` batch even with no rows — the only signal that can
+  ever distinguish "there is nothing older" from "the phone never replied". Empty
+  payloads that answer nothing stay silent, and an empty batch takes no revision.
+- f225ee6: Reject a failed `media.download()` with a `MediaDownloadError` carrying
+  `reason`, `statusCode`, and `retryable`, so a caller can tell 404-expired from
+  429-throttled and retry only what is worth retrying. Previously the upstream
+  `Boom` propagated unchanged: the status was reachable only by knowing it was a
+  Baileys error, and its message embedded the signed CDN url.
+- 572cfa3: Ask WhatsApp for a full history sync at Pairing, and add `syncFullHistory` to
+  the session config to decline it. The request rides in the registration node,
+  which the protocol sends only while a credential is unpaired, so it was gated on
+  `creds.registered` — a field that is never set at that moment, by either Pairing
+  method. No account has ever sent it. It now defaults to `true`, matching Baileys'
+  own default. The companion identity moved with it, from `Browsers.macOS("Desktop")`
+  to `Browsers.macOS("Chrome")`: the same flag upgrades `webInfo.webSubPlatform` to
+  `DARWIN` for a desktop browser, and WhatsApp refuses a registration node carrying
+  it — measured, with `Desktop` the socket never reached a QR at all.
+
+### Patch Changes
+
+- fadceae: Document that subscriber handlers run on the session's own event pipeline, so a
+  handler that never returns holds the connection at `authenticated`/`draining`
+  instead of merely delaying events. No behavior changes; the serialization is the
+  ordering guarantee.
+
 ## 0.4.0-alpha.2
 
 ### Patch Changes

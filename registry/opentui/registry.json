@@ -8,7 +8,7 @@
       "title": "WhatsApp terminal contract",
       "description": "Terminal snapshots and commands projected from the public WhatsApp Client.",
       "type": "registry:lib",
-      "dependencies": ["@whatsappd/react@0.4.0-alpha.2", "whatsappd@0.4.0-alpha.2"],
+      "dependencies": ["@whatsappd/react@0.4.0-alpha.3", "whatsappd@0.4.0-alpha.3"],
       "devDependencies": ["@types/node@>=20.0.0"],
       "files": [
         {
@@ -17,7 +17,7 @@
           "target": "components/whatsappd-tui/lib/whatsapp-terminal.ts"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     },
     {
       "name": "whatsapp-tui-account-state",
@@ -33,7 +33,7 @@
           "target": "components/whatsappd-tui/components/whatsapp-account-state.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     },
     {
       "name": "whatsapp-tui-chat-list",
@@ -50,7 +50,7 @@
           "target": "components/whatsappd-tui/components/whatsapp-chat-list.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     },
     {
       "name": "whatsapp-tui-operation-status",
@@ -67,7 +67,7 @@
           "target": "components/whatsappd-tui/components/whatsapp-operation-status.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     },
     {
       "name": "whatsapp-tui-message",
@@ -87,7 +87,7 @@
           "target": "components/whatsappd-tui/components/whatsapp-message.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     },
     {
       "name": "whatsapp-tui-composer",
@@ -103,7 +103,7 @@
           "target": "components/whatsappd-tui/components/whatsapp-composer.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     },
     {
       "name": "whatsapp-tui-conversation",
@@ -124,7 +124,7 @@
           "target": "components/whatsappd-tui/components/whatsapp-conversation.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     },
     {
       "name": "whatsapp-tui-inbox",
@@ -134,7 +134,7 @@
       "dependencies": [
         "@opentui/core@^0.4.5",
         "@opentui/react@^0.4.5",
-        "@whatsappd/react@0.4.0-alpha.2",
+        "@whatsappd/react@0.4.0-alpha.3",
         "react@>=19.2.0"
       ],
       "devDependencies": ["@types/react@^19"],
@@ -151,7 +151,7 @@
           "target": "components/whatsappd-tui/components/whatsapp-inbox.tsx"
         }
       ],
-      "meta": { "version": "0.4.0-alpha.2" }
+      "meta": { "version": "0.4.0-alpha.3" }
     }
   ]
 }

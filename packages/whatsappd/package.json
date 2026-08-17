@@ -1,6 +1,6 @@
 {
   "name": "whatsappd",
-  "version": "0.4.0-alpha.2",
+  "version": "0.4.0-alpha.3",
   "description": "A typed WhatsApp session engine with awaited subscriptions and pluggable credential stores.",
   "keywords": [
     "baileys",
