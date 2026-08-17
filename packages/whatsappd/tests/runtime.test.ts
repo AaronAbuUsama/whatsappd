@@ -3441,3 +3441,41 @@ test("a live group rename reaches the chat summary, not just the group record", 
 
   await runtime.stop();
 });
+
+test("an empty on-demand reply reaches a subscriber without taking a revision", async () => {
+  // #207 delivers the empty reply so a caller can tell "nothing older" from
+  // silence. That signal is for the Session subscriber. It must not also become
+  // a durable write: an empty batch projects nothing, so acceptance must leave
+  // the revision alone and publish no patch, or every unanswered page would
+  // churn the mirror and wake every client for nothing.
+  const backend = memoryBackend();
+  const got = await backend.leases.acquire("personal", "worker-1", 60_000);
+  assert.ok(got.acquired);
+  await backend.data.claim("personal", got.lease.fencingToken);
+
+  const accepted = await backend.data.accept(
+    "personal",
+    [
+      {
+        observedAt: Date.now(),
+        event: {
+          type: "conversation_sync",
+          batch: {
+            context: {
+              source: "on_demand",
+              requestSessionId: "REQ-207",
+              projection: { mode: "upsert" },
+            },
+            chats: [],
+            contacts: [],
+            messages: [],
+            updates: [],
+          },
+        } as never,
+      },
+    ],
+    got.lease.fencingToken,
+  );
+
+  expect(accepted.revision).toBe(accepted.fromRevision);
+});

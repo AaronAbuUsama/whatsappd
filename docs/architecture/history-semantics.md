@@ -94,13 +94,19 @@ the time (published 2026-07-29):
 | Phone delivery | `peer_msg` receipt from the phone's own JID, ~2s later | ✅ **receipted for run 2's 2 requests** (`deliveryAcksAt`, from the run's own transport log). Run 1 predates ack embedding: its receipt substantiates only the offline row's 4m16s-late ack (operator notes); the remaining run-1 delivery and server-relay acks were observed in that run's transport trace and are quoted, unreceipted, on PR #51 |
 | Response       | `HISTORY_SYNC_NOTIFICATION` → `on_demand` batch        | ❌ **none observed** — 0 of 7 (0/5 run1-b06fa2f, 0/2 run2-ea53648)                                                                                                                                                                                                                                                                                  |
 
-One seam caveat sharpens, rather than weakens, the verdict: whatsappd's
-normalization (`toMessagingHistoryEvents`, `packages/whatsappd/src/baileys/socket.ts`) emits no
-batch for a history payload whose normalized chats, contacts, and messages
-are all empty — so a hypothetical entirely-empty response is
-indistinguishable from silence at this seam. "0 of 7" is therefore a claim
-about _observable_ batches, and one more reason no empty-result or
-exhaustion signal can honestly be offered.
+One seam caveat sharpens, rather than weakens, the verdict: at the time of this
+run whatsappd's normalization (`toMessagingHistoryEvents`,
+`packages/whatsappd/src/baileys/socket.ts`) emitted no batch for a history
+payload whose normalized chats, contacts, and messages were all empty — so an
+entirely-empty response was indistinguishable from silence at this seam. "0 of
+7" is therefore a claim about _observable_ batches.
+
+That seam is now open (#207): a payload carrying `requestSessionId`, or typed
+`ON_DEMAND`, emits a batch whether or not it has rows. Every run recorded in
+this document predates that change, so none of them could have seen an empty
+answer, and each "no response" reading includes "answered with nothing" as an
+unexcluded possibility. Whether WhatsApp ever sends one remains unobserved —
+the change makes it reachable, not proven.
 
 Conditions varied without effect: phone idle vs. WhatsApp foregrounded during
 an active conversation, personal DM vs. self-chat, `count` 50/25/10, anchors
