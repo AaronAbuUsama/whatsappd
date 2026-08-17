@@ -18,8 +18,31 @@ fragments reaching further back. A consumer watching thousands of messages
 arrive at pairing has no protocol signal that this is everything — because
 it is not.
 
-whatsappd deliberately pairs light and requests full history only on a
-registered reconnect (`shouldRequestFullHistoryOnOpen`, `packages/whatsappd/src/baileys/socket.ts`).
+The request for a full history sync can be made **once, at Pairing, and never
+again**. It rides in `companion.requireFullSync` on the registration node
+(Baileys `validate-connection.js`), and Baileys sends that node only while
+`creds.me` is absent (`socket.js`); every later connect is a login node, which
+has no such field. `syncFullHistory` also decides a second thing on every
+connect — `webInfo.webSubPlatform` upgrades from `WEB_BROWSER` to `DARWIN` only
+when it is true _and_ the browser is `["Mac OS"|"Windows", "Desktop", …]`, and
+**WhatsApp refuses a registration node carrying `DARWIN`**. Measured on
+2026-08-17: with `macOS("Desktop")` the socket never reached a QR at all
+(`connection_lost`, reconnect, repeat); with a non-`Desktop` browser it paired in
+about a second and delivered a full sync. `"Desktop"` was therefore only ever
+survivable while full history was switched off, and whatsappd now announces
+`Browsers.macOS("Chrome")` — Baileys' own default.
+
+Until 2026-08-16 whatsappd gated this on `creds.registered`, a field upstream
+writes only in the pairing-code companion-finish handler. At the Pairing connect
+that field is always absent, so the request was never sent, by either method,
+and the companion announced a macOS Desktop identity in three fields while
+asking like a browser in the two that gate history (#203). It is now on by
+default, and `syncFullHistory: false` on the session config is how a caller
+declines — a permanent choice for that credential.
+
+**Every history depth recorded in this document was measured with the request
+off.** That includes the issue #9 figures above and both P4 runs below.
+
 A returning device whose `accountSyncCounter` proves initial sync already
 completed receives no history redelivery at all — only messages queued while
 it was offline (ADR-0002: connection readiness is separate from history

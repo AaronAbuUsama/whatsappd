@@ -11,7 +11,7 @@ import { expect, test } from "./_expect.ts";
 import {
   browserForOpen,
   openSocketWith,
-  shouldRequestFullHistoryOnOpen,
+  PAIRING_BROWSER,
   toMessagingHistoryEvents,
   toMessagingHistoryStatusEvents,
   toMessagesUpsertEvents,
@@ -27,28 +27,94 @@ type MessagesUpsert = BaileysEventMap["messages.upsert"];
 test("only unregistered pairing-code sockets use WhatsApp's canonical web companion platform", () => {
   expect(getCompanionPlatformId(browserForOpen("pairing_code", { creds: {} }))).toBe("1");
   expect(browserForOpen("pairing_code", { creds: { registered: true } })).toEqual(
-    Browsers.macOS("Desktop"),
+    Browsers.macOS("Chrome"),
   );
-  expect(browserForOpen("qr", { creds: {} })).toEqual(Browsers.macOS("Desktop"));
+  expect(browserForOpen("qr", { creds: {} })).toEqual(Browsers.macOS("Chrome"));
 });
 
-test("fresh companion registration defers full-history until registration completes", () => {
-  expect(shouldRequestFullHistoryOnOpen({ creds: {} })).toBe(false);
+const PAIRED_ME = { id: "15551234567:1@s.whatsapp.net", name: "~" };
+
+const openWith = async (
+  authMethod: "qr" | "pairing_code",
+  creds: Record<string, unknown>,
+  syncFullHistory?: boolean,
+): Promise<{ syncFullHistory?: boolean; browser?: string[] }> => {
+  const auth = await loadAuth(memoryStore());
+  let seen: { syncFullHistory?: boolean; browser?: string[] } = {};
+  await openSocketWith(
+    {
+      auth: { creds: { ...auth.creds, ...creds }, keys: auth.keys },
+      authMethod,
+      logger: pino({ level: "silent" }),
+      saveCreds: async () => {},
+      ...(syncFullHistory !== undefined && { syncFullHistory }),
+    },
+    {
+      fetchLatestVersion: async () => ({ version: [2, 3000, 0], isLatest: true }),
+      makeSocket: ((config: { syncFullHistory?: boolean; browser?: string[] }) => {
+        seen = { syncFullHistory: config.syncFullHistory, browser: config.browser };
+        return { ev: { on() {} }, end() {} } as unknown as WASocket;
+      }) as never,
+    },
+  );
+  return seen;
+};
+
+test("full history is asked for by default, on the Pairing connect where it can be", async () => {
+  // #203. `companion.requireFullSync` ships in the registration node only, and
+  // Baileys picks that node by `!creds.me` — so the unpaired connect below is
+  // the single moment in a credential's life that can carry the request.
+  // Gating it on `creds.registered` (never set by QR) or on `creds.me` (set only
+  // once the node is no longer sent) both amount to never asking at all.
+  expect((await openWith("qr", {})).syncFullHistory).toBe(true);
+  expect((await openWith("pairing_code", {})).syncFullHistory).toBe(true);
+
+  // Later logins keep it true: it is what upgrades webSubPlatform to DARWIN,
+  // which is the half of the desktop identity that depends on this flag.
+  expect((await openWith("qr", { me: PAIRED_ME })).syncFullHistory).toBe(true);
   expect(
-    shouldRequestFullHistoryOnOpen({
-      creds: { me: { id: "15551234567:1@s.whatsapp.net", name: "~" } },
-    }),
-  ).toBe(false);
-  expect(
-    shouldRequestFullHistoryOnOpen({
-      creds: { registered: false, me: { id: "15551234567:1@s.whatsapp.net", name: "~" } },
-    }),
-  ).toBe(false);
-  expect(
-    shouldRequestFullHistoryOnOpen({
-      creds: { registered: true, me: { id: "15551234567:1@s.whatsapp.net", name: "~" } },
-    }),
+    (await openWith("pairing_code", { registered: true, me: PAIRED_ME })).syncFullHistory,
   ).toBe(true);
+});
+
+test("a caller can link light, and the choice reaches the socket", async () => {
+  expect((await openWith("qr", {}, false)).syncFullHistory).toBe(false);
+  expect((await openWith("qr", {}, true)).syncFullHistory).toBe(true);
+});
+
+test("no browser we announce can trip the sub-platform WhatsApp refuses", () => {
+  // The defect this pins is invisible in either file alone. Upstream's
+  // `getWebInfo` sets `webSubPlatform` to DARWIN/WIN32 — instead of WEB_BROWSER
+  // — only when `syncFullHistory` is true AND the browser is
+  // ["Mac OS"|"Windows", "Desktop", ...]. WhatsApp then refuses the registration
+  // node, and the socket never reaches a QR: connection_lost, reconnect, repeat.
+  //
+  // Measured, not inferred. `macOS("Desktop")` never produced a QR; a
+  // non-"Desktop" browser paired in ~1s and delivered a full history sync on the
+  // same commit. Since full history is now on by default, the pair is unusable.
+  //
+  // Asserted as the upstream condition rather than as an expected browser value,
+  // so changing the identity stays free and re-introducing the collision does not.
+  const TRIPS_SUB_PLATFORM = new Set(["Mac OS", "Windows"]);
+  const announced = [
+    browserForOpen("qr", { creds: {} }),
+    browserForOpen("qr", { creds: { registered: false } }),
+    browserForOpen("pairing_code", { creds: {} }),
+    browserForOpen("pairing_code", { creds: { registered: true } }),
+  ];
+
+  for (const browser of announced)
+    expect(TRIPS_SUB_PLATFORM.has(browser[0]) && browser[1] === "Desktop").toBe(false);
+});
+
+test("the companion identity is unchanged by the flag", async () => {
+  // `getWebInfo` upgrades to DARWIN only when syncFullHistory is true AND the
+  // browser is ["Mac OS", "Desktop", ...]. The browser half must keep matching,
+  // or the flag silently buys nothing.
+  expect((await openWith("qr", {}, true)).browser).toEqual(Browsers.macOS("Chrome"));
+  expect((await openWith("qr", {}, false)).browser).toEqual(Browsers.macOS("Chrome"));
+  // Pairing-code registration still needs the canonical Chrome companion id.
+  expect((await openWith("pairing_code", {})).browser).toEqual(PAIRING_BROWSER);
 });
 
 test("openSocket end drains late credential writes and keeps the first rejection", async () => {

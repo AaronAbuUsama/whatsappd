@@ -279,6 +279,14 @@ export interface OpenSocketOpts {
   /** Persist creds on every `creds.update`. */
   saveCreds: () => Promise<void>;
   logger: Logger;
+  /**
+   * Ask WhatsApp for a full history sync. Only the Pairing connect can carry
+   * the request; later logins use it solely for the desktop sub-platform.
+   *
+   * @defaultValue `true` — Baileys' own default, and the pairing WhatsApp's
+   * desktop client performs.
+   */
+  syncFullHistory?: boolean;
 }
 
 export interface OpenSocketDependencies {
@@ -286,19 +294,33 @@ export interface OpenSocketDependencies {
   makeSocket: typeof makeWASocket;
 }
 
+/**
+ * The companion identity this socket announces.
+ *
+ * @remarks
+ * `Browsers.macOS("Chrome")` — Baileys' own default — rather than the
+ * `macOS("Desktop")` this replaced, and the reason is a coupling that is not
+ * visible from here. Upstream's `getWebInfo` upgrades `webInfo.webSubPlatform`
+ * from `WEB_BROWSER` to `DARWIN` when `syncFullHistory` is set **and** the
+ * browser is `["Mac OS"|"Windows", "Desktop", …]`. WhatsApp refuses a
+ * registration node carrying `DARWIN`.
+ *
+ * That was measured, not reasoned about. Same commit, same machine, one field
+ * apart: with `Desktop` the socket never reached a QR at all — `connection_lost`,
+ * reconnect, repeat — and with a non-`Desktop` browser it paired in about a
+ * second and delivered a full history sync. `"Desktop"` therefore only works
+ * while full history is switched off, which is how it survived this long.
+ *
+ * Pairing-code registration keeps its own identity: WhatsApp requires the
+ * canonical Chrome web companion (`CompanionWebClientType.CHROME`) there.
+ */
 export function browserForOpen(
   authMethod: AuthStrategy["method"],
   auth: { readonly creds: { readonly registered?: boolean } },
 ): WABrowserDescription {
   return authMethod === "pairing_code" && auth.creds.registered !== true
     ? PAIRING_BROWSER
-    : Browsers.macOS("Desktop");
-}
-
-export function shouldRequestFullHistoryOnOpen(auth: {
-  readonly creds: { readonly registered?: boolean; readonly me?: unknown };
-}): boolean {
-  return auth.creds.registered === true;
+    : Browsers.macOS("Chrome");
 }
 
 type PromiseResolver<T> = {
@@ -422,7 +444,7 @@ export async function openSocketWith(
   const { version } = await dependencies.fetchLatestVersion();
   const queue = new EventQueue();
   let intentional = false;
-  const requestFullHistory = shouldRequestFullHistoryOnOpen(auth);
+  const requestFullHistory = opts.syncFullHistory ?? true;
   const browser = browserForOpen(authMethod, auth);
   logger.info(
     {
@@ -439,11 +461,15 @@ export async function openSocketWith(
     version,
     logger,
     browser,
-    // Fresh companion registration is not complete at pair-success. Baileys first
-    // persists `creds.me`, then later sets `creds.registered` after the
-    // link_code_companion_reg finish notification. Asking for full history in
-    // that in-between state leaves the phone stuck at "logging in" and the
-    // socket in a reconnect/backoff loop.
+    // Two fields downstream depend on this, and only one is about the request.
+    // `companion.requireFullSync` ships in the registration node ONLY — Baileys
+    // picks that node by `!creds.me` (socket.js), so a credential can ask for
+    // full history exactly once, at Pairing, and never again on a login.
+    // `webInfo.webSubPlatform` is the other: it upgrades WEB_BROWSER → DARWIN on
+    // every connect, but only when this is true AND the browser is a desktop one.
+    // Gating this on credential state therefore did not defer the request, it
+    // deleted it, and left the companion claiming to be a macOS Desktop client
+    // in three fields while asking like a browser in the two that gate history.
     syncFullHistory: requestFullHistory,
     shouldSyncHistoryMessage: () => true,
     auth: {
