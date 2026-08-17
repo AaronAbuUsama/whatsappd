@@ -1,7 +1,7 @@
 import type { BaileysEventMap } from "baileys";
 import assert from "node:assert/strict";
 import { expect, test } from "./_expect.ts";
-import { toMessagesUpsertEvents } from "../src/baileys/socket.ts";
+import { shouldRequestFullHistoryOnOpen, toMessagesUpsertEvents } from "../src/baileys/socket.ts";
 import { createSession } from "../src/session.ts";
 import { pairingAuth, qrAuth } from "../src/ports.ts";
 import { memoryStore } from "../src/stores/memory.ts";
@@ -954,4 +954,66 @@ test("live fromMe messages stay visible to consumers and can be replied to", asy
       },
     ],
   ]);
+});
+
+test("a QR pairing asks for full history on the post-pairing reconnect, not before", async () => {
+  // #203 end to end. The predicate and the socket options are unit-tested in
+  // socket.test.ts; this asserts the sequence around them, which is the part
+  // that can silently not happen: creds must reach the store before the 515
+  // restart, and the reconnect must re-read them. `registered` is deliberately
+  // never written — a QR credential never gets it, which is the whole defect.
+  const store = memoryStore();
+  const asked: boolean[] = [];
+
+  const pairingConn = {
+    events: (async function* () {
+      yield { t: "qr", qr: "scan-me" } as const;
+      yield { t: "paired" } as const;
+      // What Baileys persists at pair-success: `me` from the server's stanza.
+      await store.write({
+        creds: JSON.stringify({ me: { id: "15551234567:1@s.whatsapp.net", name: "~" } }),
+      });
+      yield {
+        t: "close",
+        fault: { reason: "restart_required", retryable: true, disposition: "retryable" },
+      } as const;
+    })(),
+    end: () => {},
+  };
+  const returningConn = {
+    events: (async function* () {
+      yield { t: "open" } as const;
+      yield { t: "pending_drained" } as const;
+      yield { t: "conversation_sync_complete" } as const;
+      yield {
+        t: "close",
+        fault: { reason: "intentional", retryable: false, disposition: "retryable" },
+      } as const;
+    })(),
+    end: () => {},
+  };
+
+  const session = createSession({
+    store,
+    auth: qrAuth(),
+    openSocket: async (opts: {
+      authMethod: "qr" | "pairing_code";
+      auth: { creds: { registered?: boolean; me?: { id?: string } | null } };
+    }) => {
+      asked.push(shouldRequestFullHistoryOnOpen(opts.authMethod, opts.auth));
+      return asked.length === 1 ? pairingConn : returningConn;
+    },
+  } as unknown as Parameters<typeof createSession>[0]);
+  session.subscribe({
+    connection(status) {
+      if (status.phase === "online") void session.stop();
+    },
+  });
+
+  await session.start();
+
+  // Pairs light, then asks — and asks despite `registered` never being set.
+  expect(asked).toEqual([false, true]);
+  const persisted = JSON.parse((await store.read("creds")) ?? "{}") as { registered?: boolean };
+  expect(persisted.registered).toBe(undefined);
 });
