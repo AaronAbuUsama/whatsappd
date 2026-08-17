@@ -9,6 +9,26 @@ export default defineConfig({
       typeAware: true,
       typeCheck: true,
     },
+    // Agent tooling and the vendored plugin are not application source. Listed
+    // by name rather than as a dot-directory glob: this repository keeps owned
+    // checks in `.github/`, and a blanket rule would stop linting them.
+    ignorePatterns: [
+      ".agent/**",
+      ".agents/**",
+      ".claude/**",
+      ".codex/**",
+      ".continue/**",
+      ".cursor/**",
+      ".gemini/**",
+      ".opencode/**",
+      ".pi/**",
+      ".roo/**",
+      ".windsurf/**",
+      "tools/oxlint/anti-slop/**",
+    ],
+    // A local-only plugin: the source lives in `tools/`, so it is vendored
+    // rather than published, and is excluded from linting itself above.
+    jsPlugins: [{ name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" }],
     rules: {
       // Size and shape limits. Every threshold below is set just above what
       // this repository already contains, so it binds the next file rather
@@ -19,6 +39,21 @@ export default defineConfig({
       // Blank lines and comments are excluded from the count. This codebase
       // comments heavily, and a limit that counted prose would be a limit on
       // explaining yourself.
+      "anti-slop/no-chained-type-assertions": "error",
+      "anti-slop/no-conditional-empty-object-spread": "error",
+      "anti-slop/no-known-value-widening": "error",
+      "anti-slop/no-module-mocking": "error",
+      "anti-slop/no-object-parameters": "error",
+      "anti-slop/no-reflect-apply": "error",
+      "anti-slop/no-reflect-get": "error",
+      "anti-slop/no-runtime-typeof": "error",
+      "anti-slop/no-shape-in-symbol-names": "error",
+      "anti-slop/no-unknown-parameters": "error",
+      "anti-slop/no-unknown-returns": "error",
+      "anti-slop/no-unknown-type-aliases": "error",
+      "anti-slop/no-unsafe-dictionary-type": "error",
+      "anti-slop/no-widen-then-assert": "error",
+      "anti-slop/require-safety-comment-for-type-assertion": "error",
       "max-lines": ["error", { max: 600, skipBlankLines: true, skipComments: true }],
       "max-depth": ["error", { max: 4 }],
       complexity: ["error", { max: 25 }],
@@ -122,5 +157,22 @@ export default defineConfig({
       },
     ],
   },
-  fmt: {},
+  fmt: {
+    // Same exclusions, so `vp check` does not reformat installed agent assets
+    // or the vendored plugin.
+    ignorePatterns: [
+      ".agent/**",
+      ".agents/**",
+      ".claude/**",
+      ".codex/**",
+      ".continue/**",
+      ".cursor/**",
+      ".gemini/**",
+      ".opencode/**",
+      ".pi/**",
+      ".roo/**",
+      ".windsurf/**",
+      "tools/oxlint/anti-slop/**",
+    ],
+  },
 });
