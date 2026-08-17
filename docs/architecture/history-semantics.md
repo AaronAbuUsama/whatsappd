@@ -85,9 +85,14 @@ flow through the same subscription pipeline as every other non-live message.
 
 `context.requestSessionId` on an on-demand batch is the only correlation
 signal. It carries the phone's `peerDataRequestSessionId` from the history
-notification; whether that echoes the submission `requestId` is the intended
-protocol design but — because no response has ever been observed live (see
-below) — remains an unverified assumption, not a proven contract.
+notification, and **it echoes the submission `requestId`** — verified live on
+2026-08-17 across two runs and twelve answered batches, every one naming a
+request this library had submitted. Empty answers carry it too, which is what
+makes them readable as answers rather than noise.
+
+It is therefore the correlation contract it was designed to be: it says which
+request a batch answers. It still says nothing about whether more history
+exists.
 
 ## What is NOT promised (explicitly unsupported claims)
 
@@ -103,6 +108,35 @@ below) — remains an unverified assumption, not a proven contract.
 UI language may therefore say "no older saved messages" and "request sent";
 it may not say "all history loaded", "no more WhatsApp messages", or report a
 delivered count tied to the request (ADR-0010 consequence).
+
+## Paging to exhaustion (2026-08-17)
+
+Run on the `android` proof profile — an established link, resumed without a
+scan, whose Pairing predates #204 and so took the short sync. Each request
+anchored on the oldest message the previous answer returned, so no window was
+requested twice.
+
+| Request | Anchor age | Answer                    |
+| ------- | ---------- | ------------------------- |
+| 1       | 24 days    | 50 messages, reaching 27d |
+| 2       | 27 days    | 49 messages, reaching 30d |
+| 3       | 30 days    | 48 messages, reaching 36d |
+| 4       | 36 days    | 19 messages, reaching 37d |
+| 5       | 37 days    | **empty — nothing older** |
+| 6       | 37 days    | **empty — nothing older** |
+
+Six of six answered, none silent, 166 messages in 15 seconds. Full pages while
+history remained, one short page at the tail, then an explicit nothing. That is
+what paging to exhaustion looks like, and it is legible only because #207
+stopped discarding the empty reply.
+
+An earlier run the same day reused a single anchor for all six requests, so its
+four empty answers meant "you already have that" and proved nothing about
+exhaustion. Recorded because the distinction is the point: an empty answer is
+informative only for a window that was not already served.
+
+Neither run says the account holds nothing older than 37 days. It says the
+phone offered nothing older for that anchor.
 
 ## The observed reality (P4, live linked phone, 2026-07-30)
 
@@ -158,10 +192,10 @@ request type, and a request-metadata diff against an official client.
 
 | Scenario                          | Observed                                                                                                                                                                                                                                                                                                                                                                          |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Request/result correlation        | Receipt id is real (outgoing request message id); zero responses arrived, so id-echo in `peerDataRequestSessionId` remains **unverified live** — it is the documented correlation design, not a proven behavior                                                                                                                                                                   |
+| Request/result correlation        | Receipt id is real (outgoing request message id); zero responses arrived in this run, so id-echo was unverifiable here. **Verified live 2026-08-17**: twelve answered batches across two runs, every `peerDataRequestSessionId` matching a submitted `requestId`                                                                                                                  |
 | Protocol request limit (count=50) | Submission accepts 50 and 10 alike; no response either way — no delivered-count evidence exists                                                                                                                                                                                                                                                                                   |
 | Boundary inclusivity              | Unobservable without a response; explicitly unproven                                                                                                                                                                                                                                                                                                                              |
-| Empty result                      | Indistinguishable from an unanswered request — this is the strongest argument for never claiming exhaustion                                                                                                                                                                                                                                                                       |
+| Empty result                      | Indistinguishable from an unanswered request **at the time of this run**, because the seam dropped it. Delivered since #207, and observed live 2026-08-17 as an explicit "nothing older" answer                                                                                                                                                                                   |
 | Multiple chunks                   | Unobservable without a response                                                                                                                                                                                                                                                                                                                                                   |
 | Repeated requests                 | Re-submission is accepted and re-delivered (fresh receipt each time); no response to any                                                                                                                                                                                                                                                                                          |
 | Phone offline                     | Directly observed (airplane mode + Wi-Fi off): submission resolves identically to the online case with no delivery ack; the queued request's `peer_msg` ack arrived 4m16s later when the phone reconnected (22:06:57 → 22:11:13Z). The submission receipt therefore proves nothing about the phone; only the delivery ack does — and even confirmed delivery produced no response |
