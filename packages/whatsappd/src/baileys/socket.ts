@@ -223,12 +223,22 @@ export function toMessagingHistoryEvents(
     events.push({ t: "conversation_sync_progress", progress: payload.progress });
   }
   const sync = toConversationSyncBatch(payload, self, makeDownload);
-  if (
+  const carriesData =
     sync.chats.length > 0 ||
     sync.contacts.length > 0 ||
     sync.messages.length > 0 ||
-    (sync.updates?.length ?? 0) > 0
-  ) {
+    (sync.updates?.length ?? 0) > 0;
+  // An EMPTY on-demand reply is WhatsApp answering "there is nothing older",
+  // and it is the ONLY completion signal `requestHistory` can ever produce:
+  // ADR-0010 states there is no exhaustion or delivered-count signal. Dropping
+  // it for being empty makes a real answer indistinguishable from a phone that
+  // never replied, so a caller can only ever terminate a paging loop by timing
+  // out — and can never tell "done" from "broken".
+  // A payload that names our request, or that WhatsApp typed ON_DEMAND, is news
+  // whether or not it carries rows. Every other empty payload stays silent.
+  const answersARequest =
+    sync.context.requestSessionId !== undefined || sync.context.source === "on_demand";
+  if (carriesData || answersARequest) {
     events.push({ t: "conversation_sync", sync });
   }
   if (complete) events.push({ t: "conversation_sync_complete" });
