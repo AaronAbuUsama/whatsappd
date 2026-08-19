@@ -1,0 +1,9 @@
+{
+  "name": "@whatsappd/convex-fixture",
+  "private": true,
+  "description": "The Convex project the conformance suite deploys. Outside the workspace globs on purpose: `convex` resolves from packages/whatsappd/node_modules, and the range is open so bumping the real dependency never has to be mirrored here.",
+  "type": "module",
+  "dependencies": {
+    "convex": "*"
+  }
+}

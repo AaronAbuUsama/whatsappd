@@ -31,12 +31,26 @@ type DataStoreFactory = () => Promise<DataStoreResource>;
 const yielded = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 /**
- * Yield a bounded number of times. Waiting on another party this way fails the
- * assertion that follows if it never arrives, rather than hanging the suite.
+ * A bound for waiting on another party, in the unit a durable commit is
+ * measured in.
+ *
+ * @remarks
+ * Event-loop turns were that bound, and they are the wrong unit: a hundred
+ * turns of an otherwise idle loop pass in well under a millisecond, so a store
+ * whose commit is a network round trip is told the mirror stood still when what
+ * stood still was the clock. That is a false red for every out-of-process
+ * backend, and it cost a CI run on one runner and not the other before it was
+ * understood.
+ *
+ * Never the expected path: whoever is being waited for resolves first, and this
+ * failing over is what turns "it never arrived" into a failed assertion instead
+ * of a hung suite. Unreferenced so the loser of the race cannot hold the process
+ * open after the test that started it has finished.
  */
-const yieldedUpTo = async (count: number): Promise<void> => {
-  for (let index = 0; index < count; index += 1) await yielded();
-};
+const withinCommitTime = (): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 2_000).unref();
+  });
 
 const observed = (event: WhatsAppDurableEvent, observedAt = AT): WhatsAppDataEvent => ({
   observedAt,
@@ -1093,9 +1107,16 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
         // the only reachable outcome was a mirror nothing was writing to.
         let committed = 0;
         let landed = (): void => {};
-        const commitLanded = new Promise<void>((resolve) => {
-          landed = resolve;
-        });
+        // Armed by the reader, resolved by the writer's next commit. One
+        // promise for "the first commit of the round" is the wrong signal: it
+        // can already be resolved by the time the read starts, and the read
+        // then races nothing and continues immediately -- which is how a store
+        // fast enough to commit before the read opens ends up reporting that
+        // nothing committed while it was open.
+        const nextCommit = (): Promise<void> =>
+          new Promise<void>((resolve) => {
+            landed = resolve;
+          });
         const writing = (async () => {
           for (let step = 0; step < 5; step += 1) {
             await write(`r${round}-${step}`, PN, AT + 1 + round * 10 + step);
@@ -1111,7 +1132,7 @@ export function dataStoreConformance(name: string, create: DataStoreFactory): vo
           // commits here is what makes the read observe that rather than
           // finishing inside one turn. A store that serializes its writers
           // behind the read runs out of turns and fails `during` below.
-          await Promise.race([commitLanded, yieldedUpTo(100)]);
+          await Promise.race([nextCommit(), withinCommitTime()]);
           const first = await view.messages(PN, { limit: 2 });
           await yielded();
           const second = await view.messages(ROOM, { limit: 2 });

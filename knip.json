@@ -6,7 +6,14 @@
       "project": [".github/scripts/**/*.ts", "examples/**/*.ts"]
     },
     "packages/whatsappd": {
-      "entry": ["smoke/*.ts", "src/index.ts", "src/testing.ts", "tests/*.test.ts"],
+      "entry": [
+        "smoke/*.ts",
+        "src/index.ts",
+        "src/testing.ts",
+        "src/convex.ts",
+        "tests/*.test.ts",
+        "tests/convex-app/convex/*.ts"
+      ],
       "project": ["smoke/**/*.ts", "src/**/*.ts", "tests/**/*.ts"]
     },
     "packages/react": {

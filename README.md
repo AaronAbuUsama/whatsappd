@@ -8,7 +8,7 @@ A typed WhatsApp Session, durable Current Mirror, and synchronized WhatsApp Clie
 pnpm add whatsappd
 ```
 
-Node.js 20 or newer is required. Install `@libsql/client` as well when using the libSQL backend, and `@whatsappd/react` when a React renderer needs Client subscriptions.
+Node.js 20 or newer is required. Install `@libsql/client` when using the libSQL backend, `convex` when using the Convex backend, and `@whatsappd/react` when a React renderer needs Client subscriptions.
 
 ## Quick start
 
@@ -81,6 +81,37 @@ try {
 | `throttled`   | 429                                   | **yes**     |
 | `unavailable` | 5xx                                   | **yes**     |
 | `unknown`     | no status; often a decryption failure | no          |
+
+## Where the account is stored
+
+Backend Capabilities are independent, so a deployment picks each one. `memoryBackend()`
+holds everything in process, `libsqlBackend()` puts it in SQLite or Turso, and
+`convexBackend()` puts it in a Convex deployment — local or cloud. Media bytes are
+always injected separately; `fileMediaStore()` writes them to disk.
+
+For Convex, two files go in the application's own `convex/` directory:
+
+```ts title="convex/schema.ts"
+import { defineSchema } from "convex/server";
+import { whatsappdTables } from "whatsappd/convex";
+
+export default defineSchema({ ...whatsappdTables });
+```
+
+```ts title="convex/whatsappd.ts"
+export * from "whatsappd/convex";
+```
+
+```ts
+const backend = convexBackend({
+  url: process.env.CONVEX_URL,
+  accountId: "primary",
+  media: fileMediaStore({ directory: "./whatsapp-media" }),
+});
+```
+
+Every adapter answers the same conformance suites, so swapping one changes where the
+account lives and nothing else.
 
 ## Choose the right layer
 

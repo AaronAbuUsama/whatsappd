@@ -23,6 +23,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: npm install --global npm@11.5.1
       - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/convex-backend
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
