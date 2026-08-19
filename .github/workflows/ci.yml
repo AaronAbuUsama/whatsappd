@@ -87,19 +87,22 @@ jobs:
       # Published size is gated, because unlike duration it is deterministic:
       # the same commit packs to the same bytes on any runner. Every consumer
       # downloads this, and the usual way it doubles is a dependency pulled
-      # into the bundle by an import nobody looked at. Measured at 74,532 bytes;
-      # the ceiling leaves room to grow deliberately and not silently.
+      # into the bundle by an import nobody looked at. Measured at 121,078 bytes
+      # once the Convex entry point joined the tarball -- `convex/server` and
+      # `convex/values` stay external there, so the growth is this package's own
+      # code and its declarations. The ceiling leaves room to grow deliberately
+      # and not silently.
       - name: Publish size
         run: |
           pnpm --filter whatsappd pack --pack-destination "$RUNNER_TEMP" >/dev/null
           VERSION="$(node -p "require('./packages/whatsappd/package.json').version")"
           bytes=$(wc -c < "$RUNNER_TEMP/whatsappd-$VERSION.tgz")
           echo "Package: ${bytes} bytes" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$bytes" -gt 120000 ]; then
-            echo "::error::The published tarball is ${bytes} bytes, over the 120000-byte ceiling. Something entered the bundle -- check for a dependency pulled in by a new import."
+          if [ "$bytes" -gt 135000 ]; then
+            echo "::error::The published tarball is ${bytes} bytes, over the 135000-byte ceiling. Something entered the bundle -- check for a dependency pulled in by a new import."
             exit 1
           fi
-          echo "packed ${bytes} bytes, under the 120000-byte ceiling"
+          echo "packed ${bytes} bytes, under the 135000-byte ceiling"
       # `pnpm pack` archives whatever `dist/` already holds, so this check has
       # to build first or it inspects an artifact older than the change under
       # test. The `test:pack` script owns that build, which is why it does not
