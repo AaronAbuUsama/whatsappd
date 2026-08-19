@@ -38,9 +38,10 @@ jobs:
           cache: pnpm
       - uses: oven-sh/setup-bun@v2
       - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/convex-backend
       - run: pnpm check
-      # Coverage thresholds sit just under the measured numbers (95.81 lines /
-      # 86.68 branches / 89.55 functions), so they pass on arrival and ratchet:
+      # Coverage thresholds sit just under the measured numbers (96.04 lines /
+      # 87.84 branches / 90.03 functions), so they pass on arrival and ratchet:
       # the gate is what stops the next change lowering them quietly, not a
       # target to climb toward. The TAP output is kept as an artifact because
       # `node --test` prints per-test durations there and nothing was retaining

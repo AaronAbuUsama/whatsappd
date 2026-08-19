@@ -89,6 +89,8 @@ export type {
 } from "./runtime/operations.ts";
 export { libsqlBackend } from "./runtime/libsql.ts";
 export type { LibsqlBackend, LibsqlBackendOptions } from "./runtime/libsql.ts";
+export { convexBackend } from "./runtime/convex.ts";
+export type { ConvexBackend, ConvexBackendOptions } from "./runtime/convex.ts";
 export { fileMediaStore } from "./runtime/file-media.ts";
 export type { FileMediaStoreOptions } from "./runtime/file-media.ts";
 export {

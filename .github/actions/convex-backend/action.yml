@@ -1,0 +1,49 @@
+name: Local Convex backend
+description: >
+  Put a convex-local-backend binary where the Convex conformance suite looks for
+  it, so those tests run instead of skipping.
+
+# The suite skips when no backend binary is present, which is right on a
+# developer machine and wrong here: a skipped proof reads as a passing one, and
+# the coverage gate would quietly fall to whatever the un-run adapter leaves.
+# The binary is a release asset rather than a vendored file, cached by version so
+# the download happens once per version rather than once per job.
+runs:
+  using: composite
+  steps:
+    - id: target
+      shell: bash
+      # The version the Convex CLI in this lockfile pairs with. Bumping `convex`
+      # without bumping this is the drift to watch: the deploy would talk to an
+      # older backend than the CLI expects.
+      run: |
+        set -euo pipefail
+        echo "version=precompiled-2026-08-10-c0cb7ae" >> "$GITHUB_OUTPUT"
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) echo "asset=convex-local-backend-x86_64-unknown-linux-gnu.zip" >> "$GITHUB_OUTPUT" ;;
+          Linux-ARM64) echo "asset=convex-local-backend-aarch64-unknown-linux-gnu.zip" >> "$GITHUB_OUTPUT" ;;
+          macOS-ARM64) echo "asset=convex-local-backend-aarch64-apple-darwin.zip" >> "$GITHUB_OUTPUT" ;;
+          *) echo "::error::no Convex backend build for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+        esac
+
+    - uses: actions/cache@v5
+      with:
+        path: ~/.cache/convex/binaries/${{ steps.target.outputs.version }}
+        key: convex-backend-${{ steps.target.outputs.version }}-${{ steps.target.outputs.asset }}
+
+    - shell: bash
+      env:
+        VERSION: ${{ steps.target.outputs.version }}
+        ASSET: ${{ steps.target.outputs.asset }}
+      run: |
+        set -euo pipefail
+        directory="$HOME/.cache/convex/binaries/$VERSION"
+        if [ ! -x "$directory/convex-local-backend" ]; then
+          mkdir -p "$directory"
+          curl -fsSL -o "$RUNNER_TEMP/convex-backend.zip" \
+            "https://github.com/get-convex/convex-backend/releases/download/$VERSION/$ASSET"
+          unzip -q -o "$RUNNER_TEMP/convex-backend.zip" -d "$directory"
+          chmod +x "$directory/convex-local-backend"
+        fi
+        "$directory/convex-local-backend" --help > /dev/null
+        echo "the local Convex backend is ready at $directory"

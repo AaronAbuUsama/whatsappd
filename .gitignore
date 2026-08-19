@@ -27,6 +27,11 @@ examples/qr-cli/.data/
 .env.*
 !.env.example
 
+# The Convex CLI writes generated bindings beside the functions it pushes. The
+# conformance fixture never imports them -- it calls its deployment by function
+# name -- so they are build output of running the suite, not source.
+packages/whatsappd/tests/convex-app/convex/_generated/
+
 # The pair-page example writes a linked credential here; never commit one.
 examples/pair-page/.account/
 examples/pair-page/qr.txt

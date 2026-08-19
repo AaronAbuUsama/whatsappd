@@ -29,6 +29,7 @@
   "sideEffects": false,
   "exports": {
     ".": "./dist/index.mjs",
+    "./convex": "./dist/convex.mjs",
     "./testing": "./dist/testing.mjs",
     "./package.json": "./package.json"
   },
@@ -46,13 +47,18 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@libsql/client": "0.15.15"
+    "@libsql/client": "0.15.15",
+    "convex": "1.44.0"
   },
   "peerDependencies": {
-    "@libsql/client": "^0.15.0"
+    "@libsql/client": "^0.15.0",
+    "convex": "^1.44.0"
   },
   "peerDependenciesMeta": {
     "@libsql/client": {
+      "optional": true
+    },
+    "convex": {
       "optional": true
     }
   },

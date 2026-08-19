@@ -105,7 +105,12 @@ try {
     readonly exports: Record<string, unknown>;
   };
   assert.equal(packageJson.bin, undefined);
-  assert.deepEqual(Object.keys(packageJson.exports).sort(), [".", "./package.json", "./testing"]);
+  assert.deepEqual(Object.keys(packageJson.exports).sort(), [
+    ".",
+    "./convex",
+    "./package.json",
+    "./testing",
+  ]);
   const reactPackageJson = JSON.parse(
     await readFile(path.join(consumer, "node_modules/@whatsappd/react/package.json"), "utf8"),
   ) as { readonly exports: Record<string, unknown> };
@@ -138,7 +143,13 @@ try {
   // A previous packed proof missed this condition, so the file has to prove it is
   // looking at real declarations first.
   assert.ok(declarations.length > 0, "no packed declarations were read");
-  const rootExports = declarations.match(/export \{([^]*?)\};/);
+  // The root entry's own list, not the first one across every `.d.mts`. The
+  // package has more than one entry point now, and `dist/convex.d.mts` sorts
+  // ahead of `dist/index.d.mts` -- reading whichever came first would check the
+  // Convex entry's exports and call them the package root's.
+  const rootExports = (await readFile(path.join(dist, "index.d.mts"), "utf8")).match(
+    /export \{([^]*?)\};/,
+  );
   assert.ok(rootExports, "packed root export list was not found");
   const exported = new Set(
     [...rootExports[1].matchAll(/(?:^|,)\s*(?:type\s+)?([A-Za-z_$][\w$]*)/g)].map(

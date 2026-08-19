@@ -8,3 +8,40 @@ Use `createWhatsAppRuntime()` when the application needs a Current Mirror and qu
 <include cwd="../../..">snippets/durable-client.ts</include>
 
 Do not create one WhatsApp Runtime per HTTP request. One long-lived Account Worker owns the WhatsApp Runtime and Account Lease; browser and terminal renderers consume the same WhatsApp Client state through application-owned transport.
+
+## Keep the account in Convex
+
+`convexBackend()` puts credentials, the accepted source log, the Current Mirror,
+the Account Lease, and WhatsApp Operations in one Convex deployment. Media bytes
+do not go with them: durable media is a separate Backend Capability, so the
+Media Store is injected — the filesystem below, or S3 later, without the rest
+moving.
+
+Two files put the functions in the application's own Convex directory. The
+application owns both, which is why the adapter contributes to them rather than
+replacing them:
+
+```ts title="convex/schema.ts"
+import { defineSchema } from "convex/server";
+import { whatsappdTables } from "whatsappd/convex";
+
+export default defineSchema({ ...whatsappdTables, ...myOwnTables });
+```
+
+```ts title="convex/whatsappd.ts"
+export * from "whatsappd/convex";
+```
+
+Then point a worker at the deployment:
+
+<include cwd="../../..">snippets/convex-backend.ts</include>
+
+Install `convex` alongside `whatsappd`; it is an optional peer dependency, so a
+deployment on another backend never pulls it in. If the functions are re-exported
+from a file with another name, pass `module` to match it.
+
+The Current Mirror projection runs in the worker, not in a Convex mutation — it
+reaches for Node APIs the Convex runtime does not have. Acceptance therefore
+reads, projects, and commits in one mutation that refuses the write unless the
+account's source cursor is still the one the projection was computed against, so
+a superseded writer changes nothing.

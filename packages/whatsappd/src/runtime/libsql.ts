@@ -31,7 +31,6 @@ import {
   type MirrorDelete,
   type MirrorRecord,
   type MirrorView,
-  type StoredMessagePageOptions,
   type WhatsAppBackend,
   type WhatsAppDataEvent,
   type WhatsAppDataStore,
@@ -44,6 +43,7 @@ import {
 } from "./projection.ts";
 import { libsqlOperationStore } from "./libsql-operations.ts";
 import { transact } from "./libsql-transaction.ts";
+import { validatePage } from "./mirror-page.ts";
 
 export interface LibsqlBackendOptions {
   readonly url: string;
@@ -1308,21 +1308,6 @@ async function applyMutation(
         ],
       });
   }
-}
-
-function validatePage(options: StoredMessagePageOptions | undefined): number {
-  const limit = options?.limit ?? 25;
-  if (!Number.isInteger(limit) || limit < 1)
-    throw new RangeError(`limit must be a positive integer, got ${limit}`);
-  const before = options?.before;
-  if (
-    before &&
-    (!Number.isFinite(before.timestamp) ||
-      !Number.isSafeInteger(before.timestamp) ||
-      !before.messageId)
-  )
-    throw new RangeError("before must contain an integer timestamp and messageId");
-  return limit;
 }
 
 function libsqlDataStore(client: LazyLibsqlClient): WhatsAppDataStore {
