@@ -1,0 +1,63 @@
+name: Audit
+
+# CodeQL reads this repository's own code for defects. This job reads the code
+# it installs, which is the larger surface by two orders of magnitude and the
+# one nobody wrote.
+#
+# It exists because the alternative was not working. GitHub's dependency graph
+# parses `package.json`, where this workspace writes `vite: "catalog:"` -- a
+# version it cannot resolve, so it matched every advisory ever filed against
+# `vite` including ones fixed in 2022, and reported three against `launch-editor`
+# which is not in the lockfile at all. Meanwhile the two real findings in the
+# installed tree, `js-yaml` and `image-size`, appeared in no alert. `pnpm audit`
+# reads `pnpm-lock.yaml`, so it sees what is actually installed.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    # An advisory is published against a lockfile that has not changed. Nothing
+    # in a pull-request trigger will ever notice that, which is the failure mode
+    # this clock exists to cover.
+    - cron: "0 4 * * 1"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Runtime dependencies are what every consumer of `whatsappd` installs and
+      # cannot patch themselves, so the bar here is any severity at all. There
+      # are three of them (`baileys`, `pino`, `zod`) and the list is short on
+      # purpose -- a low-severity advisory in that set is worth a conversation.
+      - name: Runtime dependencies, any severity
+        run: pnpm audit --prod --audit-level=low --ignore-registry-errors
+
+      # Development dependencies are a build-machine surface, not a consumer
+      # one, so they are gated at high and above. `--ignore-unfixable` is what
+      # keeps this gate honest rather than decorative: it fails when a fix
+      # exists and has not been taken, and stays green when the ecosystem has
+      # not shipped one. A gate nobody can satisfy is a gate somebody deletes.
+      - name: Development dependencies, fixable and high or above
+        run: pnpm audit --audit-level=high --ignore-unfixable --ignore-registry-errors
+
+      # Unfixable findings are suppressed above, not forgiven. This prints the
+      # unfiltered report into the run summary so they stay countable, and the
+      # day upstream ships a patch the gate above turns red on its own.
+      - name: Full report, including what has no fix yet
+        if: always()
+        run: |
+          {
+            echo '## pnpm audit'
+            echo '```'
+            pnpm audit --ignore-registry-errors || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
