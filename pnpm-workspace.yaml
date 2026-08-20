@@ -9,20 +9,65 @@ allowBuilds:
   esbuild: true
   ffmpeg-static: true
   protobufjs: false
+# Written by `pnpm audit` itself, and re-added on the next run if deleted.
+# It is where a specific advisory would be suppressed by GHSA id; nothing is
+# suppressed that way today, because `--ignore-unfixable` in the Audit
+# workflow covers the only finding that has no fix.
+auditConfig: {}
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.2
   vite-plus: 0.2.2
+# The Dependabot configuration has waited seven days before proposing a version
+# since it was written, on the reasoning that most npm supply-chain compromises
+# are found and yanked within days. That defence covered exactly one path into
+# the lockfile. `pnpm add` and `pnpm update`, run by hand, resolved whatever was
+# published a minute ago -- and the exclusion list below has been sitting here
+# excluding packages from a check that was never configured. In minutes, to
+# match the seven days upstream.
+minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
   - baileys@7.0.0-rc14
+  # Taken deliberately inside the cutoff. The whole vitest line moved to 4.1.11
+  # for GHSA-p63j-vcc4-9vmv, and holding a known advisory open for seven days
+  # to guard against an unknown one is the wrong trade -- the same asymmetry
+  # `.github/dependabot.yml` already relies on, where security updates ignore
+  # cooldown. Dev-only test tooling; nothing here reaches a published package.
+  #
+  # Pinned to the one version that earned the exception, package by package.
+  # `@vitest/*` would have exempted every future release of the family from the
+  # cutoff, which is a standing hole rather than a one-time trade -- and pnpm
+  # rejects `@vitest/*@4.1.11` outright ("Name patterns are not allowed with
+  # version unions"), so the list is written out. 4.1.11 published 2026-08-18
+  # and ages past the cutoff on 2026-08-25; this block can be deleted then.
+  - vitest@4.1.11
+  - "@vitest/browser@4.1.11"
+  - "@vitest/browser-playwright@4.1.11"
+  - "@vitest/browser-preview@4.1.11"
+  - "@vitest/expect@4.1.11"
+  - "@vitest/mocker@4.1.11"
+  - "@vitest/pretty-format@4.1.11"
+  - "@vitest/runner@4.1.11"
+  - "@vitest/snapshot@4.1.11"
+  - "@vitest/spy@4.1.11"
+  - "@vitest/utils@4.1.11"
   - fumadocs-core@16.14.3
   - fumadocs-mdx@15.2.3
   - fumadocs-ui@16.14.3
 overrides:
-  "@vitest/browser": 4.1.9
-  "@vitest/browser-playwright": 4.1.9
-  "@vitest/browser-preview": 4.1.9
+  # GHSA-p63j-vcc4-9vmv: Browser Mode provider commands bypassed the
+  # file-access permission gate, so a page under test could read and write
+  # any file the test runner could. Fixed in 4.1.10; 4.1.11 is the current
+  # patch on that line and there is no reason to sit one release behind it.
+  "@vitest/browser": 4.1.11
+  "@vitest/browser-playwright": 4.1.11
+  "@vitest/browser-preview": 4.1.11
+  # Quadratic CPU consumption parsing `!!omap`. Reached transitively through
+  # @changesets/cli (3.x) and shadcn (4.x); neither exposes an upstream range
+  # that resolves to a patched release yet, so both lines are pinned here.
+  "js-yaml@3": 3.15.1
+  "js-yaml@4": 4.3.1
   vite: "catalog:"
-  vitest: 4.1.9
+  vitest: 4.1.11
 peerDependencyRules:
   allowAny:
     - vite
