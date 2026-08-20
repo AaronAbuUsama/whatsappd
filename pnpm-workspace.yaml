@@ -32,8 +32,24 @@ minimumReleaseAgeExclude:
   # to guard against an unknown one is the wrong trade -- the same asymmetry
   # `.github/dependabot.yml` already relies on, where security updates ignore
   # cooldown. Dev-only test tooling; nothing here reaches a published package.
-  - "@vitest/*"
-  - vitest
+  #
+  # Pinned to the one version that earned the exception, package by package.
+  # `@vitest/*` would have exempted every future release of the family from the
+  # cutoff, which is a standing hole rather than a one-time trade -- and pnpm
+  # rejects `@vitest/*@4.1.11` outright ("Name patterns are not allowed with
+  # version unions"), so the list is written out. 4.1.11 published 2026-08-18
+  # and ages past the cutoff on 2026-08-25; this block can be deleted then.
+  - vitest@4.1.11
+  - "@vitest/browser@4.1.11"
+  - "@vitest/browser-playwright@4.1.11"
+  - "@vitest/browser-preview@4.1.11"
+  - "@vitest/expect@4.1.11"
+  - "@vitest/mocker@4.1.11"
+  - "@vitest/pretty-format@4.1.11"
+  - "@vitest/runner@4.1.11"
+  - "@vitest/snapshot@4.1.11"
+  - "@vitest/spy@4.1.11"
+  - "@vitest/utils@4.1.11"
   - fumadocs-core@16.14.3
   - fumadocs-mdx@15.2.3
   - fumadocs-ui@16.14.3
