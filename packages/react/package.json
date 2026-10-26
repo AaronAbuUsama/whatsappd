@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@types/react": "^19",
-    "react": "19.2.8",
+    "react": "19.3.1",
     "whatsappd": "workspace:*"
   },
   "peerDependencies": {
