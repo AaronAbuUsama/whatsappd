@@ -28,7 +28,7 @@
     "ffmpeg-static": "^5.3.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^1.30.0",
-    "next": "16.3.0",
+    "next": "16.4.1",
     "next-themes": "^0.4.6",
     "pino": "^10.3.1",
     "radix-ui": "^1.6.7",
